@@ -1,0 +1,2814 @@
+# ToT API 接口定义文档
+
+
+### v1.4.3（2026-04-02）
+
+- **MyPal mock：** 澄清 `queryDate` 在 mock 模式下不参与计算；未传 `taskWeek` 时默认使用 `FY26Q2W1`。
+
+### v1.4.2（2026-04-02）
+
+- **DeepSeek：** §6.5.1 补充 DeepSeek 官方 Node.js（`openai` SDK）完整调用示例。
+
+### v1.4.1（2026-04-02）
+
+- **DeepSeek：** 新增 §6.5 DeepSeek 对话补全（OpenAI 兼容上游）说明，含环境变量 `DEEPSEEK_API_KEY` 与禁止硬编码要求。
+
+### v1.4.0（2026-03-31）
+
+- **全局变更：** 彻底移除了 `store_manager` 角色和所有“店长”相关业务描述。
+- **任务管理 (`Task`)**：移除了任务 Payload 和响应中的 `targetRole` 字段。
+- **任务分配 (`Assignment`)**：移除了列表及创建时的 `userRole` 字段。
+- **接口移除**：彻底移除了 3.7 店长进展/困难上报 接口 (`/assignments/reports`)。
+- **通知机制**：剔除了由店长发起的催办及推向店长的状态更新，删除了 `initiatorRole` 字段。
+- **数据看板 (`Dashboard`)**：总览概览聚合中移除 `managerReadCount`，统一为店员维度的口径。
+
+## 文档信息
+
+| 项⽬ | 内容 |
+|------|------|
+| 文档版本 | 1.4.3 |
+| 更新时间 | 2026-04-02 |
+| 适用版本 | API v1 |
+| 基础路径 | `/api/v1` |
+| 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
+| 响应格式 | 统一JSON格式，包含链路追踪ID |
+| 优先级标注规则 | **P0**：本期必须实现；**P1**：可选/后续实现；**P2**：后续版本 |
+
+## 通用规范
+
+### 响应体格式
+
+```json
+{
+  "code": 200, // 200=成功；4xx=客户端错误；5xx=服务端错误
+  "message": "success", // 结果描述
+  "data": {}, // 业务数据（成功时返回）
+  "requestId": "req-20260323120000-123456" // 链路追踪ID，用于问题排查
+}
+```
+
+失败响应在 `code` / `message` 之外，可携带 **`errorCode`**（如 `AUTH_003`），与 `message` 并列，便于前端分支；无稳定业务码时可省略该字段。
+
+### 通用错误码
+
+| 错误码 | 含义 | 场景说明 |
+|--------|------|----------|
+| 400 | 参数错误 | 请求参数缺失/格式错误/值不合法 |
+| 401 | 未认证 | Token过期/无效/未携带 |
+| 403 | 无权限 | 超出角色权限范围（如查询其他门店数据） |
+| 404 | 资源不存在 | 任务/分配记录/通知等资源ID不存在 |
+| 409 | 资源冲突 | 重复创建/状态变更冲突（如已完成任务重复标记） |
+| 500 | 服务器内部错误 | 服务端逻辑异常 |
+| 503 | 依赖服务不可用 | MyPAL对接失败/AI Agent服务未就绪 |
+
+### 通用请求头
+
+| 字段名 | 必选 | 类型 | 说明 |
+|--------|------|------|------|
+| Authorization | 是 | string | Bearer Token |
+| User-Role | 是 | string | 用户系统角色（对应 `users.role`）：`central`/`admin`/`employee`/`executive` |
+| User-Id | 是 | string | 登录用户唯一标识（`users.id`，INTEGER 序列化为 string） |
+| Employee-Id | 否 | string | 对应的员工业务ID（`employees.id`），店员必须携带 |
+| Store-Id | 否 | string | 所属门店ID（`stores.id`），店员必须携带 |
+
+## 1. 认证授权 API
+
+### 1.1 登录（获取 Token）**P0**
+
+- **接口名称**：用户登录
+- **接口路径**：`/auth/login`
+- **请求方法**：POST
+- **请求头**：无（公开接口，无需 Authorization）
+- **请求体**：
+  ```json
+  {
+    "username": "string",  // 用户名，必填
+    "password": "string"   // 明文密码，服务端 bcrypt（10 rounds）校验，必填
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "token": "string",            // JWT Bearer Token，HS256，有效期 7 天
+      "userInfo": {
+        "userId": "string",         // users.id（INTEGER 序列化为 string）
+        "employeeId": "string|null",// employees.id；central/executive/admin 为 null
+        "username": "string",       // users.username
+        "role": "string",           // central | employee | executive | admin
+        "storeId": "string|null"    // stores.id；central/executive/admin 为 null
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **响应体（失败）**：
+  ```json
+  {
+    "code": 401,
+    "message": "用户名或密码错误",
+    "data": null,
+    "requestId": "string"
+  }
+  ```
+- **权限要求**：无（公开接口）
+- **异常场景**：
+  - 400：username 或 password 为空（`AUTH_004`）
+  - 401：用户名不存在或密码错误（`AUTH_005`）
+
+> **说明：** 无 refreshToken 机制。Token 有效期 7 天，过期后需重新登录。
+> Token 使用方式：所有受保护接口在请求头携带 `Authorization: Bearer {token}`，
+> 服务端从 JWT 解析 role/storeId/employeeId，无需额外自定义请求头。
+
+**测试账号：**
+
+| username | password | role |
+|----------|----------|------|
+| central | Train2026! | central |
+| emp_E002 | Train2026! | employee |
+| executive | Train2026! | executive |
+| admin | Admin2026! | admin |
+
+### 1.1b 获取当前用户（鉴权联调）**P0**
+
+- **接口名称**：当前登录用户信息
+- **接口路径**：`/auth/me`
+- **请求方法**：GET
+- **请求头**：`Authorization: Bearer {token}`（必填）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "userId": "string",
+      "username": "string",
+      "role": "string",
+      "storeId": "string|null",
+      "employeeId": "string|null",
+      "createdAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **权限要求**：已登录用户
+- **异常场景**：
+  - 401：未携带 Token / Token 无效或过期（`AUTH_001` / `AUTH_002`）
+  - 401：用户记录不存在（`AUTH_006`，极少见）
+
+### 1.2 刷新 Token **P1（未实现）**
+
+> 当前版本未实现，不纳入 MVP P0 范围。JWT 有效期 7 天，过期后重新登录即可。
+
+### 1.3 退出登录 **P1（未实现）**
+
+> 当前版本未实现。JWT 为无状态 Token，前端清除本地存储的 token 即视为退出。
+
+---
+
+## 2. 任务管理 API（Task）
+
+> **Task 对象结构（所有任务接口的 `data` 字段通用）：**
+>
+> ```typescript
+> {
+>   id: string,                // nanoid，任务唯一标识
+>   title: string,
+>   description: string | null,
+>   hasMypal: boolean,         // 是否包含 MyPAL 平台（DB: has_mypal 0/1）
+>   hasSmartSell: boolean,     // 是否包含 SmartSell 平台
+>   hasAiDemo: boolean,        // 是否包含 AI Demo 平���
+>   hasLiveBroadcast: boolean, // 是否包含 Live Broadcast 平台
+>   status: "draft" | "dispatched",
+> >   rtmFilter: object[] | null,   // RTM 筛选规则数组；null = 不启用筛选
+>   storeScope: "all" | string[], // "all" 或门店 ID 数组（如 ["S001","S002"]）
+>   autoNudgeRules: object | null, // 自动预警与催办规则配置
+>   ddlAt: string,             // 截止时间，ISO 8601（如 "2026-04-30T00:00:00.000Z"）
+>   createdBy: string,         // 创建者 username（如 "central"）
+>   createdAt: string,         // ISO 8601
+>   updatedAt: string          // ISO 8601
+> }
+> 
+> // autoNudgeRules 结构说明
+> {
+>   progressLag: {
+>     lifestyle: number, // 仅针对 Monobrand Lifestyle：处于门店最后 N 位（如 3）
+>     mono: number       // 仅针对 Monobrand Mono：处于门店最后 N 位（如 1）
+>   },
+>   startDelay: number,    // 任务期限已度过 N%（如 50），个人进度仍为 0%
+>   deadlineCrisis: number // 距离 Deadline 不足 N 小时（如 24）且未完成
+> }
+> ```
+
+### 2.1 创建任务 **P0**
+
+- **接口名称**：创建培训任务（草稿态）
+- **接口路径**：`/tasks`
+- **请求方法**：POST
+- **权限要求**：仅 `central`
+- **请求体**：
+  ```json
+  {
+    "title": "string",           // 任务标题，必填
+    "description": "string",     // 任务描述，可选
+    "hasMypal": true,            // 是否包含 MyPAL，可选（默认 false）
+    "hasSmartSell": false,       // 是否包含 SmartSell，可选（默认 false）
+    "hasAiDemo": false,          // 是否包含 AI Demo，可选（默认 false）
+    "hasLiveBroadcast": false,   // 是否包含 Live Broadcast，可选（默认 false）
+    // 四平台至少一个为 true，否则 400（TASK_001）
+    "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，ISO 8601，必填
+    "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
+    "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
+    "autoNudgeRules": {          // 自动预警与催办规则，可选
+      "progressLag": { "lifestyle": 3, "mono": 1 },
+      "startDelay": 50,
+      "deadlineCrisis": 24
+    }
+  }
+  ```
+- **响应体（成功，HTTP 201）**：返回完整 Task 对象
+  ```json
+  {
+    "code": 201,
+    "message": "success",
+    "data": {
+      "id": "z4ABQwQyAWdD9lBOdXeGS",
+      "title": "Q1新品培训",
+      "description": null,
+      "hasMypal": true,
+      "hasSmartSell": false,
+      "hasAiDemo": false,
+      "hasLiveBroadcast": false,
+      "status": "draft",
+      "rtmFilter": null,
+      "storeScope": "all",
+      "ddlAt": "2026-04-30T00:00:00.000Z",
+      "createdBy": "central",
+      "createdAt": "2026-03-27T09:44:53.000Z",
+      "updatedAt": "2026-03-27T09:44:53.000Z"
+    },
+    "requestId": "req-20260327094453-123456"
+  }
+  ```
+- **异常场景**：
+  - 400：title / ddlAt 为空（`TASK_005`）
+  - 400：四平台全为 false（`TASK_001`）
+  - 401：未认证（`AUTH_001` / `AUTH_002`）
+  - 403：非 central 角色（`AUTH_003`）
+
+### 2.2 获取任务详情 **P0**
+
+- **接口名称**：获取任务详情
+- **接口路径**：`/tasks/{id}`
+- **请求方法**：GET
+- **权限要求**：所有已认证角色（店员的访问范围由列表接口控制，此接口不做二次过滤）
+- **路径参数**：`id`（任务 nanoid，必填）
+- **响应体（成功）**：返回完整 Task 对象
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": { /* Task 对象，结构见本节开头 */ },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 401：未认证
+  - 404：任务不存在（`TASK_002`）
+
+### 2.3 编辑任务 **P0**
+
+- **接口名称**：更新任务字段
+- **接口路径**：`/tasks/{id}`
+- **请求方法**：**PATCH**（支持部分字段更新，非 PUT 全量替换）
+- **权限要求**：仅 `central`
+- **路径参数**：`id`（必填）
+- **请求体（所有字段均可选，仅传需要修改的字段）**：
+  ```json
+  {
+    "title": "string",
+    "description": "string",
+    "hasMypal": true,
+    "hasSmartSell": true,
+    "hasAiDemo": false,
+    "hasLiveBroadcast": false,
+    "rtmFilter": null,
+    "storeScope": "all",
+    "ddlAt": "2026-05-01T00:00:00Z"
+  }
+  ```
+- **业务规则**：
+  - `draft` 状态：所有字段均可修改
+  - `dispatched` 状态：**仅允许修改 `ddlAt`**，传入其他任何字段返回 400（`TASK_004`）
+- **响应体（成功）**：返回更新后的完整 Task 对象
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": { /* 更新后的 Task 对象 */ },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 400：dispatched 后传入 ddlAt 以外的字段（`TASK_004`）
+  - 400：dispatched 后 ddlAt 为空（`TASK_005`）
+  - 400：draft 状态下四平台全为 false（`TASK_001`）
+  - 401：未认证
+  - 403：非 central 角色（`AUTH_003`）
+  - 404：任务不存在（`TASK_002`）
+
+> **WS 推送：** 仅当任务已下发（`status=dispatched`）时触发。为所有有 `task_assignments` 记录的用户批量写入 `notification_events(task_updated)`，并向各用户推送 `{ event: "task_updated", data: { taskId, ddlAt } }`（见 §15.3 扩展）。`draft` 任务编辑不触发推送。
+
+### 2.4 下发任务 **P0（Dev2 已实现）**
+
+- **接口名称**：下发培训任务
+- **接口路径**：`/tasks/{id}/dispatch`
+- **请求方法**：POST
+- **权限要求**：`central` / `admin`
+- **路径参数**：`id`（必填）
+- **请求体**：无（下发人从 JWT 解析）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "任务下发成功",
+    "data": {
+      "task": { /* 更新后的 Task 对象（status=dispatched） */ },
+      "matchedStoreCount": 50,
+      "targetUserCount": 300,
+      "assignmentCreated": 300,
+      "notificationCreated": 300
+    },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 404：任务不存在（`TASK_002`）
+  - 400：筛选命中门店为空（`RTM_001`）
+  - 400：筛选后无目标员工（`TASK_006`）
+  - 409：任务已下发（`TASK_003`）
+
+> **WS 推送：** 下发成功后，向所有目标用户（`targetUsers`）推送 `{ event: "task_assigned", data: { taskId, taskTitle, ddlAt } }`（见 §15.1）。
+
+### 2.5 获取任务列表 **P0**
+
+- **接口名称**：获取任务列表
+- **接口路径**：`/tasks`
+- **请求方法**：GET
+- **权限要求**：所有已认证角色
+- **查询参数**：无（当前版本不支持过滤/分页，后续按需补充）
+- **角色过滤规则**：
+  - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
+  - `employee`：仅返回本人有 `task_assignments` 记录的任务
+  - `executive`：返回空数组（看板数据走 Dashboard API，见第 5 节）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": [
+      { /* Task 对象 1 */ },
+      { /* Task 对象 2 */ }
+    ],
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 401：未认证
+
+### 2.6 任务下发预览 **P1（未实现）**
+
+> 当前版本未实现，不纳入 MVP P0 范围。
+
+### 2.7 获取下发历史 **P1（未实现）**
+
+> 当前版本未实现，不纳入 MVP P0 范围。
+
+### 2.8 AI 辅助生成任务下发说明
+
+- **接口路径**：`/tasks/ai-generate-description`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：通过 Gemini 2.5 Pro 大模型，根据简短指令、截止时间和学习平台生成一段长篇、有煽动性的任务说明文案。
+- **请求参数 (Body)**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `instruction` | string | 是 | 核心指令，如："下周一前完成iPhone新款卖点学习" |
+| `ddlAt` | string | 否 | ISO 8601 时间格式的截止时间 |
+| `platforms` | string[] | 否 | 涉及的平台，如 `["MyPAL", "SmartSell"]` |
+
+- **返回参数**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "description": "亲爱的小伙伴们，本次新款 iPhone 培训非常关键... (AI 生成的话术)"
+  },
+  "requestId": "req-123..."
+}
+```
+
+### 2.9 触发自动催办扫描 (模拟定时任务)
+
+- **接口路径**：`/tasks/{id}/auto-nudge`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：读取该任务配置的 `auto_nudge_rules`（掉队预警、起步异常预警、临期危机预警），扫描所有进行中的员工进度。对命中规则的员工，自动调用 `generate_nudge_message` Skill 生成话术，并产生通知与 `nudge_records` 记录。
+- **请求参数**：无 Body
+- **返回参数**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "success": true,
+    "nudgedCount": 5,
+    "evaluatedRules": ["progressLag", "startDelay", "deadlineCrisis"]
+  },
+  "requestId": "req-123..."
+}
+```
+
+## 3. 任务分配 API（Assignment）
+
+### Assignment 状态机端点（P0，已实现）
+
+MVP 中 **Assignment 生命周期写操作** 统一通过下表接口完成（不含 Dev1 基础 CRUD 的 `PATCH/DELETE`，见 §3.8–§3.10）。
+
+| 完整路径（基础前缀 `/api/v1`） | 方法 | 说明 |
+|-------------------------------|------|------|
+| `/assignments/{assignmentId}/status` | PUT | **状态机**：`start_task`（pending→in_progress）或 `complete_platform`（平台完成 + 进度 + 可能 auto-complete） |
+
+**与 `02-STATE-MACHINES.md` 对齐的流转摘要：**
+
+```
+pending ──(start_task)──▶ in_progress ──(complete_platform × N)──▶ completed
+```
+
+- `complete_platform` 仅在 `in_progress` 下允许；`pending` 直接 `complete_platform` 返回 **409**（`ASSIGN_013`）。
+- `progress` 为 **0–100 整数**：`round(已勾选完成平台数 / 任务已配置平台数 × 100)`；全部完成时写 `completed_at` 并将 `status` 置为 `completed`。
+
+### 3.1 获取分配记录列表**P0**
+
+- **接口名称**：获取任务分配列表
+- **接口路径**：`/assignments`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 否 | 任务ID，筛选指定任务的分配记录 |
+  | employeeId | string | 否 | 员工ID；`central`/`admin` 可筛任意；`employee` 仅允许本人（与 JWT 不一致则 403） |
+  | storeId | string | 否 | 门店ID；`central`/`admin` 可筛 |
+  | status | string | 否 | 分配状态：pending/in_progress/completed |
+  | pageNum | int | 否 | 页码，**默认 1**；未传或非法返回 400（`ASSIGN_018`） |
+  | pageSize | int | 否 | 页大小，**默认 20**，**最大 200**；非法返回 400（`ASSIGN_019`）；`status` 非法返回 `ASSIGN_020` |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "list": [
+        {
+          "assignmentId": "string",
+          "taskId": "string",
+          // userId = task_assignments.user_id = employees.id（业务编号，如 E001）
+          "userId": "string",
+          "storeId": "string", // task_assignments.store_id（下发时快照，冗余自 employees.store_id）
+          "status": "pending/in_progress/completed",
+          // progress：服务端计算 = 已完成平台数 / 该任务配置平台总数 × 100（0-100 整数）
+          "progress": 80,
+          "mypalCompleted": false,    // task_assignments.mypal_completed
+          "smartsellCompleted": true, // task_assignments.smartsell_completed
+          "aiDemoCompleted": true,    // task_assignments.ai_demo_completed
+          "liveBroadcastCompleted": false, // task_assignments.live_broadcast_completed
+          "nudgeCount": 0,   // task_assignments.nudge_count
+          "receivedAt": "string", // task_assignments.received_at，null 表示未打开过任务详情
+          // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件ID
+          // 前端从铃铛通知点击跳转时，用此 ID 调 POST /events/{eventId}/read（§4.3）
+          "taskAssignedEventId": "string|null",
+          "updatedAt": "string",
+          "id": "string"
+        }
+      ],
+      "pagination": {
+        "pageNum": 1,
+        "pageSize": 20,
+        "total": 50,
+        "totalPages": 3
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **实现说明（Day6 已对齐）**：`data` **必须为** `{ list, pagination }`（不再返回顶层数组）。列表项中 **`id` 与 `assignmentId` 相同**，供旧客户端兼容；**`taskAssignedEventId`** 为对应 `task_assigned` 通知的 `eventId`，若无事件则为 **`null`**。`executive` 等无 assignment 视图的角色返回空 `list` 与 `total=0`。
+- **接口说明**：按角色权限返回分配记录（总部看所有，店员看本人）
+- **权限要求**：
+  - central / admin：所有分配记录（可组合查询参数筛选）
+  - employee：仅本人的分配记录
+- **异常场景**：
+  - 400：`pageNum` / `pageSize` 非法（`ASSIGN_018` / `ASSIGN_019`）；`status` 非法（`ASSIGN_020`）
+  - 403：越权筛选（如店员查他人 `employeeId`、查其他门店 `storeId`）
+
+### 3.2 获取分配记录详情**P0**
+
+- **接口名称**：获取分配记录详情
+- **接口路径**：`/assignments/{assignmentId}`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **路径参数**：assignmentId（必填）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "assignmentId": "string",           // task_assignments.id（nanoid）
+      "taskId": "string",                 // task_assignments.task_id
+      "userId": "string",                 // task_assignments.user_id = employees.id（如 E001）
+      "storeId": "string",                // task_assignments.store_id（下发时快照）
+      "status": "string",                 // pending/in_progress/completed
+      "progress": 100,                    // task_assignments.progress（整数 0-100）
+      "mypalCompleted": true,             // task_assignments.mypal_completed
+      "smartsellCompleted": true,         // task_assignments.smartsell_completed
+      "aiDemoCompleted": true,            // task_assignments.ai_demo_completed
+      "liveBroadcastCompleted": true,     // task_assignments.live_broadcast_completed
+      "nudgeCount": 2,                    // task_assignments.nudge_count
+      "receivedAt": "string",             // task_assignments.received_at，null 表示未打开过任务详情
+      "startedAt": "string",              // task_assignments.started_at，null 表示未点击"开始任务"
+      "completedAt": "string",            // task_assignments.completed_at，null 表示未完成
+      // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件ID
+      // 前端从铃铛通知点击跳转后，用此 ID 调 POST /events/{eventId}/read（§4.3）
+      "taskAssignedEventId": "string",
+      "createdAt": "string",
+      "updatedAt": "string",
+      "id": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **实现说明**：`id` 与 `assignmentId` 取值相同（兼容）；`taskAssignedEventId` 可为 `null`。
+- **接口说明**：返回单条分配记录详情，含平台完成状态、催办次数等
+- **权限要求**：
+  - 本人分配记录（employee）
+  - 所有分配记录（central / admin）
+- **异常场景**：
+  - 404：assignmentId不存在
+  - 403：无权限访问
+
+### 3.3 更新分配状态（开始任务/完成平台）**P0**
+
+- **接口名称**：更新分配记录状态（Assignment 状态机）
+- **接口路径**：`/assignments/{assignmentId}/status`
+- **完整 URL 示例**：`PUT /api/v1/assignments/{assignmentId}/status`
+- **请求方法**：PUT
+- **请求头**：需携带通用请求头
+- **路径参数**：assignmentId（必填）
+- **请求体**：
+  ```json
+  {
+    "operationType": "start_task/complete_platform", // 必填
+    "platform": "MyPAL/SmartSell/AI Demo/Live Broadcast" // 仅 complete_platform 必填
+  }
+  ```
+- **`platform` 取值**：服务端对字符串做 `trim().toLowerCase()` 后按下表匹配；未命中任一别名则 **400**（`ASSIGN_012`）。
+
+  | 归一化后的键（等价输入示例） | 对应任务字段 `tasks.has_*` | 写入列 `task_assignments.*_completed` |
+  |-----------------------------|----------------------------|--------------------------------------|
+  | `mypal`（如 `MyPAL`） | `has_mypal` | `mypal_completed` |
+  | `smartsell`（如 `SmartSell`） | `has_smartsell` | `smartsell_completed` |
+  | `ai demo` 或 `aidemo`（如 `AI Demo`） | `has_ai_demo` | `ai_demo_completed` |
+  | `live broadcast` 或 `livebroadcast`（如 `Live Broadcast`） | `has_live_broadcast` | `live_broadcast_completed` |
+
+  仅当该任务在创建时已勾选对应平台时，才允许标记完成；否则 **400**（`ASSIGN_015`）。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "状态更新成功",
+    "data": {
+      "assignmentId": "string",
+      "status": "in_progress/completed",  // 更新后的 task_assignments.status
+      "progress": 75,                     // 更新后的 task_assignments.progress（0-100 整数）
+      "startedAt": "string|null",         // start_task 后有值
+      "completedAt": "string|null",       // 自动完成后有值
+      "updatedAt": "string",
+      // resolvedNudgeCount：进入 completed 时，与该 assignment 关联的 nudge 通知条数
+      "resolvedNudgeCount": 2,
+      "platformStatus": {
+        "mypalCompleted": true,           // task_assignments.mypal_completed
+        "smartsellCompleted": false,      // task_assignments.smartsell_completed
+        "aiDemoCompleted": true,          // task_assignments.ai_demo_completed
+        "liveBroadcastCompleted": false   // task_assignments.live_broadcast_completed
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：
+  - `start_task`：仅允许 `pending -> in_progress`
+  - `complete_platform`：仅允许在 `in_progress` 下执行；按任务已配置平台集合重算进度
+  - 进度计算：`progress = round(已完成平台数 / 已配置平台数 * 100)`
+  - 当已配置平台全部完成时，自动 `status=completed` 并写 `completed_at`
+- **权限要求**：
+  - `employee`：仅可操作本人 assignment
+  - `central` / `admin`：可操作任意 assignment（运维兜底）
+- **异常场景**：
+  - 400：`operationType` 非法（`ASSIGN_011`）
+  - 400：`complete_platform` 未传或平台值非法（`ASSIGN_012`）
+  - 400：平台不在任务配置内（`ASSIGN_015`）
+  - 409：当前状态不可开始或不可完成平台（`ASSIGN_013`）
+  - 409：assignment 已完成（`ASSIGN_014`）
+  - 409：平台已重复标记完成（`ASSIGN_016`）
+  - 403：非本人操作（`AUTH_003`）
+
+> **WS 推送：** 仅 `complete_platform` 触发 auto-complete（`status → completed`）时推送，`start_task` 不推送。推送事件 `{ event: "assignment_completed", data: { assignmentId, taskId, userId, storeId, completedAt } }` 给**完成者本人**（见 §15.3）。
+
+### 3.4 批量生成分配记录（内部/总部调用）**P0**
+
+- **接口名称**：批量生成分配记录
+- **接口路径**：`/assignments/batch-create`
+- **完整 URL 示例**：`POST /api/v1/assignments/batch-create`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central / admin）
+- **请求体**：
+  ```json
+  {
+    "taskId": "string", // 任务ID，必填（tasks.id）
+    "targetUsers": [ // 目标用户列表，必填
+      {
+        "userId": "string",               // employees.id（业务编号，如 E001）→ task_assignments.user_id
+        "storeId": "string"               // → task_assignments.store_id（下发时快照）
+      }
+    ]
+    // 操作人从请求头 User-Id 获取，无需 body 传递
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "批量生成成功",
+    "data": {
+      "successCount": 298,
+      "skippedCount": 0,
+      "failedCount": 2,
+      "failedUsers": [
+        {
+          "userId": "string",
+          "reason": "用户不存在"
+        }
+      ]
+    },
+    "requestId": "string"
+  }
+  ```
+- **实现说明（Day6）**：**仅写入 `task_assignments`**，不创建 `notification_events`（与 `POST /tasks/{id}/dispatch` 区分）。`INSERT OR IGNORE` 遇 **`UNIQUE(task_id, user_id)`** 冲突时计入 **`skippedCount`**，**不**写入 **`failedUsers`**。**`failedUsers`** 仅承载**校验失败**（用户不存在、门店不匹配）。`taskId` 不存在时整单 **404**（`TASK_002`）。`targetUsers` 为空或非数组时 **400**（`ASSIGN_021`）。
+- **接口说明**：供总部/运维批量补录分配；正式下发带通知仍走 **§2.4 dispatch**。
+- **权限要求**：`central` / `admin`
+- **异常场景**：
+  - 400：`taskId` / `targetUsers` 缺失或 `targetUsers` 为空（`ASSIGN_021`）
+  - 403：非 `central` / `admin`
+  - 404：`taskId` 对应任务不存在（`TASK_002`）
+
+### 3.5 任务接收确认**P1**
+
+- **接口名称**：任务接收确认
+- **接口路径**：`/assignments/{assignmentId}/confirm`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **路径参数**：assignmentId（必填）
+- **请求体**：
+  ```json
+  {
+    "confirmed": true // 是否确认接收：true=确认，false=暂不（MVP 不做拒绝终态，仅记录接收时间）
+    // comment 字段本期不支持：MVP §6.6 不提供店员反馈入口
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "assignmentId": "string",
+      "status": "pending", // 接收确认不改变 assignment 状态（仍为 pending，需点击"开始任务"才变 in_progress）
+      "receivedAt": "string" // 写入 task_assignments.received_at（ISO8601）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：员工确认接收任务，写入 `task_assignments.received_at`。注意：接收确认**不改变** `status`（仍为 `pending`），需后续点击"开始任务"才触发 `pending → in_progress`。MVP 不支持拒绝终态（PRD §6.6 不提供反馈入口）。
+- **权限要求**：仅本人操作
+- **异常场景**：
+  - 409：该 Assignment 已有 received_at 记录（重复确认）
+  - 409：Assignment 已进入 completed
+  - 403：非所属用户操作
+
+### 3.6 获取任务完成时间线**P1**
+
+- **接口名称**：获取任务完成时间线
+- **接口路径**：`/assignments/{assignmentId}/timeline`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **路径参数**：assignmentId（必填）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "assignmentId": "string",
+      "timeline": [
+        {
+          "event": "assigned",
+          "timestamp": "string",
+          "operator": "string",
+          "description": "任务分配"
+        },
+        {
+          "event": "confirmed",
+          "timestamp": "string",
+          "operator": "string",
+          "description": "员工确认接收"
+        },
+        {
+          "event": "platform_completed",
+          "platform": "mypal",
+          "timestamp": "string",
+          "description": "MyPAL平台完成"
+        },
+        {
+          "event": "nudge",
+          "timestamp": "string",
+          "operator": "string",
+          "description": "收到催办通知"
+        },
+        {
+          "event": "completed",
+          "timestamp": "string",
+          "operator": "string",
+          "description": "任务全部完成"
+        }
+      ],
+      "estimatedCompletionTime": "string",
+      "actualCompletionTime": "string",
+      "duration": 86400 // 总耗时（秒）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：获取任务从分配到完成的完整时间线，支持趋势分析
+- **权限要求**：本人/总部
+- **异常场景**：
+  - 404：assignmentId不存在
+  - 403：无权限访问
+
+### 3.8 创建分配记录（基础 CRUD，Dev1）**P0**
+
+- **接口名称**：创建单条分配记录
+- **接口路径**：`/assignments`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central/admin）
+- **请求体**：
+  ```json
+  {
+    "taskId": "string",
+    "userId": "string",
+    "storeId": "string"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 201,
+    "message": "success",
+    "data": {
+      "id": "string",
+      "taskId": "string",
+      "userId": "string",
+        "storeId": "string",
+      "status": "pending",
+      "progress": 0,
+      "nudgeCount": 0,
+      "receivedAt": null,
+      "startedAt": null,
+      "completedAt": null,
+      "createdAt": "string",
+      "updatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：Day2 Dev1 基础写接口，不包含状态机、通知事件、催办联动。
+- **权限要求**：仅 central/admin
+- **异常场景**：
+  - 400：参数缺失 / taskId 或 userId 不存在 / userId 与 storeId 不匹配
+  - 409：同一 `(taskId, userId)` 已存在分配记录
+
+### 3.9 更新分配记录（基础 CRUD，Dev1）**P0**
+
+- **接口名称**：更新分配记录基础字段
+- **接口路径**：`/assignments/{assignmentId}`
+- **请求方法**：PATCH
+- **请求头**：需携带通用请求头（Role=central/admin）
+- **路径参数**：assignmentId（必填）
+- **请求体**：
+  ```json
+  {
+    "nudgeCount": 3
+  }
+  ```
+- **响应体（成功）**：返回更新后的 Assignment 对象（字段同 3.8）
+- **接口说明**：当前仅开放 `nudgeCount` 更新；状态机相关更新仍走 §3.3。
+- **权限要求**：仅 central/admin
+- **异常场景**：
+  - 400：nudgeCount 非非负整数，或未传可更新字段
+  - 404：assignment 不存在
+
+### 3.10 删除分配记录（基础 CRUD，Dev1）**P0**
+
+- **接口名称**：删除分配记录
+- **接口路径**：`/assignments/{assignmentId}`
+- **请求方法**：DELETE
+- **请求头**：需携带通用请求头（Role=central/admin）
+- **路径参数**：assignmentId（必填）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "deleted": true
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：仅允许删除 `pending` 状态分配记录，避免破坏执行链路。
+- **权限要求**：仅 central/admin
+- **异常场景**：
+  - 404：assignment 不存在
+  - 409：非 pending 状态不可删除
+
+## 3A. 门店与员工基础管理 API（Dev1）**P0**
+
+### 3A.1 门店管理（Stores）
+
+- `GET /stores`：查询门店列表（central/admin）
+- `GET /stores/{id}`：查询门店详情（已登录可访问）
+- `POST /stores`：创建门店（central/admin）
+- `PATCH /stores/{id}`：更新门店（central/admin）
+- `DELETE /stores/{id}`：删除门店（central/admin，仅无关联员工时可删）
+
+### 3A.2 员工管理（Employees）
+
+- `GET /employees`：查询员工列表（central/admin）
+- `GET /employees/{id}`：查询员工详情（已登录可访问）
+- `POST /employees`：创建员工（central/admin）
+- `PATCH /employees/{id}`：更新员工（central/admin）
+- `DELETE /employees/{id}`：删除员工（central/admin，存在用户/assignment 关联时拒绝）
+
+## 4. 系统事件 API（System Event）
+
+### 4.1 创建系统通知事件（内部调用）**P0**
+
+> ⚠️ **重要设计约束：本接口不对前端开放直接创建 `nudge_yellow/nudge_red` 事件**。催办通知必须通过 §4.5 `POST /nudges` 创建，以确保 `nudge_records` 审计记录完整写入。本接口仅用于以下两类场景：
+> - **任务下发**：由 §2.4 Dispatch Task 内部调用，为每个 assignment 批量写入 `task_assigned` 通知
+> - **任务信息变更**：由 §2.3 Edit Task 内部调用，写入 `task_updated` 通知
+
+- **接口名称**：创建系统通知事件（task_assigned / task_updated）
+- **接口路径**：`/events`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    // event_type 仅允许：task_assigned / task_updated
+    // ❌ nudge_yellow / nudge_red 禁止通过本接口创建，必须走 POST /nudges（§4.5）
+    "eventType": "task_assigned/task_updated", // 必填
+    "taskId": "string",       // 必填，notification_events.task_id
+    "assignmentId": "string", // task_assigned 必填；task_updated 可空（notification_events.assignment_id）
+    // targetUserId = notification_events.target_user_id → employees.id（如 E001）
+    "targetUserId": "string", // 必填
+    // store_id 不需要前端传入：服务端写入时自动从 employees.store_id 读取并冗余存储
+    // dedupeKey 规则（对应 PARTIAL UNIQUE INDEX）：
+    //   task_assigned → "task:{task_id}:user:{user_id}"（UNIQUE INDEX 防重）
+    //   task_updated  → 可空，不强制去重
+    "dedupeKey": "string"     // task_assigned 必填；task_updated 可空
+    // severity / operatorId / operatorRole 本接口均为 null（系统自动触发）
+    // storeId/title/content 不在 notification_events 表中，不支持传入
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "事件创建成功",
+    "data": {
+      "eventId": "string",    // notification_events.id（nanoid）
+      "eventType": "string",  // task_assigned / task_updated
+      "createdAt": "string"   // notification_events.created_at（ISO8601）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：系统内部写入 `notification_events` 表。`dedupeKey` + DB 层 PARTIAL UNIQUE INDEX 保证 `task_assigned` 事件幂等（重复调用不报错，返回已有 eventId）。**催办事件（nudge_yellow / nudge_red）禁止通过本接口创建，必须通过 §4.5 发起催办，以保证 `nudge_records` 审计链完整。预警数据无独立存储表，从 `task_assignments` 实时聚合计算**（见 §5.5）。
+- **权限要求**：
+  - central：仅可触发本人有权限的任务事件
+  - employee：无创建权限
+- **异常场景**：
+  - 400：必填参数缺失 / eventType非法（含nudge_yellow/nudge_red）/ task_assigned类assignmentId为空
+  - 403：越权创建
+  - 409：dedupeKey已存在（幂等，返回已有eventId，不重复写入）
+
+### 4.2 获取系统事件列表**P0**
+
+- **接口名称**：获取系统事件列表
+- **接口路径**：`/events`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | eventType | string | 否 | 事件类型：task_assigned/nudge_yellow/nudge_red/task_updated |
+  | taskId | string | 否 | 关联任务ID（notification_events.task_id） |
+  | targetUserId | string | 否 | 目标用户ID（employees.id），不传则默认当前 Employee-Id |
+  | assignmentId | string | 否 | 关联分配记录ID（notification_events.assignment_id） |
+  | storeId | string | 否 | 门店ID过滤（notification_events.store_id，直接命中索引） |
+  | severity | string | 否 | 催办级别：yellow/red |
+  | isActive | boolean | 否 | 活跃状态过滤（计算值：关联 assignment 未 completed 则为 true），默认 true |
+  | readStatus | boolean | 否 | 是否已读（JOIN read_receipts 计算） |
+  | pageNum | int | 是 | 页码，默认1 |
+  | pageSize | int | 是 | 页大小，默认20 |
+
+  > **注意：** `storeId` 是 `notification_events` 的冗余存储字段（从 `employees.store_id` 复制，有独立索引），可直接用于门店过滤，无需 JOIN。
+
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "list": [
+        {
+          "eventId": "string",     // notification_events.id（nanoid）
+          "eventType": "string",   // task_assigned/nudge_yellow/nudge_red/task_updated
+          "taskId": "string",      // notification_events.task_id
+          "assignmentId": "string", // notification_events.assignment_id，可为 null
+          "targetUserId": "string", // notification_events.target_user_id（= employees.id）
+          "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
+          "severity": "string",    // notification_events.severity（yellow/red），非催办事件时为 null
+          // isActive 计算规则（不存储于 DB）：
+          //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+          //     → ta.status != 'completed'（任务未完成时为 true，完成后为 false）
+          //   event_type = 'task_updated'
+          //     → 始终为 true（不绑定 assignment 完成状态）
+          "isActive": true,
+          // resolvedAt 计算规则（不存储于 DB）：
+          //   event_type IN ('task_assigned', 'nudge_*') → ta.completed_at（未完成时为 null）
+          //   event_type = 'task_updated'               → 始终为 null
+          "resolvedAt": "string",
+          // readStatus/readAt：JOIN read_receipts WHERE event_id=? AND user_id=当前用户
+          "readStatus": false,     // 当前用户是否已读
+          "readAt": "string",      // read_receipts.read_at，未读时为 null
+          "initiatorId": "string", // notification_events.initiator_id（users.id，串化），系统触发时为 null
+          "createdAt": "string"    // notification_events.created_at（ISO8601）
+        }
+      ],
+      "pagination": {
+        "pageNum": 1,
+        "pageSize": 20,
+        "total": 100,
+        "totalPages": 5
+      },
+      "unreadCount": 10 // 当前用户满足筛选条件的未读事件总数
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：获取通知类和催办类系统事件列表。`isActive`/`resolvedAt` 为计算值（不存于 DB，由服务端 JOIN `task_assignments.status` 和 `completed_at` 推导）。`readStatus`/`readAt` 通过 `read_receipts` JOIN 当前用户计算。**预警数据（§5.5）不在本接口，从 `task_assignments` 实时聚合。**
+- **权限要求**：
+  - central：所有事件
+  - employee：仅本人事件（`target_user_id = 当前 Employee-Id`）
+- **异常场景**：
+  - 400：pageNum/pageSize非法
+
+### 4.3 标记通知已读（铃铛点击）**P0**
+
+- **接口名称**：标记通知事件已读（notification_click）
+- **接口路径**：`/events/{eventId}/read`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **路径参数**：eventId（必填，notification_events.id）
+- **请求体**：无
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "标记已读成功",
+    "data": {
+      "receiptId": "string", // read_receipts.id（nanoid）
+      "eventId": "string",
+      "readAt": "string"     // read_receipts.read_at（ISO8601）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**不写 `assignment.received_at`**（该动作由 §4.3b 负责）。
+- **权限要求**：仅本人事件
+- **异常场景**：
+  - 404：eventId不存在
+  - 403：target_user_id ≠ 当前 Employee-Id
+
+### 4.3b 记录任务详情已读（打开任务详情）**P0**
+
+- **接口名称**：记录任务详情打开（task_detail_open）
+- **接口路径**：`/assignments/{assignmentId}/viewed`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **路径参数**：assignmentId（必填，task_assignments.id）
+- **请求体**：无
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "assignmentId": "string",
+      "receivedAt": "string",   // task_assignments.received_at（首次打开时写入，已有则返回原值）
+      "receiptId": "string",    // read_receipts.id（本次写入的回执ID；已读则返回已有ID）
+      "alreadyViewed": false    // true=已经打开过（received_at 已有值），false=首次打开
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：用户打开任务详情页时前端自动调用（无需用户手动操作）。服务端执行两个原子写入：
+  1. 若 `task_assignments.received_at` 为 NULL，写入当前时间
+  2. 查找该 assignment 对应的 `task_assigned` 通知事件（`notification_events WHERE assignment_id=? AND event_type='task_assigned'`），写入 `read_receipts`（`source='task_detail_open'`）
+
+  **这是 PRD §6.12"店员已读"统计口径的唯一写入入口**（`employeeReadCount`/`managerReadCount` 均从此处的 read_receipts 记录统计）。`UNIQUE(event_id, user_id)` 保证幂等。
+- **权限要求**：仅 assignment 所属用户（user_id = 当前 Employee-Id）
+- **异常场景**：
+  - 404：assignmentId不存在
+  - 403：非所属用户
+  - 404：该 assignment 无对应 task_assigned 事件（数据异常，返回错误提示）
+
+### 4.4 获取未读事件数量**P0**
+
+- **接口名称**：获取未读通知数量
+- **接口路径**：`/events/unread-count`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "unreadCount": 12  // 铃铛角标数（仅统计「活跃且未读」的通知）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：轻量级接口，专门用于铃铛角标展示当前用户的未读系统事件总数。**计算口径如下**：
+
+  ```sql
+  SELECT COUNT(*) FROM notification_events ne
+  LEFT JOIN read_receipts rr ON rr.event_id = ne.id AND rr.user_id = :currentUserId
+  LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
+  WHERE ne.target_user_id = :currentUserId
+    AND rr.id IS NULL   -- 未读
+    AND (
+      -- task_assigned / nudge_* 事件：关联 assignment 未完成才计入铃铛
+      (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+        AND ta.status != 'completed')
+      OR
+      -- task_updated 事件：不绑定 assignment 状态，只要未读就计入
+      ne.event_type = 'task_updated'
+    )
+  ```
+
+  > **说明**：已完成任务对应的 `task_assigned` 和 `nudge_*` 通知即使未读也**不计入**角标（PRD：催办提示在任务完成后自动消失）。`task_updated` 通知与任务状态无关，未读就始终计入。
+
+- **权限要求**：所有已登录用户（仅返回本人未读数）
+
+### 4.5 发起催办（人工触发）**P0**
+
+- **接口名称**：发起催办
+- **接口路径**：`/nudges`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central）
+- **请求体**：
+  ```json
+  {
+    "taskId": "string",           // 必填，nudge_records.task_id
+    "targetType": "employee/store/region", // 必填，nudge_records.target_type（DB CHECK 约束）
+    "targetId": "string",         // 必填，nudge_records.target_id：
+                                  //   targetType=employee → employees.id（如 E001）
+                                  //   targetType=store    → stores.id（如 S001）
+                                  //   targetType=region   → 区域名称（如"华东"，仅 central 可用）
+    "severity": "yellow/red"      // 必填，nudge_records.severity（DB CHECK 约束）
+    // operatorId 从请求头 User-Id 获取（写入 nudge_records.initiator_id）
+    // notification 内容由服务端根据 event_type+task 信息模板生成，不需前端传入
+    // auto 模式属于 P2 AI Agent 能力，本接口仅支持人工触发
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "催办执行成功",
+    "data": {
+      // 每次催办写入一条 nudge_records（一个 target），记录发起人、目标、严重程度
+      "nudgeRecordId": "string",  // nudge_records.id（nanoid）
+      "nudgedCount": 5,           // 成功写入的 notification_events 条数（同时 nudge_count+1）
+      "skippedCount": 1,          // 跳过数：已完成的 assignment 不催办
+      "failedCount": 0,
+      "failedReasons": [
+        {
+          "userId": "string",     // employees.id（对应被跳过的用户）
+          "reason": "Assignment 已完成，不允许催办"
+        }
+      ],
+      // notification_event_ids：本次催办创建的所有 event ID 列表，写入 nudge_records.notification_event_ids
+      "notificationEventIds": ["string"]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：发起人工催办。服务端**事务内**原子写入流程：
+  1. 写 `nudge_records` 一条（`task_id / target_type / target_id / severity / initiator_id`）
+  2. 按目标范围找到所有状态未为 `completed` 的 `task_assignments`，为每个 `user_id` 创建一条 `notification_events`（`event_type=nudge_yellow/nudge_red`，`severity` 同请求，`assignment_id` 必填，`initiator_id` = 请求头 User-Id）
+  3. 累加对应 `task_assignments.nudge_count += 1`
+  4. 将本次生成的所有 event ID 列表写入 `nudge_records.notification_event_ids`（JSON 数组，`NOT NULL`，PRD §5.5 完整审计）
+  
+  已完成的 assignment 自动跳过（计入 `skippedCount`）。整个流程在一个 SQLite 事务中完成，确保 `nudge_records.notification_event_ids` 始终完整。
+- **权限要求**：
+  - central：可催办任意 Assignment；`targetType` 允许 `employee / store / region`
+- **异常场景**：
+  - 400：taskId/targetType/targetId/severity 任一缺失 / targetType非法 / severity非法
+  - 404：taskId不存在 / targetId对应员工/门店不存在
+  - 409：目标范围内所有 assignment 均已完成（无可催对象）
+
+> **WS 推送：** 催办写入成功后，向所有被催用户（未完成的 assignment 对应 `user_id`）推送 `{ event: "nudge_sent", data: { nudgeRecordId, taskId, severity, eventType, } }`（见 §15.2）。
+
+### 4.6 获取催办记录列表**P1**
+
+- **接口名称**：获取催办记录列表
+- **接口路径**：`/nudges`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 是 | 任务ID（nudge_records.task_id），必传 |
+  | targetType | string | 否 | 催办范围过滤：employee/store/region |
+  | targetId | string | 否 | 催办对象ID过滤（与 targetType 联用） |
+  | severity | string | 否 | 催办级别：yellow/red |
+  | pageNum | int | 否 | 页码，默认1 |
+  | pageSize | int | 否 | 页大小，默认20 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "list": [
+        {
+          "nudgeRecordId": "string",  // nudge_records.id（nanoid）
+          "taskId": "string",         // nudge_records.task_id
+          "targetType": "string",     // employee / store / region
+          "targetId": "string",       // employees.id / stores.id / 区域名称
+          "severity": "string",       // yellow / red
+          "initiatorId": "string",    // nudge_records.initiator_id（users.id 串化）
+          // nudgedCount：本次催办生成的 notification_events 数量（JSON 数组长度）
+          "nudgedCount": 3,
+          "notificationEventIds": ["string"], // nudge_records.notification_event_ids（JSON 数组）
+          "createdAt": "string"       // nudge_records.created_at（ISO8601）
+        }
+      ],
+      "pagination": {
+        "pageNum": 1,
+        "pageSize": 20,
+        "total": 10,
+        "totalPages": 1
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：查询指定任务的催办审计记录。`nudge_records` 是每次催办动作的事实日志（一次催办一条），`notificationEventIds` 是本次催办生成的所有通知 event ID 列表，供溯源。服务端可通过 JOIN `users` 表补充发起人姓名（扩展字段）。
+- **权限要求**：
+  - central：可查询任意任务的催办记录
+  - employee：无权限
+
+### 4.7 AI 辅助生成催办文案
+
+- **接口路径**：`/nudges/ai-generate`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：基于 Gemini 2.5 Pro，自动组装任务名称、进度百分比、历史催办次数、剩余时间等系统事实数据，生成紧迫感强的催办文案。系统会自动将严重程度（yellow/red）转化为相应的 Prompt 语气。
+- **请求参数 (Body)**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `taskId` | string | 是 | 任务ID |
+| `userId` | string | 是 | 被催办店员ID |
+| `severity` | string | 是 | `yellow` (轻松) 或 `red` (严厉) |
+
+- **返回参数**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "content": "小伙伴，你的新品培训不足5小时就截止了！目前门店完成率80%，大家都在等你冲线哦！"
+  },
+  "requestId": "req-123..."
+}
+```
+
+## 5. 数据看板 API（Dashboard）
+
+### 5.1 获取总部看板概览数据**P0**
+
+- **接口名称**：获取看板概览数据
+- **接口路径**：`/dashboard/overview`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 否 | 任务ID，为空则汇总所有任务 |
+  | dimension | string | 否 | 聚合维度：store/dealer/format/employee（默认store） |
+  | rtm | string | 否 | 筛选RTM |
+  | format | string | 否 | 筛选业态 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      // ★ 以下数据均从 task_assignments / notification_events / read_receipts 实时聚合
+      "totalAssignments": 300, // COUNT(*) FROM task_assignments WHERE task_id=?
+      // pushUserCount = COUNT DISTINCT notification_events.target_user_id WHERE task_id=? AND event_type='task_assigned'
+      "pushUserCount": 300,
+      // employeeReadCount = COUNT DISTINCT read_receipts.user_id JOIN notification_events WHERE source='task_detail_open'
+      "employeeReadCount": 180,
+      "totalReadCount": 180, // = employeeReadCount
+      // realDeliveryRate = totalReadCount / totalAssignments（PRD §6.12 口径）
+      "realDeliveryRate": 74.0,
+      // completedCount = COUNT WHERE status='completed'（来自 task_assignments）
+      "completedCount": 216,
+      "completionRate": 72.0, // completedCount / totalAssignments * 100
+      "inProgressCount": 60,  // COUNT WHERE status='in_progress'
+      "pendingCount": 24,     // COUNT WHERE status='pending'
+      // overdueCount = COUNT WHERE status!='completed' AND tasks.ddl_at < now()
+      "overdueCount": 10,
+      "updatedAt": "string", // 本次聚合计算时间
+      // warningCount 从 task_assignments 实时聚合（无 alerts 表），规则见 §5.5
+      "warningCount": {
+        "p1": 5, // 门店完成率<50%且距DDL<24h的门店数
+        "p2": 3  // 门店完成率<80%的门店数（未达P1阈值）
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：返回总部/Executive看板核心概览数据，按维度聚合，并包含PRD 6.12口径的推送人数/已读人数/真实发放率指标
+- **权限要求**：central/executive（executive按权限返回对应区域数据）
+- **异常场景**：
+  - 403：非总部/Executive角色
+
+### 5.2 获取RTM热力图数据**P0**
+
+- **接口名称**：获取RTM热力图数据
+- **接口路径**：`/dashboard/heatmap`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 是 | 任务ID |
+  | rtmLevel | string | 否 | RTM层级：rtm/subRtm/format（默认rtm） |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "taskId": "string",
+      "rtmLevel": "string",
+      "heatmapData": [
+        {
+          "rtmValue": "string",
+          "completionRate": 65.0,
+          "color": "#FF9900", // 热力图颜色（按完成率）
+          "assignmentCount": 50,
+          "completedCount": 32
+        }
+      ],
+      "updatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：返回区域完成率热力图数据，支持不同层级聚合
+- **权限要求**：central/executive
+
+### 5.3 获取Top/Bottom 5门店数据**P0**
+
+- **接口名称**：获取门店完成率排行
+- **接口路径**：`/dashboard/store-rank`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 是 | 任务ID |
+  | type | string | 是 | 排行类型：top/bottom |
+  | limit | int | 否 | 数量，默认5 |
+  | format | string | 否 | 筛选业态（可选） |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "taskId": "string",
+      "type": "top",
+      "rankList": [
+        {
+          "storeId": "string",
+          "storeName": "string",
+          "completionRate": 98.0,
+          "assignmentCount": 6,
+          "completedCount": 5
+        }
+      ],
+      "updatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：返回完成率Top/Bottom N门店数据
+- **权限要求**：
+  - central/executive：所有门店
+
+### 5.4 导出任务进度报表**P1**
+
+- **接口名称**：导出任务进度报表
+- **接口路径**：`/dashboard/reports/export`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **请求体**：
+  ```json
+  {
+    "taskId": "string", // 可选，指定任务，为空则导出所有任务
+    "dimension": "store/format/employee", // 导出维度，必填
+    "rtm": "string", // 可选，指定RTM（仅executive需填）
+    "timeRange": {
+      "startDate": "string", // 可选，开始时间
+      "endDate": "string" // 可选，结束时间
+    },
+    "format": "xlsx/pdf", // 导出格式，必填
+    "include": [
+      "completion_rate",
+      "timeline_analysis",
+      "nudge_effect",
+      "rtm_baseline"
+    ] // 包含的分析模块，必填
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "报表导出成功",
+    "data": {
+      "reportId": "string",
+      "downloadUrl": "string", // 报表下载链接
+      "expiresAt": "string", // 链接过期时间（24小时）
+      "fileSize": "5MB",
+      "estimatedAnalysis": {
+        "completionRate": "72.5%",
+        "avgCompletionTime": "48小时",
+        "topStore": "上海南京西路店",
+        "bottomFormat": "APR"
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：导出多维度任务进度报表，支持完成率、时间线分析、催办效果、地区对标等数据
+- **权限要求**：central/executive（executive仅能导出授权区域数据）
+- **异常场景**：
+  - 400：dimension/format/include参数缺失
+  - 403：非总部/executive角色调用
+  - 503：报表生成服务不可用
+
+### 5.5 获取预警列表**P0**
+
+- **接口名称**：获取预警列表数据
+- **接口路径**：`/dashboard/warnings`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=central）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
+  | warningLevel | string | 否 | 预警级别：p1/p2（默认全部） |
+  | pageNum | int | 是 | 页码，默认1 |
+  | pageSize | int | 是 | 页大小，默认20 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "list": [
+        {
+          // 预警数据从 task_assignments 实时聚合计算（无独立 alerts 存储表）
+          // P1 规则：门店完成率 < 50% 且距离 ddl_at < 24h（PRD §5.2）
+          // P2 规则：门店完成率 < 80%（或其他规则）
+          "taskId": "string",
+          "storeId": "string",      // stores.id
+          "storeName": "string",    // JOIN stores.name
+          "warningLevel": "p1",     // p1（严重）/ p2（一般）
+          "completionRate": 45.0,   // 该门店当前完成率（%），从 task_assignments 聚合
+          "completedCount": 2,      // 已完成人数
+          "totalCount": 5,          // 总应完成人数
+          "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
+          "triggerDesc": "完成率<50%且距截止时间<24h", // 服务端根据规则生成的触发描述
+          "aiSuggestion": "建议总部发起红牌催办，需重点跟进", // MVP 阶段为模板文案，非 AI 实时生成
+          "calculatedAt": "string"  // 本次聚合计算时间（ISO8601）
+        }
+      ],
+      "pagination": {
+        "pageNum": 1,
+        "pageSize": 20,
+        "total": 8,
+        "totalPages": 1
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：**预警无独立存储表**，由服务端对 `task_assignments` 按门店聚合，结合 `tasks.ddl_at` 和当前时间实时计算 P1/P2 预警（PRD §5.2）。P1：门店完成率 < 50% 且距 DDL < 24h；P2：门店完成率 < 80%（具体阈值见业务规则）。MVP 阶段 `aiSuggestion` 为静态模板文案。
+- **权限要求**：仅总部角色（central）
+- **异常场景**：
+  - 400：warningLevel非法（非p1/p2）
+  - 403：非总部角色
+
+### 5.6 门店任务明细（下钻）**P0**
+
+- **接口名称**：按门店查看某任务下员工进度明细
+- **接口路径**：`/dashboard/store-detail`
+- **完整 URL 示例**：`GET /api/v1/dashboard/store-detail`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 是 | 任务 ID |
+  | storeId | string | 是 | 必填 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "taskId": "string",
+      "store": {
+        "id": "string",
+        "name": "string",
+        "region": "string",
+        "rtm": "string",
+        "format": "string"
+      },
+      "summary": {
+        "totalCount": 6,
+        "completedCount": 4,
+        "completionRate": 67,
+        "inProgressCount": 1,
+        "pendingCount": 1
+      },
+      "employees": [
+        {
+          "employeeId": "string",
+          "employeeName": "string",
+          "status": "pending/in_progress/completed",
+          "progress": 80,
+          "lagLevel": "fast|medium|behind",
+          "platformStatus": {
+            "mypalCompleted": true,
+            "smartsellCompleted": false,
+            "aiDemoCompleted": false,
+            "liveBroadcastCompleted": false
+          },
+          "nudgeCount": 0,
+          "receivedAt": "string|null",
+          "startedAt": "string|null",
+          "completedAt": "string|null",
+          "updatedAt": "string"
+        }
+      ],
+      "updatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：`lagLevel` 由 `progress` 推导：`>=80` → `fast`，`>=50` → `medium`，否则 `behind`。员工列表按 `progress DESC` 排序。
+- **权限要求**：`central` / `admin`
+- **异常场景**：
+  - 400：缺少 `taskId`（`DASH_001`）；未传 `storeId`（`DASH_004`）
+
+## 6. Executive Chat Agent API（核心AI Native接口）
+
+### 6.1 创建聊天会话**P1**
+
+- **接口名称**：创建Executive Chat会话
+- **接口路径**：`/chat/executive/sessions`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=executive）
+- **请求体**：
+  ```json
+  {
+    "executiveId": "string", // 高管ID，与User-Id一致
+    "roleScope": "national/rtm", // 权限范围：全国/按RTM
+    "rtm": "string" // 可选，仅按RTM分管需填
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "会话创建成功",
+    "data": {
+      "sessionId": "string", // 会话ID
+      "createdAt": "string",
+      "contextId": "string", // 上下文ID（多轮对话）
+      "exampleQuestions": [ // 示例问题（首屏展示）
+        "Q1新品培训完成率？",
+        "APR业态最差的5家门店是哪些？",
+        "现在有什么问题需要关注？"
+      ]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：创建高管聊天会话，生成上下文ID用于多轮对话
+- **权限要求**：仅executive角色
+- **异常场景**：
+  - 400：roleScope=rtm但rtm为空
+
+### 6.2 发送聊天消息（Agent处理）**P1**
+
+- **接口名称**：发送消息给Executive Agent
+- **接口路径**：`/chat/executive/sessions/{sessionId}/messages`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：sessionId（必填）
+- **请求体**：
+  ```json
+  {
+    "messageId": "string", // 消息唯一ID（前端生成）
+    "content": "string", // 自然语言问题，必填
+    "executiveId": "string", // 发送人ID
+    "contextId": "string" // 上下文ID，必填（创建会话返回）
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "messageId": "string",
+      "replyContent": { // 结构化回答（PRD 5.6）
+        "overview": "Q1新品培训整体完成率72%，全国共300人参与，216人已完成",
+        "keyNumbers": [
+          {
+            "label": "整体完成率",
+            "value": "72%",
+            "unit": "%"
+          },
+          {
+            "label": "逾期未完成人数",
+            "value": "10",
+            "unit": "人"
+          }
+        ],
+        "attentionPoints": [
+          "Monobrand完成率仅60%，低于所有渠道平均水平",
+          "5家门店完成率<50%，需重点关注"
+        ],
+        "followUpSuggestions": [
+          "可追问：Monobrand最差的5家门店是哪些？",
+          "可追问：逾期未完成的人员分布？"
+        ]
+      },
+      "responseTime": 3500, // 响应时间（ms），≤5000ms
+      "contextId": "string", // 更新后的上下文ID
+      "timestamp": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
+- **权限要求**：仅executive角色
+- **异常场景**：
+  - 400：content为空/contextId不存在
+  - 503：AI Agent服务未就绪（响应超时）
+
+### 6.3 获取会话历史**P1**
+
+- **接口名称**：获取聊天会话历史
+- **接口路径**：`/chat/executive/sessions/{sessionId}/history`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：sessionId（必填）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | pageNum | int | 是 | 页码，默认1 |
+  | pageSize | int | 是 | 页大小，默认20 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "sessionId": "string",
+      "historyList": [
+        {
+          "messageId": "string",
+          "content": "Q1新品培训完成率？",
+          "sender": "executive",
+          "timestamp": "string",
+          "replyContent": {
+            "overview": "string",
+            "keyNumbers": [],
+            "attentionPoints": [],
+            "followUpSuggestions": []
+          }
+        }
+      ],
+      "pagination": {
+        "pageNum": 1,
+        "pageSize": 20,
+        "total": 3,
+        "totalPages": 1
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：返回高管聊天会话的历史消息，含Agent回答
+- **权限要求**：仅会话所属executive
+
+### 6.4 AI Agent 意图识别（内部接口）**P1**
+
+- **接口名称**：识别Executive消息意图
+- **接口路径**：`/chat/executive/intent-recognition`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **请求体**：
+  ```json
+  {
+    "content": "string", // 自然语言消息
+    "contextId": "string" // 上下文ID
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "intentType": "progress_query/project_status/warning_query/drill_down", // 意图类型（PRD 5.6）
+      "entities": { // 实体提取
+        "taskName": "Q1新品培训",
+        "rtm": "Monobrand",
+        "dimension": "store",
+        "topN": 5
+      },
+      "confidence": 0.98, // 意图识别置信度
+      "sqlQuery": "SELECT * FROM task_assignments WHERE taskId='xxx' AND store_id IN (SELECT id FROM stores WHERE rtm='Monobrand') LIMIT 5" // 生成的查询语句（可选）
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：AI Agent内部接口，识别用户意图并提取实体，生成数据查询逻辑
+- **权限要求**：仅central/executive角色
+
+### 6.5 DeepSeek 对话补全（OpenAI 兼容上游）**P1**
+
+本小节描述 **服务端** 调用 [DeepSeek](https://api.deepseek.com) 的方式，以及与可选 **REST 代理接口** 的约定。密钥仅允许通过环境变量配置，**禁止在源码、配置仓库或日志中硬编码 API Key**。
+
+#### 6.5.1 上游服务（官方 OpenAI 兼容 HTTP）
+
+| 项 | 值 |
+|----|-----|
+| Base URL | `https://api.deepseek.com` |
+| 默认模型 | `deepseek-chat` |
+| 协议 | 与 OpenAI Chat Completions 兼容（可使用官方 `openai` Python SDK 或 Node `@openai/openai` 等，将 `base_url` 指向上述地址） |
+
+**环境变量（必填，服务端）：**
+
+| 变量名 | 说明 |
+|--------|------|
+| `DEEPSEEK_API_KEY` | DeepSeek 平台发放的 API Key；在本地开发中写入项目根目录 `.env`（已 `.gitignore`），生产环境由密钥管理注入 |
+
+**Python 调用示例（与官方文档一致，Key 来自环境变量）：**
+
+```python
+# pip install openai
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ.get("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com",
+)
+
+response = client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "Hello"},
+    ],
+    stream=False,
+)
+
+print(response.choices[0].message.content)
+```
+
+**Node.js 官方示例（OpenAI SDK，与 DeepSeek 文档一致；先执行 `npm install openai`）：**
+
+```javascript
+// npm install openai
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  baseURL: "https://api.deepseek.com",
+  apiKey: process.env.DEEPSEEK_API_KEY,
+});
+
+async function main() {
+  const completion = await openai.chat.completions.create({
+    messages: [{ role: "system", content: "You are a helpful assistant." }],
+    model: "deepseek-chat",
+  });
+
+  console.log(completion.choices[0].message.content);
+}
+
+main();
+```
+
+使用 **ESM**（`import`）时，需在 `package.json` 中设置 `"type": "module"`，或改用 `.mjs` 文件；若项目为 CommonJS，可用 `const OpenAI = require("openai")` 等价改写。与 Python 相同：**`apiKey` 仅来自 `process.env.DEEPSEEK_API_KEY`，禁止硬编码。**
+
+- **流式：** 将 `stream=True`（Python）或 SDK 对应流式参数开启后，按 SSE/ chunk 消费即可。
+- **错误与降级：** 上游不可用或鉴权失败时，业务层应返回 `503` 或统一错误体，并记录 `requestId`，不在响应中回显 Key。
+
+#### 6.5.2 可选 REST 代理：`POST /ai/deepseek/chat`
+
+若后端对前端或其他服务暴露统一网关，建议路径与请求体如下（与通用响应格式一致，见文档「响应体格式」）。
+
+- **接口名称**：DeepSeek 对话补全（代理）
+- **接口路径**：`/ai/deepseek/chat`
+- **完整 URL 示例**：`POST /api/v1/ai/deepseek/chat`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（具体角色范围由产品定，建议至少 `central` / `executive` / `admin`）
+- **请求体**：
+  ```json
+  {
+    "model": "deepseek-chat",
+    "messages": [
+      { "role": "system", "content": "string" },
+      { "role": "user", "content": "string" }
+    ],
+    "stream": false
+  }
+  ```
+- **响应体（成功，非流式）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "id": "string",
+      "model": "deepseek-chat",
+      "content": "string",
+      "finishReason": "stop"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：服务端使用 `DEEPSEEK_API_KEY` 调用上游 `chat.completions`，将助手文本置于 `data.content`；**浏览器与客户端永不接触 DeepSeek Key**。
+- **异常场景**：
+  - 503：`DEEPSEEK_API_KEY` 未配置或上游不可用（`AI_001`）
+  - 400：messages 为空或格式非法
+
+## 7. 权限校验 API
+
+### 7.1 校验用户资源访问权限**P0**
+
+- **接口名称**：校验资源访问权限
+- **接口路径**：`/permissions/check`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    "userId": "string", // 校验用户ID，与User-Id一致
+    "resourceType": "task/assignment/dashboard/chat", // 资源类型
+    "resourceId": "string", // 资源ID
+    "action": "read/write/delete/nudge" // 操作类型
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "hasPermission": true,
+      "reason": "用户为总部角色，拥有任务所有操作权限"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：通用权限校验接口，所有业务接口前置调用
+- **权限要求**：所有角色
+
+## 8. 数据统计 API
+
+### 8.1 获取任务完成率统计**P1**
+
+- **接口名称**：获取任务完成率统计
+- **接口路径**：`/statistics/completion-rate`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 否 | 任务ID，为空则所有任务 |
+  | groupBy | string | 是 | 分组维度：hour/day/week/month |
+  | startTime | string | 否 | 开始时间 |
+  | endTime | string | 否 | 结束时间 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "statisticsData": [
+        {
+          "time": "2026-03-20",
+          "completionRate": 60.0,
+          "completedCount": 180,
+          "totalCount": 300
+        }
+      ],
+      "trendType": "up" // 趋势：up/down/flat
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：按时间维度统计任务完成率趋势
+- **权限要求**：
+  - central：所有维度
+  - executive：权限范围数据
+
+### 8.2 AI Agent 生成统计报告**P2**
+
+- **接口名称**：AI Agent生成培训统计报告
+- **接口路径**：`/statistics/agent-report`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **请求体**：
+  ```json
+  {
+    "taskIds": ["string"], // 任务ID列表，为空则所有任务
+    "timeRange": {
+      "startTime": "string",
+      "endTime": "string"
+    },
+    "dimension": ["store", "format", "employee"], // 统计维度
+    "reportType": "daily/weekly/monthly", // 报告类型
+    "agentId": "string"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "报告生成成功",
+    "data": {
+      "reportId": "string",
+      "reportContent": { // AI生成的自然语言报告
+        "title": "2026年3月培训任务周度报告",
+        "overview": "本周共完成2个培训任务，整体完成率75%，较上周提升5%",
+        "keyFindings": [
+          "APR业态完成率提升10%，主要因总部催办及时",
+          "MyPAL平台自动判定完成率达90%，手动标记仅10%"
+        ],
+        "suggestions": [
+          "建议对Premium门店发起催办",
+          "建议扩大MyPAL平台对接范围，减少手动标记成本"
+        ],
+        "dataAttachments": [ // 附件数据
+          {
+            "dimension": "store",
+            "completionRate": 75.0,
+            "topStores": [],
+            "bottomStores": []
+          }
+        ]
+      },
+      "generatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：AI Agent按维度生成自然语言统计报告（PRD P2 AI Agent规划）
+- **权限要求**：central/executive
+
+## 9. AI Agent 核心能力扩展 API
+
+### 9.1 AI Agent 任务扫描（巡检）**P2**
+
+- **接口名称**：AI Agent扫描任务状态
+- **接口路径**：`/agent/task-scan`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central）
+- **请求体**：
+  ```json
+  {
+    "scanType": "all/overdue/low_progress", // 扫描类型
+    "taskStatus": "dispatched", // 仅扫描已下发任务
+    "agentId": "string"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "扫描完成",
+    "data": {
+      "scannedTaskCount": 5,
+      "abnormalTaskCount": 2,
+      "abnormalDetails": [
+        {
+          "taskId": "string",
+          "abnormalType": "low_progress",
+          "description": "完成率<60%，涉及100人",
+          "suggestion": "发起黄牌催办"
+        }
+      ],
+      "scanReport": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：AI Agent自动巡检任务状态，识别异常并给出建议
+- **权限要求**：central
+
+### 9.2 AI Agent 上下文管理**P2**
+
+- **接口名称**：更新/获取对话上下文
+- **接口路径**：`/agent/context/{contextId}`
+- **请求方法**：GET/PUT
+- **请求头**：需携带通用请求头（Role=executive/central）
+- **路径参数**：contextId（必填）
+- **PUT请求体**：
+  ```json
+  {
+    "contextData": { // 上下文数据，含历史问题/回答/实体
+      "historyIntents": ["progress_query"],
+      "extractedEntities": {
+        "rtm": "Monobrand",
+        "taskName": "Q1新品培训"
+      },
+      "drillDownLevel": "store" // 下钻层级：national/rtm/store/employee
+    }
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "contextId": "string",
+      "contextData": {
+        "historyIntents": [],
+        "extractedEntities": {},
+        "drillDownLevel": "string"
+      },
+      "updatedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：管理Executive Chat的多轮对话上下文，支撑下钻查询
+- **权限要求**：executive/central
+
+
+### 9.3 AI Agent 工具调用（Function Calling，企业级核心）**P2**
+
+- **接口名称**：Agent 标准化工具调用
+- **接口路径**：`/agent/tool-call`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central/executive）
+- **请求体**：
+  ```json
+  {
+    "agentId": "string", // 执行工具调用的Agent ID
+    "sessionId": "string", // 会话ID（可选，聊天场景）
+    "contextId": "string", // 上下文ID
+    "toolName": "query_dashboard/trigger_nudge/generate_report/call_external_api", // 工具名称
+    "toolParams": { // 工具入参（动态结构化参数）
+      "taskId": "string",
+      "rtm": "string",
+      "employeeId": "string"
+    },
+    "operatorId": "string", // 操作人ID
+    "syncMode": true // 同步/异步调用：true=同步返回结果，false=异步返回任务ID
+  }
+  ```
+- **响应体（同步成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "工具调用成功",
+    "data": {
+      "toolCallId": "string", // 工具调用唯一ID
+      "toolName": "string",
+      "result": {}, // 工具执行结果（动态结构化数据）
+      "status": "success", // 执行状态：success/failed/running
+      "executedAt": "string",
+      "asyncTaskId": null // 异步模式返回任务ID
+    },
+    "requestId": "string"
+  }
+  ```
+- **响应体（异步成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "工具调用已提交",
+    "data": {
+      "toolCallId": "string",
+      "asyncTaskId": "string",
+      "status": "running",
+      "estimatedTime": 3000 // 预计执行时间(ms)
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：AI Native 核心接口，Agent 调用内置/自定义工具（数据查询、催办、报告生成、外部系统对接），支持同步/异步双模式，严格遵循函数调用规范
+- **权限要求**：central/executive
+- **异常场景**：
+  - 400：工具名称不存在/参数格式错误
+  - 403：无权限调用该工具
+  - 503：工具依赖服务不可用
+
+### 9.4 AI Agent 异步任务查询**P2**
+
+- **接口名称**：查询Agent异步工具执行结果
+- **接口路径**：`/agent/async-task/{asyncTaskId}`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **路径参数**：asyncTaskId（必填）
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "asyncTaskId": "string",
+      "toolCallId": "string",
+      "status": "success/running/failed",
+      "progress": 100, // 执行进度(%)
+      "result": {}, // 执行结果（完成时返回）
+      "failedReason": null, // 失败原因
+      "createdAt": "string",
+      "completedAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：查询异步工具调用的执行状态与结果，适配长耗时Agent任务（报告生成、批量催办）
+- **权限要求**：任务创建人/系统管理员
+
+### 9.5 AI Agent 工作流编排（多Agent协作）**P2**
+
+- **接口名称**：创建/执行Agent工作流
+- **接口路径**：`/agent/workflow`
+- **请求方法**：POST
+- **请求头**：Role=central
+- **请求体**：
+  ```json
+  {
+    "workflowName": "string", // 工作流名称：自动巡检-催办-报告
+    "workflowType": "auto/manual", // 自动触发/手动执行
+    "triggerRule": { // 自动触发规则（可选）
+      "cron": "0 0 * * *", // 定时规则
+      "event": "task_dispatch" // 事件触发：任务下发
+    },
+    "nodes": [ // 工作流节点（多Agent串行/并行执行）
+      {
+        "nodeId": "node_1",
+        "agentId": "scan_agent",
+        "toolName": "task_scan",
+        "params": {}
+      },
+      {
+        "nodeId": "node_2",
+        "agentId": "nudge_agent",
+        "dependNode": "node_1", // 依赖上一节点
+        "toolName": "agent_auto_nudge"
+      }
+    ],
+    "operatorId": "string"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "工作流创建成功",
+    "data": {
+      "workflowId": "string",
+      "status": "active/stopped",
+      "triggerType": "string",
+      "createdAt": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：企业级多Agent协作核心，支持串行/并行工作流、定时/事件触发，实现全流程自动化
+- **权限要求**：仅central
+
+### 9.6 AI Agent 状态监控与日志**P2**
+
+- **接口名称**：查询Agent运行状态与操作日志
+- **接口路径**：`/agent/monitor`
+- **请求方法**：GET
+- **请求头**：Role=central
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | agentId | string | 否 | Agent ID |
+  | status | string | 否 | 运行状态：running/idle/error |
+  | startTime | string | 否 | 日志开始时间 |
+  | endTime | string | 否 | 日志结束时间 |
+  | pageNum | int | 是 | 页码 |
+  | pageSize | int | 是 | 页大小 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "agentStatus": {
+        "totalAgents": 5,
+        "runningAgents": 4,
+        "errorAgents": 1
+      },
+      "logList": [
+        {
+          "logId": "string",
+          "agentId": "string",
+          "operation": "tool_call/scan/nudge",
+          "status": "success",
+          "content": "执行自动催办工具，触发50条通知",
+          "executedAt": "string",
+          "duration": 1200 // 执行耗时(ms)
+        }
+      ],
+      "pagination": {}
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：实时监控所有Agent运行状态，记录全量操作日志，用于运维排查与审计
+- **权限要求**：仅central
+
+### 9.7 AI Agent 配置管理**P2**
+
+- **接口名称**：Agent 模型/规则/权限配置
+- **接口路径**：`/agent/config/{agentId}`
+- **请求方法**：GET/PUT
+- **请求头**：Role=central
+- **PUT请求体**：
+  ```json
+  {
+    "modelConfig": { // 大模型配置
+      "modelName": "deepseek-v3/gpt-4o",
+      "temperature": 0.1, // 温度系数（企业级低随机性）
+      "maxTokens": 2048
+    },
+    "ruleConfig": { // 业务规则配置
+      "nudgeMaxCount": 3,
+      "progressWarnThreshold": 60,
+      "ddlWarnHours": 24
+    },
+    "permissionConfig": { // Agent权限范围
+      "allowTools": ["query_dashboard", "trigger_nudge"],
+      "denyRtm": [],
+      "allowRoles": ["employee"]
+    },
+    "enabled": true // 启用/禁用Agent
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "配置更新成功",
+    "data": {
+      "agentId": "string",
+      "configVersion": "v1.2",
+      "updatedAt": "string",
+      "enabled": true
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：统一管理Agent的大模型参数、业务规则、权限范围，支持热更新无需重启服务
+- **权限要求**：仅central
+
+### 9.8 AI Agent 知识库检索（RAG 核心）**P2**
+
+- **接口名称**：Agent 企业知识库查询
+- **接口路径**：`/agent/knowledge/retrieve`
+- **请求方法**：POST
+- **请求头**：通用认证
+- **请求体**：
+  ```json
+  {
+    "query": "string", // 用户问题/检索关键词
+    "knowledgeType": "training_material/company_policy/process_spec", // 知识库类型
+    "topK": 5, // 返回最相关条数
+    "contextId": "string" // 上下文ID
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "检索成功",
+    "data": {
+      "retrieveId": "string",
+      "query": "string",
+      "knowledgeList": [
+        {
+          "docId": "string",
+          "title": "string",
+          "content": "string", // 匹配片段
+          "score": 0.95, // 相似度分数
+          "source": "training_material",
+          "updatedAt": "string"
+        }
+      ],
+      "hasRelevantKnowledge": true
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：AI Native RAG核心接口，Agent检索企业内部知识库，确保回答精准、合规、无幻觉
+- **权限要求**：所有已认证用户
+
+### 9.9 AI Agent 外部系统集成适配器**P2**
+
+- **接口名称**：Agent 统一外部系统调用
+- **接口路径**：`/agent/external/adapter`
+- **请求方法**：POST
+- **请求头**：Role=central
+- **请求体**：
+  ```json
+  {
+    "systemType": "mypal/smartsell/erp/wecom", // 外部系统类型
+    "apiMethod": "get_user_progress/send_message", // 接口方法
+    "params": {}, // 系统专属参数
+    "requestId": "string"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "外部系统调用成功",
+    "data": {
+      "adapterId": "string",
+      "systemType": "string",
+      "result": {}, // 外部系统返回数据
+      "latency": 800 // 调用耗时(ms)
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：Agent统一对接第三方系统（学习平台、ERP、企业微信），屏蔽异构系统差异
+- **权限要求**：仅central角色
+
+---
+
+## 10. 组织与权限管理 API（Admin）**P2**
+
+### 10.1 部门/门店管理**P2**
+
+- **接口路径**：`/org/departments`
+- **请求方法**：GET/POST/PUT/DELETE
+- **核心功能**：增删改查门店、区域、部门层级结构
+- **权限要求**：仅central
+
+### 10.2 用户管理**P2**
+
+- **接口路径**：`/org/users`
+- **核心功能**：用户创建、信息修改、状态管理、批量导入
+- **权限要求**：仅central
+
+### 10.3 角色权限管理**P2**
+
+- **接口路径**：`/org/roles`
+- **核心功能**：角色定义、权限分配、RBAC权限校验
+- **权限要求**：仅central
+
+---
+
+## 11. 文件管理 API（AI 报告/附件）
+
+### 11.1 文件上传/下载**P2**
+
+- **接口路径**：`/files/upload` / `/files/{fileId}/download`
+- **核心功能**：知识库文档、AI报告、培训材料上传下载
+
+### 11.2 AI 报告导出**P1**
+
+- **接口路径**：`/files/export/report`
+- **核心功能**：导出Agent生成的PDF/Excel统计报告
+
+---
+
+## 12. 监控与运维 API（企业级必备）
+
+### 12.1 服务健康检查**P1**
+
+- **接口路径**：`/monitor/health`
+- **核心功能**：Agent服务、数据库、第三方依赖健康检测
+
+### 12.2 系统指标监控**P1**
+
+- **接口路径**：`/monitor/metrics`
+- **核心功能**：QPS、响应时间、Agent调用量、错误率监控
+
+### 12.3 系统日志查询**P1**
+
+- **接口路径**：`/monitor/logs`
+- **核心功能**：全系统操作日志、审计日志、异常日志查询
+
+---
+
+## 13. 事件总线 API（Agent 事件驱动）
+
+### 13.1 事件发布**P2**
+
+- **接口路径**：`/event/publish`
+- **核心功能**：发布任务下发、催办、Agent执行等事件
+
+### 13.2 事件订阅**P2**
+
+- **接口路径**：`/event/subscribe`
+- **核心功能**：订阅事件，触发Agent自动执行（事件驱动架构）
+
+## 14. 记忆系统 API（Memory System）
+
+### 14.1 获取用户短期记忆**P2**
+
+- **接口名称**：获取用户短期记忆
+- **接口路径**：`/memory/short-term`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "employee_id": "123",
+      "role": "employee",
+      "task_progress": {
+        "task_001": {
+          "mypal_completed": true,
+          "smartsell_completed": false,
+          "ai_demo_completed": true,
+          "live_broadcast_completed": false
+        }
+      },
+      "recent_interactions": [
+        {
+          "type": "nudge",
+          "content": "请尽快完成SmartSell平台的学习",
+          "timestamp": "2026-03-25T10:00:00Z"
+        }
+      ],
+      "preferences": {
+        "prefer_video": true
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：获取用户短期记忆内容，包括任务进度、最近交互记录和学习偏好
+- **权限要求**：所有角色（仅本人记忆）
+
+### 14.2 更新任务进度**P2**
+
+- **接口名称**：更新任务进度
+- **接口路径**：`/memory/short-term/progress`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    "task_id": "task_001",
+    "progress": {
+      "mypal_completed": true,
+      "smartsell_completed": true,
+      "ai_demo_completed": true,
+      "live_broadcast_completed": false
+    }
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "task_id": "task_001",
+      "progress": {
+        "mypal_completed": true,
+        "smartsell_completed": true,
+        "ai_demo_completed": true,
+        "live_broadcast_completed": false
+      }
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：更新用户任务进度
+- **权限要求**：所有角色（仅本人任务）
+
+### 14.3 添加交互记录**P2**
+
+- **接口名称**：添加交互记录
+- **接口路径**：`/memory/short-term/interaction`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    "interaction_type": "nudge",
+    "content": "请尽快完成SmartSell平台的学习"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "interaction_type": "nudge",
+      "content": "请尽快完成SmartSell平台的学习",
+      "timestamp": "2026-03-25T10:00:00Z"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：添加用户交互记录
+- **权限要求**：所有角色（仅本人交互）
+
+### 14.4 搜索知识库**P2**
+
+- **接口名称**：搜索知识库
+- **接口路径**：`/memory/long-term/knowledge`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 是否必填 | 说明 |
+  |--------|------|----------|------|
+  | query | string | 是 | 搜索关键词 |
+  | tags | list | 否 | 标签过滤 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "knowledge_list": [
+        {
+          "knowledge_id": "knowledge_001",
+          "content": "SmartSell平台使用指南",
+          "tags": ["SmartSell", "培训"],
+          "created_at": "2026-03-20T10:00:00Z"
+        }
+      ]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：搜索知识库内容
+- **权限要求**：所有角色
+
+### 14.5 添加知识库内容**P2**
+
+- **接口名称**：添加知识库内容
+- **接口路径**：`/memory/long-term/knowledge`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=central）
+- **请求体**：
+  ```json
+  {
+    "knowledge_id": "knowledge_001",
+    "content": "SmartSell平台使用指南",
+    "tags": ["SmartSell", "培训"]
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "knowledge_id": "knowledge_001",
+      "content": "SmartSell平台使用指南",
+      "tags": ["SmartSell", "培训"],
+      "created_at": "2026-03-25T10:00:00Z"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：添加知识库内容
+- **权限要求**：仅总部角色
+
+### 14.6 获取历史任务数据**P2**
+
+- **接口名称**：获取历史任务数据
+- **接口路径**：`/memory/long-term/history`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头
+- **查询参数**：
+  | 参数名 | 类型 | 是否必填 | 说明 |
+  |--------|------|----------|------|
+  | task_id | string | 是 | 任务ID |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "task_id": "task_001",
+      "title": "Q1新品培训",
+      "description": "Q1新品知识认证",
+      "platforms": ["MyPAL", "SmartSell", "AI Demo", "Live Broadcast"],
+      "ddl_at": "2026-04-30T23:59:59Z",
+      "status": "dispatched",
+      "created_at": "2026-03-20T10:00:00Z"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：获取历史任务数据
+- **权限要求**：所有角色（总部可看所有，店员看本人）
+
+### 14.7 检测进度变化**P2**
+
+- **接口名称**：检测进度变化
+- **接口路径**：`/memory/progress/detect`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    "original_progress": {
+      "mypal_completed": true,
+      "smartsell_completed": false
+    },
+    "new_progress": {
+      "mypal_completed": true,
+      "smartsell_completed": true
+    }
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "progress_changed": true,
+      "changed_platforms": ["smartsell"]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：检测任务进度变化
+- **权限要求**：所有角色
+
+### 14.8 生成个性化建议**P2**
+
+- **接口名称**：生成个性化建议
+- **接口路径**：`/memory/reasoning/suggestions`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头
+- **请求体**：
+  ```json
+  {
+    "progress": {
+      "mypal_completed": true,
+      "smartsell_completed": false
+    },
+    "user_preferences": {
+      "prefer_video": true
+    }
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "suggestions": [
+        "请完成SmartSell平台的学习，建议参考SmartSell专项培训视频",
+        "注意任务截止时间为2026-04-30"
+      ]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：根据用户进度和偏好生成个性化建议
+- **权限要求**：所有角色（仅本人建议）
+
+---
+
+## 15. WebSocket 实时推送
+
+### 连接方式
+
+```
+ws://[host]/ws?token=<JWT Bearer Token>
+```
+
+- 仅 `employee` 角色（有 `employeeId`）可建立持久连接；`central` / `executive` 无 employeeId，使用 REST 轮询降级。
+- 连接成功后服务端立即推送 `connected` 确认帧：
+  ```json
+  { "event": "connected", "employeeId": "E001" }
+  ```
+- Token 无效或无 employeeId 时，服务端关闭连接（code 4001/4002），前端需重新登录后重连。
+
+---
+
+### 15.1 任务下发通知 `task_assigned` **P0**
+
+**触发时机：** `POST /api/v1/tasks/{id}/dispatch` 成功后，向所有目标用户推送。
+
+**接收方：** 所有被分配到该任务的员工。
+
+**Payload：**
+```json
+{
+  "event": "task_assigned",
+  "data": {
+    "taskId": "string",
+    "taskTitle": "string",
+    "ddlAt": "string"
+  }
+}
+```
+
+**前端建议处理：**
+1. 铃铛角标 +1（或直接调 `GET /events/unread-count` 刷新）。
+2. 任务列表页刷新或插入新任务卡片。
+
+---
+
+### 15.2 催办通知 `nudge_sent` **P0**
+
+**触发时机：** `POST /api/v1/nudges` 成功后，向所有被催办的目标用户推送。
+
+**接收方：** 本次催办的目标员工（未完成的 assignment 对应用户）。
+
+**Payload：**
+```json
+{
+  "event": "nudge_sent",
+  "data": {
+    "nudgeRecordId": "string",
+    "taskId": "string",
+    "severity": "yellow | red",
+    "eventType": "nudge_yellow | nudge_red",
+  }
+}
+```
+
+**前端建议处理：**
+1. 铃铛角标 +1（或调 `GET /events/unread-count`）。
+2. 若 `severity=red`，展示高优先级弹窗提醒。
+
+---
+
+### 15.3 任务完成通知 `assignment_completed` **P0**
+
+**触发时机：** `PUT /api/v1/assignments/{id}/status`（`complete_platform`）触发 auto-complete 时，向完成者推送。
+
+**接收方：**
+- 完成任务的员工（自身）
+
+**Payload：**
+```json
+{
+  "event": "assignment_completed",
+  "data": {
+    "assignmentId": "string",
+    "taskId": "string",
+    "userId": "string",
+    "storeId": "string",
+    "completedAt": "string"
+  }
+}
+```
+
+**前端建议处理：**
+- 员工端：展示完成庆祝动效（可选）。
+
+---
+
+### 15.4 断线重连策略
+
+用户网络断开重连后，**不依赖 WebSocket 补发历史帧**（服务端不缓存未送达消息），前端应主动补拉：
+
+```javascript
+async function onReconnect() {
+  // 补拉未读通知角标
+  const { data: countData } = await GET('/api/v1/events/unread-count');
+  updateBellBadge(countData.unreadCount);
+
+  // 补拉通知列表
+  const { data: eventsData } = await GET('/api/v1/events?pageNum=1&pageSize=50');
+  updateNotificationList(eventsData.list);
+
+  // 补拉 assignment 状态
+  const { data: assignData } = await GET('/api/v1/assignments');
+  updateTaskList(assignData);
+}
+```
+
+---
+
+## 16. MyPal 本地 Mock 数据查询（开发环境） **P1**
+
+### 16.1 MyPal 学习进度查询（mock） `GET /api/v1/mypal/mock/learning` **P1**
+
+**用途：** 联调阶段在无法接通真实 MyPal 时，返回与 MyPal 字段形态一致的学习进度数据。
+
+**接入前提：** 仅当 `MYPAL_MOCK=1` 时该接口可用，否则返回 `404`。
+
+**请求参数（Query）：**
+- `queryDate`（可选）：`YYYY-MM-DD`
+- `taskWeek`（可选）：`FY26Q2W1` / `FY26Q2W2`（优先于 `queryDate`）
+  - **当前 mock 行为：** 如果未传 `taskWeek`，mock 接口不会根据 `queryDate` 计算 `taskWeek`，而是默认使用 `FY26Q2W1` 以保证联调可用。
+- `storeId`（可选）：仅 central/admin/executive 可用
+- `employeeId`（可选）：仅 central/admin/executive 可用
+
+**权限口径：**
+- `employee`：只能查询本人（由 JWT 中 `employeeId` 决定），忽略 `employeeId/storeId` 参数。
+- `central/admin/executive`：可按 `employeeId` 或 `storeId` 过滤；不传则按 `taskWeek` 返回全量 mock 数据。
+
+**返回体：** `data` 为数组，元素字段为 camelCase：`seedId`, `productName`, `firstUseTime`, `taskWeek`, `progress`, `passedWeek`, `passedTime`, `required`, `weekStartTime`。
+
+---
+
+## 附录：Agent 体系总览
+
+| Agent 类型 | 核心职责 | 对应API模块 |
+|----------|----------|------------|
+| 巡检Agent | 自动扫描任务异常、低进度、临期 | 9.1 / 9.6 |
+| 催办Agent | 自动/手动触发智能催办 | 4.5 / 9.3 |
+| 对话Agent | 高管自然语言查询、数据下钻；可选 DeepSeek 上游（§6.5） | 6.x / 6.5 / 9.8 |
+| 报告Agent | 自动生成统计分析报告 | 8.2 / 9.3 |
+| 集成Agent | 对接外部系统、数据同步 | 9.9 |
+| 编排Agent | 多Agent工作流调度、自动化 | 9.5 |
