@@ -19,16 +19,81 @@
 
 ---
 
-## Step 1：安装 Tailscale（每台设备都需要）
+## Step 1：Tailscale 配置
 
-1. 下载：https://tailscale.com/download
-2. 登录同一个 Tailscale 账号（问管理员发邀请链接加入 Network）
-3. 完成后你的设备会获得一个 `100.65.95.128` 虚拟 IP
-4. 验证连通性：
+Tailscale 是一个 P2P VPN 工具，安装后无论你在哪个网络（家里、公司、移动数据），都能像在同一局域网里一样访问 Mac Studio。
+
+---
+
+### 1-A 管理员操作（仅管理员做一次）
+
+> 管理员 = 持有 Mac Studio 的人（skylerwang）
+
+**创建 Tailscale 账号并建立 Network：**
+
+1. 访问 https://tailscale.com，点击右上角 **Get started**
+2. 用 Google 或 GitHub 账号注册（推荐 Google）
+3. 下载 Mac 客户端：https://tailscale.com/download/mac，安装后打开
+4. 点击菜单栏 Tailscale 图标 → **Log in** → 用刚注册的账号登录
+5. 登录成功后 Mac Studio 自动加入你的 Network，获得固定虚拟 IP `100.65.95.128`
+
+**邀请团队成员加入 Network：**
+
+1. 浏览器打开：https://login.tailscale.com/admin/invite
+2. 点击 **Generate invite link**，生成邀请链接
+3. 把链接通过微信/飞书发给每个团队成员（链接默认有效期 24 小时，过期可重新生成）
+4. 成员接受后，在 https://login.tailscale.com/admin/machines 能看到他们的设备上线
+
+---
+
+### 1-B 成员操作（每个成员在自己设备上做）
+
+**第一步：接受邀请**
+
+1. 打开管理员发来的邀请链接（用浏览器打开）
+2. 注册或登录 Tailscale 账号（建议用 Google 登录）
+3. 点击 **Accept invite** 接受邀请，加入管理员的 Network
+
+**第二步：下载并安装 Tailscale**
+
+| 设备 | 下载地址 |
+|------|---------|
+| Mac | https://tailscale.com/download/mac |
+| Windows | https://tailscale.com/download/windows |
+| iPhone | App Store 搜索 Tailscale |
+| Android | Google Play 搜索 Tailscale |
+
+**第三步：登录 Tailscale**
+
+打开 Tailscale App → **Log in** → 用接受邀请时的账号登录。  
+登录成功后菜单栏（Mac）或系统托盘（Windows）会出现绿色图标。
+
+**第四步：验证连通性**
+
+打开终端（Mac/Windows 均可），执行：
 
 ```bash
-ping 100.65.95.128   # 换成 Mac Studio 的 Tailscale IP，能 ping 通即成功
+ping 100.65.95.128
+# 预期：收到回包，如 64 bytes from 100.65.95.128: icmp_seq=0 ...
+# 按 Ctrl+C 停止
 ```
+
+再验证后端 API 可访问：
+
+```bash
+curl -s --data '{"username":"central","password":"Train2026!"}' \
+  -H "Content-Type: application/json" \
+  -X POST http://100.65.95.128:3000/api/v1/auth/login
+# 预期：返回含 token 的 JSON，说明 Tailscale 配置完全成功
+```
+
+**常见问题：**
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| ping 不通 | Tailscale 未启动 | 点开 App，确认图标是绿色 |
+| ping 不通 | 未加入同一 Network | 确认用接受邀请时的账号登录，不是新注册账号 |
+| API 返回 `Connection refused` | Mac Studio 后端未运行 | 通知管理员执行 `pm2 status` 检查 |
 
 ---
 
