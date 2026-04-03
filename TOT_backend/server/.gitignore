@@ -1,0 +1,6 @@
+# PM2 logs
+logs/
+*.log
+
+# Environment
+.env
