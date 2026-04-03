@@ -6,6 +6,35 @@
 
 ---
 
+## 🖥️ 共享开发服务器（Mac Studio）
+
+团队使用 Mac Studio 作为统一后端服务器，支持外网远程开发。
+
+| 项目 | 值 |
+|------|----|
+| 后端地址 | `http://100.65.95.128:3000` |
+| Tailscale IP | `100.65.95.128`（需加入团队 Network） |
+| 进程管理 | PM2（`pm2 status` 查看状态） |
+| 主开发分支 | `dev_joint` |
+| 远程开发 | Cursor Remote SSH → `mac-studio` |
+
+**新成员接入**：见 `TOT_backend/docs/team-onboarding.md`
+
+**日常部署**（合并到 dev_joint 后在 Mac Studio 执行）：
+```bash
+bash scripts/deploy.sh
+```
+
+**测试账号**：
+| 账号 | 密码 | 角色 |
+|------|------|------|
+| `central` | `Train2026!` | 总部 |
+| `executive` | `Train2026!` | Executive |
+| `admin` | `Admin2026!` | 管理员 |
+| `emp_E001` | `Train2026!` | 店员（S001 门店） |
+
+---
+
 ## ✅ 目前已成功联调的部分 (Successfully Integrated)
 
 ### 1. 核心架构与底层通信
@@ -60,22 +89,32 @@
 
 ## 🚀 快速启动指南 (Quick Start)
 
-### 启动后端 (Backend)
+### Mac Studio 共享服务器（推荐）
+
+后端已由 PM2 守护，无需手动启动。前端连接 Mac Studio：
+
 ```bash
-cd TOT_backend/server
-npm install
-npm run dev
-# 默认运行在 3000 端口
+# 确认后端正在运行
+pm2 status   # 在 Mac Studio 上执行
+
+# 前端本地开发（.env.development 已配置 Tailscale IP）
+cd TOT_frontend && pnpm run dev
 ```
 
-### 启动前端 (Frontend)
+### 本地独立开发（仅本机调试时）
+
 ```bash
+# 后端
+cd TOT_backend/server
+npm install
+npm run dev          # node --watch，修改自动重启，端口 3000
+
+# 前端
 cd TOT_frontend
 pnpm install
-pnpm run dev
-# 默认运行在 8001 端口
+pnpm run dev         # 端口 8001
 ```
 
 **快速测试入口**：
-- **总部端**：浏览器访问 `http://localhost:8001/hq` (自动带入总部免密权限进入看板)
-- **店员端**：浏览器模拟移动端尺寸访问 `http://localhost:8001/employee/login` (可使用 `test1@tot.com` 测试账号)
+- **总部端**：`http://localhost:8001/hq`（或 `http://100.65.95.128:8001/hq`）
+- **店员端**：`http://localhost:8001/employee/login`（账号见上方测试账号表）
