@@ -1,10 +1,195 @@
 <template>
   <div class="hq-board">
-    <!-- 头部：标题与功能概述 -->
+    <!-- 头部：标题与功能概述 + 已布置任务入口 -->
     <header class="board-header">
-      <h1 class="title">实时任务看板</h1>
-      <p class="desc">集中监控和管理总部下发的所有终端任务，实时追踪各门店执行进度与关键指标。</p>
+      <div class="board-header-main">
+        <h1 class="title">实时任务看板</h1>
+        <p class="desc">集中监控和管理总部下发的所有终端任务，实时追踪各门店执行进度与关键指标。</p>
+      </div>
+      <div class="board-header-actions">
+        <n-space>
+          <n-button type="primary" secondary @click="openDispatchedTasksDialog">
+            <template #icon>
+              <n-icon><UnorderedListOutlined /></n-icon>
+            </template>
+            已布置的任务
+          </n-button>
+          <n-button type="primary" secondary @click="openAlertRulesDialog">
+            <template #icon>
+              <n-icon><AlertOutlined /></n-icon>
+            </template>
+            任务预警规则
+          </n-button>
+        </n-space>
+      </div>
     </header>
+
+    <!-- 已下发任务列表（瀑布流） -->
+    <n-modal
+      v-model:show="showDispatchedListModal"
+      preset="card"
+      title="已布置的任务"
+      :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-dispatched-modal"
+    >
+      <div class="hq-dispatched-body">
+        <n-spin :show="dispatchedListLoading">
+          <n-empty v-if="!dispatchedListLoading && dispatchedTasksOnly.length === 0" description="暂无已下发的任务" />
+          <div v-else class="hq-waterfall-list">
+            <div
+              v-for="task in dispatchedTasksOnly"
+              :key="task.id"
+              class="hq-waterfall-card"
+              :class="{ 'is-expanded': expandedDispatchedTaskId === task.id }"
+            >
+              <div class="hq-wf-summary" @click="toggleDispatchedTaskDetail(task.id)">
+                <div class="hq-wf-head">
+                  <span class="hq-wf-tag">已下发</span>
+                  <n-icon class="hq-wf-chevron" :class="{ 'is-open': expandedDispatchedTaskId === task.id }">
+                    <DownOutlined />
+                  </n-icon>
+                </div>
+                <h3 class="hq-wf-title">{{ task.name }}</h3>
+                <p class="hq-wf-meta">截止：{{ task.deadline }}</p>
+                <p v-if="task.createdAtLabel" class="hq-wf-time">{{ task.createdAtLabel }}</p>
+                <p class="hq-wf-hint">
+                  {{ expandedDispatchedTaskId === task.id ? '点击收起' : '点击展开查看详情' }}
+                </p>
+              </div>
+
+              <div
+                v-show="expandedDispatchedTaskId === task.id"
+                class="hq-wf-expand"
+                @click.stop
+              >
+                <n-spin :show="detailLoadingTaskId === task.id">
+                  <div v-if="taskDetailById[task.id]" class="hq-detail-inner">
+                    <n-descriptions label-placement="top" :column="2" bordered size="small" :label-style="{ color: '#6b7280' }">
+                      <n-descriptions-item label="任务名称" :span="2">
+                        {{ taskDetailById[task.id].title }}
+                      </n-descriptions-item>
+                      <n-descriptions-item label="开始时间" :span="1">
+                        {{ formatHqDetailTime(taskDetailById[task.id].startAt) }}
+                      </n-descriptions-item>
+                      <n-descriptions-item label="截止时间" :span="1">
+                        {{ formatHqDetailTime(taskDetailById[task.id].ddlAt) }}
+                      </n-descriptions-item>
+                      <n-descriptions-item label="达标分数" :span="1">
+                        {{ taskDetailById[task.id].passScore ?? 100 }} 分
+                      </n-descriptions-item>
+                      <n-descriptions-item label="状态" :span="1">
+                        <n-tag type="success" size="small" :bordered="false">已下发</n-tag>
+                      </n-descriptions-item>
+                      <n-descriptions-item label="学习平台" :span="2">
+                        <n-space size="small">
+                          <n-tag v-if="taskDetailById[task.id].hasMypal" :bordered="false" type="info" size="small">MyPal</n-tag>
+                          <n-tag v-if="taskDetailById[task.id].hasSmartSell" :bordered="false" type="info" size="small">Sales Coach</n-tag>
+                          <n-tag v-if="taskDetailById[task.id].hasAiDemo" :bordered="false" type="info" size="small">AI Coach</n-tag>
+                          <n-tag v-if="taskDetailById[task.id].hasLiveBroadcast" :bordered="false" type="info" size="small">直播培训</n-tag>
+                        </n-space>
+                      </n-descriptions-item>
+                    </n-descriptions>
+                    <div class="hq-detail-desc-block">
+                      <div class="hq-detail-desc-label">任务说明</div>
+                      <div class="hq-detail-desc-text">{{ taskDetailById[task.id].description || '总部未填写详细说明' }}</div>
+                    </div>
+                    <n-button
+                      type="primary"
+                      block
+                      class="hq-detail-edit-btn"
+                      @click.stop="goEditDispatchedTask(task.id)"
+                    >
+                      前往任务管理编辑
+                    </n-button>
+                  </div>
+                </n-spin>
+              </div>
+            </div>
+          </div>
+        </n-spin>
+      </div>
+    </n-modal>
+
+    <!-- 各任务预警规则（与「已布置的任务」同交互：卡片展开） -->
+    <n-modal
+      v-model:show="showAlertRulesModal"
+      preset="card"
+      title="任务预警规则"
+      :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-rules-modal"
+    >
+      <div class="hq-dispatched-body">
+        <n-spin :show="alertRulesListLoading">
+          <n-empty v-if="!alertRulesListLoading && taskList.length === 0" description="暂无任务" />
+          <div v-else class="hq-waterfall-list">
+            <div
+              v-for="task in taskList"
+              :key="'rules-' + task.id"
+              class="hq-waterfall-card hq-rules-card"
+              :class="{ 'is-expanded': expandedRulesTaskId === task.id }"
+            >
+              <div class="hq-wf-summary" @click="toggleAlertRulesExpand(task.id)">
+                <div class="hq-wf-head">
+                  <n-tag :type="task.statusType" size="small" :bordered="false">{{ task.statusText }}</n-tag>
+                  <n-icon class="hq-wf-chevron" :class="{ 'is-open': expandedRulesTaskId === task.id }">
+                    <DownOutlined />
+                  </n-icon>
+                </div>
+                <h3 class="hq-wf-title">{{ task.name }}</h3>
+                <p class="hq-wf-meta">截止：{{ task.deadline }}</p>
+                <p class="hq-wf-hint">
+                  {{ expandedRulesTaskId === task.id ? '点击收起' : '点击展开查看预警规则' }}
+                </p>
+              </div>
+
+              <div
+                v-show="expandedRulesTaskId === task.id"
+                class="hq-wf-expand hq-rules-expand"
+                @click.stop
+              >
+                <div v-if="hasAutoNudgeRules(task)" class="hq-rules-body">
+                  <div class="hq-rule-block">
+                    <div class="hq-rule-block-title">进度掉队预警</div>
+                    <p class="hq-rule-line">
+                      Lifestyle：个人完成率处于门店最后 <strong>{{ task.autoNudgeRules.laggingLifestyle ?? '—' }}</strong> 位
+                    </p>
+                    <p class="hq-rule-line">
+                      Mono：个人完成率处于门店最后 <strong>{{ task.autoNudgeRules.laggingMono ?? '—' }}</strong> 位
+                    </p>
+                  </div>
+                  <div class="hq-rule-block">
+                    <div class="hq-rule-block-title">起步异常预警</div>
+                    <p class="hq-rule-line">
+                      任务期限已度过 <strong>{{ task.autoNudgeRules.startDelayPercent ?? '—' }}</strong> % ，但个人进度仍为 0%
+                    </p>
+                  </div>
+                  <div class="hq-rule-block">
+                    <div class="hq-rule-block-title">临期危机（Deadline）</div>
+                    <p class="hq-rule-line">
+                      距 Deadline 不足 <strong>{{ task.autoNudgeRules.deadlineCrisisHours ?? '—' }}</strong> 小时（P0）
+                    </p>
+                    <p class="hq-rule-line">
+                      距 Deadline 不足 <strong>{{ task.autoNudgeRules.deadlineCrisisHoursSecondary ?? '—' }}</strong> 小时（P1）
+                    </p>
+                  </div>
+                </div>
+                <n-empty v-else description="未配置预警规则" size="small" class="hq-rules-empty" />
+                <n-button
+                  type="primary"
+                  block
+                  class="hq-detail-edit-btn"
+                  @click.stop="goEditRulesTask(task.id)"
+                >
+                  前往任务管理编辑
+                </n-button>
+              </div>
+            </div>
+          </div>
+        </n-spin>
+      </div>
+    </n-modal>
 
     <!-- 任务导航栏 -->
     <section class="task-nav-section" v-if="taskList.length > 0">
@@ -57,8 +242,30 @@
       </n-empty>
     </div>
 
-    <!-- 核心看板内容区 -->
+    <!-- 已下发任务：手动触发预警扫描（与任务管理里配置的规则一致） -->
+    <section v-if="taskList.length > 0 && activeTask?.dispatched" class="auto-nudge-bar">
+      <div class="auto-nudge-inner">
+        <span class="auto-nudge-hint">
+          根据「任务管理」中的预警规则扫描未完成学员并推送催办（店员端 WebSocket 实时通知）。
+        </span>
+        <n-button
+          type="warning"
+          secondary
+          size="small"
+          :loading="autoNudgeLoading"
+          @click="handleTriggerAutoNudge"
+        >
+          <template #icon>
+            <n-icon><BellOutlined /></n-icon>
+          </template>
+          运行预警扫描
+        </n-button>
+      </div>
+    </section>
+
+    <!-- 核心看板内容区（统计接口加载中） -->
     <section class="dashboard-content" v-if="activeTask">
+      <n-spin :show="boardStatsLoading" class="board-stats-spin">
       
       <!-- 1. 北极星指标（居中置顶） -->
       <div class="north-star-container">
@@ -93,8 +300,7 @@
                   v-model:value="trendSelectedDay"
                   :options="trendDayOptions"
                   size="small"
-                  style="width: 100px"
-                  @update:value="renderChart"
+                  style="width: 120px"
                 />
               </div>
 
@@ -177,7 +383,7 @@
           </div>
         </n-card>
       </div>
-
+      </n-spin>
     </section>
   </div>
 </template>
@@ -191,62 +397,374 @@
 
 <script lang="ts" setup>
 import { ref, computed, onMounted, watch, onBeforeUnmount, nextTick, shallowRef, onActivated } from 'vue';
+import { useRouter } from 'vue-router';
 import * as echarts from 'echarts';
-import { InfoCircleOutlined, ArrowRightOutlined, CloseOutlined, EditOutlined } from '@vicons/antd';
-import { getTaskList, deleteTask } from '@/api/task';
+import { InfoCircleOutlined, ArrowRightOutlined, CloseOutlined, EditOutlined, BellOutlined, UnorderedListOutlined, DownOutlined, AlertOutlined } from '@vicons/antd';
+import { getTaskList, getTaskDetail, deleteTask, triggerTaskAutoNudge } from '@/api/task';
+import {
+  getDashboardOverview,
+  getDashboardHeatmap,
+  getDashboardTrend,
+  type TrendPoint,
+} from '@/api/dashboard';
 import { useMessage, useDialog } from 'naive-ui';
+import { useUserStore } from '@/store/modules/user';
+import { useGlobSetting } from '@/hooks/setting';
 
 const message = useMessage();
 const dialog = useDialog();
+const router = useRouter();
+const userStore = useUserStore();
+const { apiUrl } = useGlobSetting();
+
+/** 总部看板：已下发任务 PATCH 后 WS 推送 task_updated，同步列表/详情中的 ddl 与预警规则 */
+let hqWs: WebSocket | null = null;
+const HQ_WS_ROLES = ['central', 'admin', 'executive'];
+
+function isHqWsRole(role?: string | null) {
+  return !!role && HQ_WS_ROLES.includes(role);
+}
+
+function applyTaskUpdatedFromWs(data: {
+  taskId: string;
+  ddlAt?: string;
+  autoNudgeRules?: Record<string, number> | null;
+}) {
+  const { taskId, ddlAt, autoNudgeRules } = data;
+  const idx = taskList.value.findIndex((t) => t.id === taskId);
+  if (idx >= 0) {
+    const t = taskList.value[idx];
+    taskList.value.splice(idx, 1, {
+      ...t,
+      deadline: ddlAt ? ddlAt.substring(0, 10) : t.deadline,
+      autoNudgeRules: autoNudgeRules !== undefined ? autoNudgeRules : t.autoNudgeRules,
+    });
+  }
+  const detail = taskDetailById.value[taskId];
+  if (detail) {
+    taskDetailById.value = {
+      ...taskDetailById.value,
+      [taskId]: {
+        ...detail,
+        ddlAt: ddlAt ?? detail.ddlAt,
+        autoNudgeRules: autoNudgeRules !== undefined ? autoNudgeRules : detail.autoNudgeRules,
+      },
+    };
+  }
+}
+
+function initHqBoardWebSocket() {
+  closeHqBoardWebSocket();
+  const token = userStore.getToken;
+  if (!token || !isHqWsRole(userStore.getUserInfo?.role)) return;
+
+  let wsHost = apiUrl as string;
+  if (!wsHost || wsHost.startsWith('/')) {
+    wsHost = window.location.origin;
+  }
+  const wsUrl = `${String(wsHost).replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(token)}`;
+
+  try {
+    hqWs = new WebSocket(wsUrl);
+  } catch {
+    return;
+  }
+
+  hqWs.onmessage = (event) => {
+    try {
+      const parsed = JSON.parse(event.data);
+      if (parsed.event === 'task_updated' && parsed.data?.taskId) {
+        applyTaskUpdatedFromWs(parsed.data);
+        const tid = parsed.data.taskId;
+        const row = taskList.value.find((t) => t.id === tid);
+        if (row?.dispatched) {
+          void loadDashboardForTask(tid);
+        }
+      }
+    } catch (e) {
+      console.error('HQ board WebSocket message error', e);
+    }
+  };
+
+  hqWs.onclose = () => {
+    hqWs = null;
+  };
+}
+
+function closeHqBoardWebSocket() {
+  if (hqWs) {
+    hqWs.close();
+    hqWs = null;
+  }
+}
 
 // --- 数据响应式结构 ---
 const taskList = ref<any[]>([]);
 const activeTaskId = ref<string>('');
 const activeTask = computed(() => taskList.value.find(t => t.id === activeTaskId.value) || null);
 
+const showDispatchedListModal = ref(false);
+const dispatchedListLoading = ref(false);
+const expandedDispatchedTaskId = ref<string | null>(null);
+const detailLoadingTaskId = ref<string | null>(null);
+const taskDetailById = ref<Record<string, any>>({});
+
+const dispatchedTasksOnly = computed(() => taskList.value.filter((t) => t.dispatched));
+
+const openDispatchedTasksDialog = async () => {
+  dispatchedListLoading.value = true;
+  try {
+    await loadTasks();
+    showDispatchedListModal.value = true;
+  } finally {
+    dispatchedListLoading.value = false;
+  }
+};
+
+watch(showDispatchedListModal, (open) => {
+  if (!open) {
+    expandedDispatchedTaskId.value = null;
+  }
+});
+
+const formatHqDetailTime = (isoStr: string) => {
+  if (!isoStr) return '—';
+  const d = new Date(isoStr);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+const toggleDispatchedTaskDetail = async (taskId: string) => {
+  if (expandedDispatchedTaskId.value === taskId) {
+    expandedDispatchedTaskId.value = null;
+    return;
+  }
+  expandedDispatchedTaskId.value = taskId;
+  if (taskDetailById.value[taskId]) return;
+
+  detailLoadingTaskId.value = taskId;
+  try {
+    const res = await getTaskDetail(taskId).send();
+    taskDetailById.value = { ...taskDetailById.value, [taskId]: res };
+  } catch (err: any) {
+    message.error(err?.message || '加载任务详情失败');
+    expandedDispatchedTaskId.value = null;
+  } finally {
+    detailLoadingTaskId.value = null;
+  }
+};
+
+const goEditDispatchedTask = (taskId: string) => {
+  showDispatchedListModal.value = false;
+  router.push({ path: '/central/task/publish', query: { id: taskId } });
+};
+
+const showAlertRulesModal = ref(false);
+const alertRulesListLoading = ref(false);
+const expandedRulesTaskId = ref<string | null>(null);
+
+const openAlertRulesDialog = async () => {
+  alertRulesListLoading.value = true;
+  try {
+    await loadTasks();
+    showAlertRulesModal.value = true;
+  } finally {
+    alertRulesListLoading.value = false;
+  }
+};
+
+watch(showAlertRulesModal, (open) => {
+  if (!open) {
+    expandedRulesTaskId.value = null;
+  }
+});
+
+const toggleAlertRulesExpand = (taskId: string) => {
+  if (expandedRulesTaskId.value === taskId) {
+    expandedRulesTaskId.value = null;
+  } else {
+    expandedRulesTaskId.value = taskId;
+  }
+};
+
+const hasAutoNudgeRules = (task: any) => {
+  const r = task?.autoNudgeRules;
+  if (!r || typeof r !== 'object') return false;
+  return Object.keys(r).length > 0;
+};
+
+const goEditRulesTask = (taskId: string) => {
+  showAlertRulesModal.value = false;
+  router.push({ path: '/central/task/publish', query: { id: taskId } });
+};
+
+/** 看板 KPI 加载（overview + heatmap + trend daily） */
+const boardStatsLoading = ref(false);
+/** 按小时趋势：当前选中日期的接口数据 */
+const activeHourlyTrendRows = ref<TrendPoint[]>([]);
+/** 缓存 key = `${taskId}::${date}` */
+const hourlyTrendCache = ref<Record<string, TrendPoint[]>>({});
+
+function formatTrendDateLabel(timeKey: string) {
+  if (!timeKey) return '';
+  const m = String(timeKey).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[2]}-${m[3]}`;
+  return timeKey;
+}
+
+function emptyBoardStats() {
+  return {
+    northStar: { completionRate: '0', avgTime: '0' },
+    trendDailyRows: [] as TrendPoint[],
+    trendData: { xAxis: [] as string[], series: [] as number[] },
+    rtmData: [{ name: '暂无数据', rate: 0, time: 0 }],
+    linkData: { reachRate: 0, readRate: 0, nudgeRate: 0 },
+    warningData: { startAbnormal: 0, p1Crisis: 0, p0Crisis: 0 },
+  };
+}
+
+async function loadDashboardForTask(taskId: string) {
+  const idx = taskList.value.findIndex((t) => t.id === taskId);
+  if (idx < 0) return;
+  const row = taskList.value[idx];
+  if (!row.dispatched) {
+    const empty = emptyBoardStats();
+    taskList.value.splice(idx, 1, { ...row, ...empty });
+    activeHourlyTrendRows.value = [];
+    nextTick(() => renderChart());
+    return;
+  }
+
+  boardStatsLoading.value = true;
+  try {
+    const [overview, heatmap, trendDailyRes] = await Promise.all([
+      getDashboardOverview({ taskId }).send(),
+      getDashboardHeatmap({ taskId }).send(),
+      getDashboardTrend({ taskId, type: 'daily' }).send(),
+    ]);
+
+    const trendRows: TrendPoint[] = trendDailyRes?.trendData ?? [];
+    const heatmapRows = heatmap?.heatmapData ?? [];
+    const rtmData = heatmapRows.map((h) => ({
+      name: h.rtmValue || '—',
+      rate: Math.min(100, Math.max(0, h.completionRate ?? 0)),
+      time: h.avgCompletionTimeHours ?? 0,
+    }));
+    if (rtmData.length === 0) {
+      rtmData.push({ name: '暂无门店维度数据', rate: 0, time: 0 });
+    }
+
+    const xAxis = trendRows.map((r) => formatTrendDateLabel(r.timeKey));
+    const series = trendRows.map((r) => r.cumulativeCompleted ?? 0);
+
+    taskList.value.splice(idx, 1, {
+      ...row,
+      northStar: {
+        completionRate: String(overview.onTimeCompletionRate ?? 0),
+        avgTime: String(
+          overview.avgCompletionTimeHours != null ? Number(overview.avgCompletionTimeHours).toFixed(1) : '0'
+        ),
+      },
+      trendDailyRows: trendRows,
+      trendData: { xAxis, series },
+      rtmData,
+      linkData: {
+        reachRate: overview.taskReachRate ?? 0,
+        readRate: overview.taskReadRate ?? 0,
+        nudgeRate: overview.nudgeConversionRate ?? 0,
+      },
+      warningData: {
+        startAbnormal: overview.startDelayRate ?? 0,
+        p1Crisis: overview.crisisP1Rate ?? 0,
+        p0Crisis: overview.crisisP0Rate ?? 0,
+      },
+      dashboardUpdatedAt: overview.updatedAt,
+    });
+
+    const dateKeys = trendRows.map((r) => r.timeKey).filter(Boolean);
+    if (dateKeys.length) {
+      if (!trendSelectedDay.value || !dateKeys.includes(trendSelectedDay.value)) {
+        trendSelectedDay.value = dateKeys[dateKeys.length - 1];
+      }
+    } else {
+      trendSelectedDay.value = '';
+    }
+
+    hourlyTrendCache.value = {};
+    if (trendTimeDimension.value === 'hour' && trendSelectedDay.value) {
+      await fetchHourlyTrendForActiveTask();
+    } else {
+      activeHourlyTrendRows.value = [];
+    }
+
+    nextTick(() => renderChart());
+  } catch (err: any) {
+    console.error(err);
+    message.error(err?.message || '加载看板统计失败');
+  } finally {
+    boardStatsLoading.value = false;
+  }
+}
+
+async function fetchHourlyTrendForActiveTask() {
+  const taskId = activeTaskId.value;
+  const date = trendSelectedDay.value;
+  if (!taskId || !date) {
+    activeHourlyTrendRows.value = [];
+    return;
+  }
+  const task = taskList.value.find((t) => t.id === taskId);
+  if (!task?.dispatched) {
+    activeHourlyTrendRows.value = [];
+    return;
+  }
+  const cacheKey = `${taskId}::${date}`;
+  if (hourlyTrendCache.value[cacheKey]) {
+    activeHourlyTrendRows.value = hourlyTrendCache.value[cacheKey];
+    return;
+  }
+  try {
+    const data = await getDashboardTrend({ taskId, type: 'hourly', date }).send();
+    const list = data?.trendData ?? [];
+    hourlyTrendCache.value[cacheKey] = list;
+    activeHourlyTrendRows.value = list;
+  } catch {
+    activeHourlyTrendRows.value = [];
+  }
+}
+
 // 提取加载任务列表的方法
 const loadTasks = async () => {
   try {
     const res = await getTaskList().send();
-    // 映射后端 Task 对象到前端看板需要的数据格式
     taskList.value = (res || []).map((t: any) => {
       const isDraft = t.status === 'draft';
-      // 生成一些基础图表占位数据，确保图表渲染不报错
-      return {
+      const createdRaw = t.createdAt || '';
+      const createdAtLabel = createdRaw
+        ? `创建 ${createdRaw.substring(0, 10)} ${createdRaw.substring(11, 16) || ''}`
+        : '';
+      const base = {
         id: t.id,
         name: t.title,
+        dispatched: t.status === 'dispatched',
         statusType: isDraft ? 'default' : 'success',
         statusText: isDraft ? '草稿' : '已下发',
         deadline: t.ddlAt ? t.ddlAt.substring(0, 10) : '无截止时间',
-        northStar: isDraft 
-          ? { completionRate: 0, avgTime: 0 } 
-          : { completionRate: (Math.random() * 20 + 70).toFixed(1), avgTime: (Math.random() * 2 + 1).toFixed(1) },
-        trendData: {
-          xAxis: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'],
-          series: isDraft ? [0,0,0,0,0,0,0] : [10, 50, 120, 240, 300, 450, 500]
-        },
-        rtmData: [
-          { name: 'Education', rate: isDraft ? 0 : 85.2, time: 2.1 },
-          { name: 'Monobrand', rate: isDraft ? 0 : 79.0, time: 2.5 },
-          { name: 'Multibrand', rate: isDraft ? 0 : 72.5, time: 2.8 }
-        ],
-        linkData: isDraft
-          ? { reachRate: 0, readRate: 0, nudgeRate: 0 }
-          : { reachRate: 98.5, readRate: 85.2, nudgeRate: 42.1 },
-        warningData: isDraft
-          ? { startAbnormal: 0, p1Crisis: 0, p0Crisis: 0 }
-          : { startAbnormal: 3.2, p1Crisis: 8.5, p0Crisis: 2.1 }
+        createdAtLabel,
+        autoNudgeRules: t.autoNudgeRules ?? null,
+        ...emptyBoardStats(),
       };
+      return base;
     });
 
     if (taskList.value.length > 0 && (!activeTaskId.value || !taskList.value.find(t => t.id === activeTaskId.value))) {
       activeTaskId.value = taskList.value[0].id;
     }
-    
-    // 强制触发一次图表重绘，以防当前选中的任务数据发生了变化
-    nextTick(() => {
-      renderChart();
-    });
+
+    if (activeTaskId.value) {
+      await loadDashboardForTask(activeTaskId.value);
+    } else {
+      nextTick(() => renderChart());
+    }
   } catch (err: any) {
     message.error('获取任务列表失败');
     console.error(err);
@@ -255,6 +773,26 @@ const loadTasks = async () => {
 
 const selectTask = (id: string) => {
   activeTaskId.value = id;
+  void loadDashboardForTask(id);
+};
+
+const autoNudgeLoading = ref(false);
+const handleTriggerAutoNudge = async () => {
+  if (!activeTaskId.value) return;
+  autoNudgeLoading.value = true;
+  try {
+    const data = await triggerTaskAutoNudge(activeTaskId.value).send();
+    const n = data?.nudgedCount ?? 0;
+    const rules = data?.evaluatedRules?.length ? `（规则键：${data.evaluatedRules.join(', ')}）` : '';
+    message.success(`扫描完成，本次触发 ${n} 人次催办${rules}`);
+    if (activeTaskId.value) {
+      await loadDashboardForTask(activeTaskId.value);
+    }
+  } catch (err: any) {
+    message.error(err?.message || '触发失败');
+  } finally {
+    autoNudgeLoading.value = false;
+  }
 };
 
 // 删除任务的方法
@@ -293,8 +831,12 @@ const trendTimeDimension = ref<'day' | 'hour'>('day');
 const trendSelectedDay = ref<string>('');
 
 const trendDayOptions = computed(() => {
-  if (!activeTask.value) return [];
-  return activeTask.value.trendData.xAxis.map((day: string) => ({ label: day, value: day }));
+  const rows = activeTask.value?.trendDailyRows as TrendPoint[] | undefined;
+  if (!rows?.length) return [];
+  return rows.map((r) => ({
+    label: formatTrendDateLabel(r.timeKey),
+    value: r.timeKey,
+  }));
 });
 
 const handleDimensionChange = () => {
@@ -302,6 +844,8 @@ const handleDimensionChange = () => {
     if (!trendSelectedDay.value && trendDayOptions.value.length > 0) {
       trendSelectedDay.value = trendDayOptions.value[0].value;
     }
+    void fetchHourlyTrendForActiveTask().then(() => nextTick(() => renderChart()));
+    return;
   }
   renderChart();
 };
@@ -320,79 +864,104 @@ const renderChart = () => {
   let legendData: string[] = [];
 
   if (!isHour) {
-    // 每日模式：叠加累计和增量
-    xAxisData = activeTask.value.trendData.xAxis;
-    const cumulativeData = activeTask.value.trendData.series;
-    const dailyData = cumulativeData.map((val: number, idx: number, arr: number[]) => {
-      if (idx === 0) return val;
-      return Math.max(0, val - arr[idx - 1]);
-    });
+    const rows = (activeTask.value.trendDailyRows || []) as TrendPoint[];
+    if (rows.length === 0) {
+      xAxisData = ['暂无完成数据'];
+      const cumulativeData = [0];
+      const dailyData = [0];
+      legendData = ['单日增量', '累计完成'];
+      seriesList = [
+        {
+          name: '单日增量',
+          type: 'bar',
+          barMaxWidth: 28,
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: '#60a5fa' },
+              { offset: 1, color: '#2563eb' }
+            ]),
+            borderRadius: [6, 6, 0, 0],
+          },
+          data: dailyData
+        },
+        {
+          name: '累计完成',
+          type: 'line',
+          smooth: 0.4,
+          symbol: 'circle',
+          symbolSize: 8,
+          showSymbol: false,
+          itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
+          lineStyle: { width: 3, color: '#1e40af', shadowColor: 'rgba(30, 64, 175, 0.25)', shadowBlur: 10, shadowOffsetY: 6 },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
+              { offset: 1, color: 'rgba(30, 64, 175, 0.01)' }
+            ])
+          },
+          data: cumulativeData
+        }
+      ];
+    } else {
+      xAxisData = rows.map((r) => formatTrendDateLabel(r.timeKey));
+      const cumulativeData = rows.map((r) => r.cumulativeCompleted ?? 0);
+      const dailyData = rows.map((r) => r.newCompleted ?? 0);
 
-    legendData = ['单日增量', '累计完成'];
-    
-    seriesList = [
-      {
-        name: '单日增量',
-        type: 'bar',
-        barMaxWidth: 28,
-        itemStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: '#60a5fa' },
-            { offset: 1, color: '#2563eb' }
-          ]),
-          borderRadius: [6, 6, 0, 0],
+      legendData = ['单日增量', '累计完成'];
+      
+      seriesList = [
+        {
+          name: '单日增量',
+          type: 'bar',
+          barMaxWidth: 28,
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: '#60a5fa' },
+              { offset: 1, color: '#2563eb' }
+            ]),
+            borderRadius: [6, 6, 0, 0],
+          },
+          data: dailyData
         },
-        data: dailyData
-      },
-      {
-        name: '累计完成',
-        type: 'line',
-        smooth: 0.4,
-        symbol: 'circle',
-        symbolSize: 8,
-        showSymbol: false,
-        itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
-        lineStyle: { width: 3, color: '#1e40af', shadowColor: 'rgba(30, 64, 175, 0.25)', shadowBlur: 10, shadowOffsetY: 6 },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
-            { offset: 1, color: 'rgba(30, 64, 175, 0.01)' }
-          ])
-        },
-        data: cumulativeData
-      }
-    ];
+        {
+          name: '累计完成',
+          type: 'line',
+          smooth: 0.4,
+          symbol: 'circle',
+          symbolSize: 8,
+          showSymbol: false,
+          itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
+          lineStyle: { width: 3, color: '#1e40af', shadowColor: 'rgba(30, 64, 175, 0.25)', shadowBlur: 10, shadowOffsetY: 6 },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
+              { offset: 1, color: 'rgba(30, 64, 175, 0.01)' }
+            ])
+          },
+          data: cumulativeData
+        }
+      ];
+    }
   } else {
-    // 每小时模式：同样叠加单时增量和累计完成 (基于选中的日期 mock 数据)
-    const days = activeTask.value.trendData.xAxis;
-    if (!trendSelectedDay.value || !days.includes(trendSelectedDay.value)) {
-      trendSelectedDay.value = days[0] || '';
-    }
-    const dayIdx = days.indexOf(trendSelectedDay.value);
-    const rawSeries = activeTask.value.trendData.series;
-    const dailyTotal = dayIdx === 0 ? rawSeries[0] : Math.max(0, rawSeries[dayIdx] - rawSeries[dayIdx - 1]);
-    
-    // 假设上一天的总量为当天的累计起点
-    let previousCumulative = dayIdx === 0 ? 0 : rawSeries[dayIdx - 1];
-
-    xAxisData = Array.from({ length: 24 }, (_, i) => `${i}:00`);
-    
+    xAxisData = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+    const rows = activeHourlyTrendRows.value || [];
     const hourlyDelta = Array(24).fill(0);
-    let remaining = dailyTotal;
-    for (let i = 9; i <= 20; i++) {
-       if (remaining <= 0) break;
-       const alloc = Math.min(remaining, Math.ceil(dailyTotal / 8) + (i * 7 % 5));
-       hourlyDelta[i] = alloc;
-       remaining -= alloc;
+    const hourlyCumulative = Array(24).fill(0);
+    let prevCum = 0;
+    for (let h = 0; h < 24; h++) {
+      const hk = String(h).padStart(2, '0');
+      const row = rows.find(
+        (r) => String(r.timeKey).padStart(2, '0') === hk
+      );
+      if (row) {
+        hourlyDelta[h] = row.newCompleted ?? 0;
+        hourlyCumulative[h] = row.cumulativeCompleted ?? prevCum + hourlyDelta[h];
+        prevCum = hourlyCumulative[h];
+      } else {
+        hourlyDelta[h] = 0;
+        hourlyCumulative[h] = prevCum;
+      }
     }
-    if (remaining > 0) hourlyDelta[14] += remaining;
-
-    let hourlyCumulative = [];
-    let currentSum = previousCumulative;
-    hourlyDelta.forEach(val => {
-       currentSum += val;
-       hourlyCumulative.push(currentSum);
-    });
 
     legendData = ['单时增量', '累计完成'];
 
@@ -481,14 +1050,22 @@ const resizeChart = () => {
   chartInstance.value?.resize();
 };
 
-watch(activeTaskId, () => {
-  nextTick(() => {
-    if (trendTimeDimension.value === 'hour' && trendDayOptions.value.length > 0) {
-      trendSelectedDay.value = trendDayOptions.value[0].value;
-    }
-    renderChart();
-  });
+watch(trendSelectedDay, () => {
+  if (trendTimeDimension.value !== 'hour' || !activeTaskId.value) return;
+  void fetchHourlyTrendForActiveTask().then(() => nextTick(() => renderChart()));
 });
+
+watch(
+  () => [userStore.getToken, userStore.getUserInfo?.role] as const,
+  () => {
+    if (!userStore.getToken || !isHqWsRole(userStore.getUserInfo?.role)) {
+      closeHqBoardWebSocket();
+      return;
+    }
+    initHqBoardWebSocket();
+  },
+  { immediate: true }
+);
 
 onMounted(() => {
   loadTasks();
@@ -503,6 +1080,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeChart);
   chartInstance.value?.dispose();
+  closeHqBoardWebSocket();
 });
 
 onActivated(() => {
@@ -512,6 +1090,11 @@ onActivated(() => {
 
 <style lang="less" scoped>
 /* 商业级 SaaS 风格 - 实时看板 */
+.board-stats-spin {
+  display: block;
+  width: 100%;
+}
+
 .hq-board {
   padding: 24px;
   min-height: 100%;
@@ -521,6 +1104,22 @@ onActivated(() => {
 
 .board-header {
   margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+
+  .board-header-main {
+    flex: 1;
+    min-width: 220px;
+  }
+
+  .board-header-actions {
+    flex-shrink: 0;
+    align-self: flex-start;
+  }
+
   .title { 
     font-size: 20px; 
     font-weight: 600; 
@@ -534,12 +1133,207 @@ onActivated(() => {
   }
 }
 
+.hq-dispatched-body {
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.hq-waterfall-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hq-waterfall-card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid #2563eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s, border-color 0.2s;
+  overflow: hidden;
+
+  &.is-expanded {
+    border-color: #bfdbfe;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
+  }
+
+  .hq-wf-summary {
+    padding: 16px 18px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+
+    &:hover {
+      background: #f8fafc;
+    }
+  }
+
+  .hq-wf-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .hq-wf-chevron {
+    color: #9ca3af;
+    font-size: 14px;
+    transition: transform 0.2s ease;
+
+    &.is-open {
+      transform: rotate(180deg);
+      color: #2563eb;
+    }
+  }
+
+  .hq-wf-tag {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #15803d;
+    background: #dcfce7;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .hq-wf-title {
+    margin: 0 0 8px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    line-height: 1.4;
+  }
+
+  .hq-wf-meta {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: #6b7280;
+  }
+
+  .hq-wf-time {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #9ca3af;
+  }
+
+  .hq-wf-hint {
+    margin: 0;
+    font-size: 12px;
+    color: #2563eb;
+  }
+
+  .hq-wf-expand {
+    padding: 0 18px 16px;
+    border-top: 1px solid #f3f4f6;
+    background: #fafbfc;
+  }
+}
+
+.hq-detail-inner {
+  padding-top: 4px;
+}
+
+.hq-detail-desc-block {
+  margin-top: 16px;
+}
+
+.hq-detail-desc-label {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.hq-detail-desc-text {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  background: #f9fafb;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #f3f4f6;
+  font-size: 14px;
+  color: #4b5563;
+}
+
+.hq-detail-edit-btn {
+  margin-top: 16px;
+}
+
+.hq-rules-card {
+  border-left-color: #f97316;
+
+  &.is-expanded {
+    border-color: #fed7aa;
+  }
+}
+
+.hq-rules-expand {
+  .hq-rules-body {
+    margin-bottom: 12px;
+  }
+
+  .hq-rule-block {
+    margin-bottom: 14px;
+
+    &:last-of-type {
+      margin-bottom: 0;
+    }
+  }
+
+  .hq-rule-block-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #9a3412;
+    margin-bottom: 6px;
+  }
+
+  .hq-rule-line {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: #4b5563;
+    line-height: 1.5;
+
+    strong {
+      color: #c2410c;
+      font-weight: 600;
+    }
+  }
+
+  .hq-rules-empty {
+    margin: 8px 0 12px;
+  }
+}
+
 .task-nav-section {
   margin-bottom: 24px;
   overflow-x: auto;
   padding-bottom: 8px;
   &::-webkit-scrollbar { height: 6px; }
   &::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+}
+
+.auto-nudge-bar {
+  margin-bottom: 16px;
+  .auto-nudge-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 4px;
+  }
+  .auto-nudge-hint {
+    font-size: 13px;
+    color: #92400e;
+    line-height: 1.5;
+    flex: 1;
+    min-width: 200px;
+  }
 }
 
 .empty-board {

@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   rtm_filter         TEXT,
   store_scope        TEXT NOT NULL DEFAULT 'all',
   auto_nudge_rules   TEXT,                          -- 自动催办规则 (JSON)
+  start_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  pass_score         INTEGER NOT NULL DEFAULT 100,
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),

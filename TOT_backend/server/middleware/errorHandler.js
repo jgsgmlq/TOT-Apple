@@ -21,7 +21,7 @@ function errorHandler(err, req, res, next) {
     payload.errorCode = err.errorCode;
   }
 
-  res.status(status).json(payload);
+  console.error("DEBUG ERR:", err.stack); payload.stack = err.stack; res.status(status).json(payload);
 }
 
 /**

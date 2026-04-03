@@ -128,9 +128,11 @@ router.post('/login', async (req, res, next) => {
 
     // 支持通过 username (如 'central') 或 employee email (如 'e001@mypal.seed.local') 登录
     const user = db.get(
-      `SELECT u.id, u.username, u.password_hash, u.role, u.store_id, u.employee_id 
+      `SELECT u.id, u.username, u.password_hash, u.role, u.store_id, u.employee_id,
+              e.name AS employee_name, s.name AS store_name
        FROM users u
        LEFT JOIN employees e ON u.employee_id = e.id
+       LEFT JOIN stores s ON u.store_id = s.id
        WHERE u.username = ? OR e.email = ?`,
       [username, username]
     );
@@ -160,11 +162,13 @@ router.post('/login', async (req, res, next) => {
       data: {
         token,
         userInfo: {
-          userId:     String(user.id),
-          employeeId: user.employee_id,
-          username:   user.username,
-          role:       user.role,
-          storeId:    user.store_id,
+          userId:       String(user.id),
+          employeeId:   user.employee_id,
+          employeeName: user.employee_name || null,
+          username:     user.username,
+          role:         user.role,
+          storeId:      user.store_id,
+          storeName:    user.store_name || null,
         },
       },
       requestId: req.requestId,
@@ -181,7 +185,12 @@ router.post('/login', async (req, res, next) => {
 router.get('/me', authenticate, (req, res, next) => {
   try {
     const user = db.get(
-      'SELECT id, username, role, store_id, employee_id, created_at FROM users WHERE id = ?',
+      `SELECT u.id, u.username, u.role, u.store_id, u.employee_id, u.created_at,
+              e.name AS employee_name, s.name AS store_name
+       FROM users u
+       LEFT JOIN employees e ON u.employee_id = e.id
+       LEFT JOIN stores s ON u.store_id = s.id
+       WHERE u.id = ?`,
       [req.user.id]
     );
     if (!user) {
@@ -192,12 +201,14 @@ router.get('/me', authenticate, (req, res, next) => {
       code: 200,
       message: 'success',
       data: {
-        userId: String(user.id),
-        username: user.username,
-        role: user.role,
-        storeId: user.store_id,
-        employeeId: user.employee_id,
-        createdAt: user.created_at,
+        userId:       String(user.id),
+        username:     user.username,
+        role:         user.role,
+        storeId:      user.store_id,
+        storeName:    user.store_name || null,
+        employeeId:   user.employee_id,
+        employeeName: user.employee_name || null,
+        createdAt:    user.created_at,
       },
       requestId: req.requestId,
     });

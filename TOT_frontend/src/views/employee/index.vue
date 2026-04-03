@@ -148,7 +148,7 @@
               </n-space>
             </n-descriptions-item>
             <n-descriptions-item label="达标分数" :span="1">
-              100 分
+              {{ currentTaskDetail.passScore ?? 100 }} 分
             </n-descriptions-item>
           </n-descriptions>
           
@@ -237,6 +237,11 @@ import { useUserStore } from '@/store/modules/user';
 import { PageEnum } from '@/enums/pageEnum';
 import { LogoutOutlined, CloseOutlined, ClockCircleOutlined, WarningOutlined } from '@vicons/antd';
 import { getTaskList, getTaskDetail } from '@/api/task';
+import { getEvents, markEventRead, type EventItem } from '@/api/event/index';
+import { putAssignmentStatus } from '@/api/assignment';
+
+import { useGlobSetting } from '@/hooks/setting';
+const { apiUrl } = useGlobSetting();
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -262,12 +267,90 @@ const currentTaskDetail = ref<any>(null);
 const showWarningModal = ref(false);
 const currentWarnings = ref<any[]>([]);
 
+let ws: WebSocket | null = null;
+
+const initWebSocket = () => {
+  const token = userStore.getToken;
+  if (!token) return;
+  
+  let wsHost = apiUrl;
+  if (!wsHost || wsHost.startsWith('/')) {
+    wsHost = window.location.origin;
+  }
+  const wsUrl = `${wsHost.replace(/^http/, 'ws')}/ws?token=${token}`;
+  
+  ws = new WebSocket(wsUrl);
+  
+  ws.onmessage = (event) => {
+    try {
+      const parsed = JSON.parse(event.data);
+      if (parsed.event === 'task_assigned') {
+        message.info('📬 你有新的培训任务');
+        loadEmployeeTasks();
+      } else if (parsed.event === 'nudge_sent') {
+        message.warning('你收到一条催办提醒');
+        const nid = parsed.data.eventId || parsed.data.nudgeRecordId || Date.now().toString();
+        const newWarning = {
+          id: nid,
+          eventId: parsed.data.eventId,
+          type: 'warning',
+          readStatus: false,
+          title: parsed.data.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒',
+          content: parsed.data.content || '您有任务需要尽快处理。',
+          time: '刚刚',
+        };
+        waterfallMessages.value.unshift(newWarning);
+        currentWarnings.value = [newWarning];
+        showWarningModal.value = true;
+      }
+    } catch (e) {
+      console.error('Failed to parse WebSocket message', e);
+    }
+  };
+  
+  ws.onclose = () => {
+    console.log('WebSocket closed');
+  };
+};
+
 // 过滤掉被叉掉的预警信息
 const visibleMessages = computed(() => waterfallMessages.value);
 
-// 关闭消息的方法 (只针对预警)
-const closeMessage = (id: string) => {
-  const index = waterfallMessages.value.findIndex(m => m.id === id);
+function formatRuleTypeLabel(ruleType: string | null | undefined): string {
+  if (!ruleType) return '';
+  const map: Record<string, string> = {
+    progressLag: '进度掉队',
+    startDelay: '起步异常',
+    deadlineCrisisP0: '临期危机 (P0)',
+    deadlineCrisisP1: '临期危机 (P1)',
+  };
+  return map[ruleType] || ruleType;
+}
+
+function formatRelativeTime(iso: string): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  const diff = Date.now() - t;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.floor(h / 24);
+  return `${d} 天前`;
+}
+
+// 关闭消息的方法 (只针对预警)；有 eventId 时同步标记已读
+const closeMessage = async (id: string) => {
+  const msg = waterfallMessages.value.find((m) => m.id === id);
+  if (msg?.type === 'warning' && msg.eventId) {
+    try {
+      await markEventRead(msg.eventId).send();
+    } catch (e) {
+      console.warn('markEventRead failed', e);
+    }
+  }
+  const index = waterfallMessages.value.findIndex((m) => m.id === id);
   if (index > -1) {
     waterfallMessages.value.splice(index, 1);
   }
@@ -313,78 +396,83 @@ const getCountdown = (ddlTimestamp: number) => {
   return `剩 ${minutes}分 ${seconds}秒`;
 };
 
-// 获取真实后端任务列表
+// 获取真实任务列表 + 通知事件中的催办/预警（nudge_yellow / nudge_red）
 const loadEmployeeTasks = async () => {
   try {
-    const res = await getTaskList().send();
-    const realTasks = res || [];
-    
-    // 映射后端 Task 对象到前端需要的格式
-    const formattedTasks = realTasks.map((t: any) => {
+    const [taskRes, eventsPayload] = await Promise.all([
+      getTaskList().send(),
+      getEvents({ pageSize: 50, isActive: 'true' }).send().catch(() => ({ list: [] as EventItem[] })),
+    ]);
+
+    const realTasks = taskRes || [];
+    const eventList: EventItem[] = eventsPayload?.list || [];
+
+    const taskTitleById = new Map<string, string>(realTasks.map((t: any) => [t.id, t.title]));
+
+    const nudgeEvents = eventList.filter(
+      (e) =>
+        (e.eventType === 'nudge_yellow' || e.eventType === 'nudge_red') &&
+        e.isActive
+    );
+
+    const warningsFromApi = nudgeEvents.map((ev) => {
+      const taskTitle = taskTitleById.get(ev.taskId) || '学习任务';
+      const ruleHint = formatRuleTypeLabel(ev.ruleType);
+      const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
+      return {
+        id: ev.eventId,
+        eventId: ev.eventId,
+        type: 'warning' as const,
+        taskId: ev.taskId,
+        readStatus: ev.readStatus,
+        title: prefix,
+        content: ruleHint
+          ? `【${taskTitle}】${ruleHint}。请尽快完成学习进度。`
+          : `【${taskTitle}】您有一条催办提醒，请尽快完成学习进度。`,
+        time: formatRelativeTime(ev.createdAt),
+      };
+    });
+
+    const openTasks = realTasks.filter(
+      (t: any) => !t.assignment || t.assignment.status !== 'completed'
+    );
+
+    const formattedTasks = openTasks.map((t: any) => {
       const ddl = new Date(t.ddlAt);
       const formattedDdl = `${ddl.getMonth() + 1}月${ddl.getDate()}日 ${String(ddl.getHours()).padStart(2, '0')}:${String(ddl.getMinutes()).padStart(2, '0')}`;
-      
+
       return {
         id: t.id,
-        type: 'task', // 标记为任务
+        assignmentId: t.assignment?.id as string | undefined,
+        type: 'task' as const,
         title: t.title,
         desc: t.description || '总部未提供详细描述',
         content: `总部下发了一项学习任务，要求在 ${formattedDdl} 前完成。`,
         deadline: formattedDdl,
-        ddlTimestamp: ddl.getTime(), // 增加时间戳用于排序
-        time: t.createdAt ? t.createdAt.substring(0, 10) : '刚刚'
+        ddlTimestamp: ddl.getTime(),
+        time: t.createdAt ? t.createdAt.substring(0, 10) : '刚刚',
       };
     });
 
-    // 按照截止时间从早到晚进行排序（越紧急越靠前）
     formattedTasks.sort((a, b) => a.ddlTimestamp - b.ddlTimestamp);
 
-    if (formattedTasks.length > 0) {
-      // 展示所有待完成任务在横向 Banner
-      pendingBanners.value = formattedTasks;
-      
-      // 瀑布流展示：全部任务也进入瀑布流
-      const tasksForWaterfall = formattedTasks.map(t => ({
-        ...t,
-        title: `【待完成】${t.title}`
-      }));
-      
-      const mockWarnings = [
-        { 
-          id: 'mock_w1', 
-          type: 'warning', 
-          title: '⚠️ 进度危机预警', 
-          content: '距离部分任务截止不足 24 小时，您的当前进度仍为 0%，请尽快安排时间学习。',
-          time: '1小时前'
-        },
-        { 
-          id: 'mock_w2', 
-          type: 'warning', 
-          title: '⚠️ MyPal 测试不达标', 
-          content: '您的上一期新员工培训 MyPal 模拟通关测试未能达到 80 分，系统已自动重置测试次数。',
-          time: '3小时前'
-        },
-        { 
-          id: 'mock_w3', 
-          type: 'warning', 
-          title: '⚠️ 门店均分落后', 
-          content: '当前您所在门店的平均通过率低于全国 90% 的门店，总部已向您发出关注提醒！',
-          time: '12小时前'
-        }
-      ];
-      
-      waterfallMessages.value = [...mockWarnings, ...tasksForWaterfall];
-      
-      // 如果有预警通知，自动弹出灯箱进行提示
-      if (mockWarnings.length > 0) {
-        currentWarnings.value = mockWarnings;
-        showWarningModal.value = true;
-      }
-    } else {
-      pendingBanners.value = [];
-      waterfallMessages.value = [];
-    }
+    pendingBanners.value = formattedTasks;
 
+    const tasksForWaterfall = formattedTasks.map((t) => ({
+      ...t,
+      title: `【待完成】${t.title}`,
+    }));
+
+    waterfallMessages.value = [...warningsFromApi, ...tasksForWaterfall];
+
+    const unreadWarnings = warningsFromApi.filter((w) => !w.readStatus);
+    if (unreadWarnings.length > 0) {
+      currentWarnings.value = unreadWarnings;
+      showWarningModal.value = true;
+    } else {
+      currentWarnings.value = [];
+      showWarningModal.value = false;
+    }
   } catch (err: any) {
     console.error(err);
     message.error('获取任务列表失败，请稍后再试');
@@ -468,24 +556,37 @@ const handleMarkComplete = (msg: any) => {
   }
   dialog.warning({
     title: '请您确认是否完成',
-    content: '标记后即表示您已完成该学习任务，不可撤销。',
+    content: '确认后将同步到服务器：标记整单学习任务为已完成，且不可撤销。',
     positiveText: '确认完成',
     negativeText: '取消',
-    onPositiveClick: () => {
-      // 模拟前端完成逻辑：从可见消息流中移除
-      const idx = visibleMessages.value.findIndex(m => m.id === msg.id);
-      if (idx !== -1) {
-        visibleMessages.value.splice(idx, 1);
+    onPositiveClick: async () => {
+      const assignmentId = msg.assignmentId as string | undefined;
+      if (!assignmentId) {
+        message.error('无法获取任务分配信息，请刷新页面后重试');
+        return false;
       }
-      
-      // 同步移除顶部的 Banner 任务
-      const bannerIdx = pendingBanners.value.findIndex(b => b.id === msg.id);
+      const loading = message.loading('正在提交…', { duration: 0 });
+      try {
+        await putAssignmentStatus(assignmentId, { operationType: 'complete_task' }).send();
+      } catch (err: any) {
+        message.error(err?.message || '标记完成失败，请稍后重试');
+        return false;
+      } finally {
+        loading.destroy();
+      }
+
+      const idx = waterfallMessages.value.findIndex((m) => m.id === msg.id);
+      if (idx !== -1) {
+        waterfallMessages.value.splice(idx, 1);
+      }
+
+      const bannerIdx = pendingBanners.value.findIndex((b) => b.id === msg.id);
       if (bannerIdx !== -1) {
         pendingBanners.value.splice(bannerIdx, 1);
       }
 
-      message.success('已标记完成！积分 +10 🎉');
-    }
+      message.success('任务已标记为完成');
+    },
   });
 };
 

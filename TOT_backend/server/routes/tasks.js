@@ -451,7 +451,7 @@ const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { requireTaskAccess } = require('../middleware/permissions');
 const { createError } = require('../middleware/errorHandler');
-const { broadcastToUsers } = require('../ws/manager');
+const { broadcastToUsers, broadcastToHq } = require('../ws/manager');
 const mainAgent = require('../agent');
 const { evaluateAndTriggerAutoNudges } = require('../services/autoNudge'); // 保留
 
@@ -504,7 +504,7 @@ router.post('/ai-generate-description', authenticate, requireRole(['central', 'a
 // ─── 辅助：DB 行 → API 对象（snake_case → camelCase + 类型转换）────────────
 function formatTask(row) {
   if (!row) return null;
-  return {
+  const result = {
     id:               row.id,
     title:            row.title,
     description:      row.description ?? null,
@@ -516,11 +516,26 @@ function formatTask(row) {
     rtmFilter:        row.rtm_filter ? JSON.parse(row.rtm_filter) : null,
     storeScope:       row.store_scope === 'all' ? 'all' : (row.store_scope ? JSON.parse(row.store_scope) : []),
     autoNudgeRules:   row.auto_nudge_rules ? JSON.parse(row.auto_nudge_rules) : null, // 保留
+    startAt:          row.start_at,
+    passScore:        row.pass_score,
     ddlAt:            row.ddl_at,
     createdBy:        row.created_by,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };
+
+  if (row.assignment_id !== undefined) {
+    result.assignment = {
+      id: row.assignment_id,
+      status: row.assignment_status,
+      progress: row.assignment_progress,
+      receivedAt: row.assignment_received_at,
+      startedAt: row.assignment_started_at,
+      completedAt: row.assignment_completed_at,
+    };
+  }
+
+  return result;
 }
 
 // ─── GET /api/v1/tasks ────────────────────────────────────────────────────────
@@ -533,7 +548,14 @@ router.get('/', authenticate, (req, res, next) => {
       rows = db.all('SELECT * FROM tasks ORDER BY created_at DESC');
     } else if (role === 'employee') {
       rows = db.all(
-        `SELECT DISTINCT t.* FROM tasks t
+        `SELECT t.*,
+                ta.id AS assignment_id,
+                ta.status AS assignment_status,
+                ta.progress AS assignment_progress,
+                ta.received_at AS assignment_received_at,
+                ta.started_at AS assignment_started_at,
+                ta.completed_at AS assignment_completed_at
+         FROM tasks t
          INNER JOIN task_assignments ta ON ta.task_id = t.id
          WHERE ta.user_id = ?
          ORDER BY t.created_at DESC`,
@@ -557,7 +579,26 @@ router.get('/', authenticate, (req, res, next) => {
 // ─── GET /api/v1/tasks/:id ────────────────────────────────────────────────────
 router.get('/:id', authenticate, requireTaskAccess, (req, res, next) => {
   try {
-    const row = db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    const { role, employeeId } = req.user;
+    let row;
+    if (role === 'employee') {
+      row = db.get(
+        `SELECT t.*,
+                ta.id AS assignment_id,
+                ta.status AS assignment_status,
+                ta.progress AS assignment_progress,
+                ta.received_at AS assignment_received_at,
+                ta.started_at AS assignment_started_at,
+                ta.completed_at AS assignment_completed_at
+         FROM tasks t
+         INNER JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE t.id = ? AND ta.user_id = ?`,
+        [req.params.id, employeeId]
+      );
+    } else {
+      row = db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    }
+
     if (!row) throw createError(404, '任务不存在', 'TASK_002');
 
     res.json({
@@ -577,11 +618,13 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     const {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
-      rtmFilter, storeScope, autoNudgeRules, ddlAt,  // 保留 autoNudgeRules
+      rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,  // 保留 autoNudgeRules
     } = req.body;
 
     if (!title)      throw createError(400, 'title 不能为空', 'TASK_005');
     if (!ddlAt)      throw createError(400, 'ddlAt 不能为空', 'TASK_005');
+    if (!startAt)    throw createError(400, 'startAt 不能为空', 'TASK_005');
+    if (passScore === undefined) throw createError(400, 'passScore 不能为空', 'TASK_005');
 
     const platforms = [hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast].map(v => v ? 1 : 0);
     if (platforms.every(v => v === 0)) {
@@ -597,10 +640,10 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     db.run(
       `INSERT INTO tasks
         (id, title, description, has_mypal, has_smartsell, has_ai_demo, has_live_broadcast,
-         status, rtm_filter, store_scope, auto_nudge_rules, ddl_at, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+         status, rtm_filter, store_scope, auto_nudge_rules, start_at, pass_score, ddl_at, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
-       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, ddlAt, req.user.username, now, now]
+       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAt, passScore, ddlAt, req.user.username, now, now]
     );
 
     const row = db.get('SELECT * FROM tasks WHERE id = ?', [id]);
@@ -624,23 +667,34 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
     const {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
-      rtmFilter, storeScope, autoNudgeRules, ddlAt,  // 保留 autoNudgeRules
+      rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,  // 保留 autoNudgeRules
     } = req.body;
 
-    // dispatched 后只允许改 ddl_at
+    // dispatched：允许改 ddl_at 与 auto_nudge_rules（预警扫描读库内配置）；其余字段禁止
     if (task.status === 'dispatched') {
       const forbiddenChanged =
         title !== undefined || description !== undefined ||
         hasMypal !== undefined || hasSmartSell !== undefined ||
         hasAiDemo !== undefined || hasLiveBroadcast !== undefined ||
-        rtmFilter !== undefined || storeScope !== undefined || autoNudgeRules !== undefined; // 保留
+        rtmFilter !== undefined || storeScope !== undefined ||
+        startAt !== undefined || passScore !== undefined;
 
       if (forbiddenChanged) {
-        throw createError(400, '已下发任务只允许修改截止时间', 'TASK_004');
+        throw createError(400, '已下发任务仅允许修改截止时间或预警规则', 'TASK_004');
       }
-      if (!ddlAt) throw createError(400, 'ddlAt 不能为空', 'TASK_005');
-      db.run('UPDATE tasks SET ddl_at = ?, updated_at = ? WHERE id = ?',
-        [ddlAt, new Date().toISOString(), task.id]);
+      if (ddlAt === undefined && autoNudgeRules === undefined) {
+        throw createError(400, '请提供 ddlAt 或 autoNudgeRules', 'TASK_005');
+      }
+
+      const nextDdl = ddlAt !== undefined ? ddlAt : task.ddl_at;
+      const autoNudgeRulesStr = autoNudgeRules !== undefined
+        ? (autoNudgeRules ? JSON.stringify(autoNudgeRules) : null)
+        : task.auto_nudge_rules;
+
+      db.run(
+        'UPDATE tasks SET ddl_at = ?, auto_nudge_rules = ?, updated_at = ? WHERE id = ?',
+        [nextDdl, autoNudgeRulesStr, new Date().toISOString(), task.id]
+      );
     } else {
       // draft 状态，允许修改所有字段
       const platforms = [
@@ -664,11 +718,10 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         : task.auto_nudge_rules;
 
       db.run(
-        `UPDATE tasks SET
-           title = ?, description = ?,
-           has_mypal = ?, has_smartsell = ?, has_ai_demo = ?, has_live_broadcast = ?,
-           rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?, ddl_at = ?,
-           updated_at = ?
+        `UPDATE tasks
+         SET title = ?, description = ?,
+             has_mypal = ?, has_smartsell = ?, has_ai_demo = ?, has_live_broadcast = ?,
+             rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?, start_at = ?, pass_score = ?, ddl_at = ?, updated_at = ?
          WHERE id = ?`,
         [
           title      ?? task.title,
@@ -677,7 +730,9 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           rtmFilterStr,
           storeScopeStr,
           autoNudgeRulesStr,  // 保留
-          ddlAt ?? task.ddl_at,
+          startAt    ?? task.start_at,
+          passScore  !== undefined ? passScore : task.pass_score,
+          ddlAt      ?? task.ddl_at,
           new Date().toISOString(),
           task.id,
         ]
@@ -700,10 +755,17 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           [nanoid(), task.id, t.user_id, t.store_id, now]
         );
       }
-      broadcastToUsers(targets.map(t => t.user_id), {
+      const formatted = formatTask(updated);
+      const taskUpdatedPayload = {
         event: 'task_updated',
-        data: { taskId: task.id, ddlAt: updated.ddl_at },
-      });
+        data: {
+          taskId: task.id,
+          ddlAt: updated.ddl_at,
+          autoNudgeRules: formatted.autoNudgeRules,
+        },
+      };
+      broadcastToUsers(targets.map(t => t.user_id), taskUpdatedPayload);
+      broadcastToHq(taskUpdatedPayload);
     }
 
     res.json({

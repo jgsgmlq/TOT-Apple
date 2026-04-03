@@ -1,81 +1,142 @@
 # TOT 培训任务管理系统 - 前后端联调进度文档
 
-本文档记录了 `TOT_joint`（TOT-Apple 培训任务管理系统 MVP P0）项目当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。
+本文档记录 `TOT_joint`（TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成状态。系统分为 **总部端 (Central)** 与 **店员端 (Employee)**，后端为 Node.js（Express + SQLite），前端为 Vue 3 + Vite。
 
-> 更新日期：2026年4月3日
-
----
-
-## ✅ 目前已成功联调的部分 (Successfully Integrated)
-
-### 1. 核心架构与底层通信
-- **数据库与接口底座**：后端基于 `better-sqlite3` 实现同步读写，移除了历史遗留的 `store_manager` 角色与相关业务逻辑（符合 DB v2.5.0 / API v1.4.0 规范）。
-- **Alova 请求适配**：前端基础请求链路打通，包含 Token 鉴权、全局路由拦截以及请求/响应错误处理。
-
-### 2. 总部端 (HQ Central)
-- **AI 智能文案生成 (DeepSeek)**：
-  - 前端发布页（`taskManage/index.vue`）点击“AI 智能润色”成功调用后端 `POST /api/v1/tasks/ai-generate-description` 接口。
-  - **后端已成功切换至 DeepSeek 模型** (`generate_task_description_deepseek`)，彻底解决了原代理 API 导致的 Token 截断与输出不完整问题。
-- **任务发布与预警规则下发**：
-  - 前端表单可以成功将任务基础信息、平台（MyPal, Sales Coach, AI Coach, 直播等）、覆盖范围传递给后端。
-  - **预警规则 (Auto Nudge Rules) 全面打通**：支持配置“进度掉队”、“起步异常”、以及最新的 **“24小时 / 48小时双重临期危机预警”**（`deadlineCrisisHours`, `deadlineCrisisHoursSecondary`），并成功将 JSON 存入后端 `tasks` 表中。
-- **任务状态与编辑回显**：
-  - 草稿态任务的保存与修改联调成功。
-  - 从列表点击编辑可成功请求 `getTaskDetail`，并在前端精准回显所有参数（包含时间、平台标签、覆盖人群及预警规则参数）。
-
-### 3. 店员端 (Employee Mobile)
-- **UI 与动态渲染**：
-  - 店员端首页成功获取用户信息，并动态渲染出高颜值的首字母纯文本头像。
-- **待办任务获取与展示 (Banner)**：
-  - 成功对接 `GET /api/v1/tasks` 和详情接口，首页上半部分的“紧急待办”卡片能真实读取后端数据库下发的任务数据。
-  - 前端实现了基于后端时间戳 (`ddlAt`) 的动态倒计时与超时判定逻辑。
-- **任务详情解析**：
-  - 点击具体任务卡片，成功打开弹窗读取并展示由总部 AI 润色后的长文案 (`description`) 和关联的平台 Tag。
+> **更新日期：2026 年 4 月 3 日**
 
 ---
 
-## 🚧 后续待完成联调的部分 (Pending / To-Do)
+## 1. 基础设施与通信约定
 
-### 1. WebSocket 实时预警推送 (Real-time Nudge & WS)
-- **现状**：目前后端 `server/ws/manager.js` 已有 WebSocket 广播逻辑；前端店员端页面的“预警消息灯箱”及瀑布流使用的还是模拟数据 (`mockWarnings`)。
-- **待联调**：
-  - 店员端登录后需要真实建立 WebSocket 连接（携带 JWT token）。
-  - 后端触发自动催办 (`task_assigned`, `nudge_sent` 等事件) 时，前端需要监听 `message` 并将真实的预警数据推入 `waterfallMessages` 中，并触发预警弹窗。
-
-### 2. 自动化催办后台服务 (Auto Nudge Cron Trigger)
-- **现状**：后端 `services/autoNudge.js` 具备基于预警规则（包括我们新加的 48 小时临期）评估进度并生成催办文案的能力，但可能缺乏持续的全局定时触发器（Cron Job）。
-- **待联调**：后端需部署一个定时任务（例如每小时执行一次），遍历所有 `in_progress` 的 Task，对比当前时间与 `ddl_at`，触发对应的 24h / 48h 临期预警，写入 `notification_events` 表并通过 WS 广播给对应店员。
-
-### 3. 学习平台任务真实完成回调 (Task Completion Workflow)
-- **现状**：目前前端店员端点击“去完成”是直接唤起微信小程序，点击“标记完成”只在前端列表做了 UI 上的本地移除（Mock 完成）。
-- **待联调**：
-  - 需接入真实的 `/assignments/:id/platforms/:platform/complete` 接口（对于无需自动回传的平台如直播）。
-  - 对于 MyPal，需与后端的 `mypal_learning_mock` 同步机制联调，让后端的 `task_assignments` 进度表（progress）真实变为 100% 并流转到 `completed` 状态。
-
-### 4. 总部端看板数据真实统计 (HQ Dashboard Stats)
-- **现状**：总部看板页面 (`/central/board`) 中的通过率、排名等图表数据部分处于静态/Mock状态。
-- **待联调**：需和后端的统计接口对接，根据真实 `task_assignments` 聚合数据，渲染大盘概览与门店排行。
+| 项目 | 说明 |
+|------|------|
+| **HTTP 基址** | 前端通过环境变量配置 `apiUrl`；业务接口统一前缀 **`/api/v1`**（由 Alova `beforeRequest` 拼接 `urlPrefix` + `apiUrl`）。 |
+| **鉴权** | `Authorization: Bearer <JWT>`；登录见 `POST /api/v1/auth/login`，会话校验见 `GET /api/v1/auth/me`。总部账号 JWT 通常无 `employeeId`；店员账号含 `employeeId`。 |
+| **数据库** | `better-sqlite3` 同步读写；本地库需与 `TOT_backend/server/db/schema.sql` 一致（含 `tasks.auto_nudge_rules`、`tasks.start_at`、`tasks.pass_score` 等）。若旧库缺列，可删除 `TOT_backend/server/database.db`（及 `-wal`/`-shm`）后执行 `node db/seed.js` 重建（详见 `TOT_backend/README.md`）。 |
+| **实时通道** | `WebSocket` 路径 **`/ws?token=<JWT>`**（与 HTTP 同机不同路径）。见下文「WebSocket 行为」。 |
+| **前端请求层** | Alova：`cacheFor: null` 关闭全局缓存；GET 任务列表、任务详情、看板统计等关键接口另设 `localCache: 0`。 |
 
 ---
 
-## 🚀 快速启动指南 (Quick Start)
+## 2. 后端已挂载的路由模块（与前端联调相关）
 
-### 启动后端 (Backend)
+在 `TOT_backend/server/app.js` 中注册，前缀均为 `/api/v1`：
+
+| 模块 | 路径前缀 | 前端主要使用场景 |
+|------|-----------|------------------|
+| 认证 | `/auth` | 登录、拉取当前用户 |
+| 任务 | `/tasks` | 总部任务 CRUD、下发、AI 说明、自动预警扫描 |
+| 门店 / 员工 | `/stores`、`/employees` | 种子与后台数据（视具体页面） |
+| 下发记录 | `/assignments` | 店员开始/完成、总部侧列表（视路由） |
+| 通知事件 | `/events` | 店员端事件列表、已读 |
+| 催办 | `/nudges` | 总部手动催办等（若页面已接） |
+| **看板聚合** | **`/dashboard`** | **总部实时看板 KPI、热力、趋势** |
+
+---
+
+## 3. 总部端 (Central) — 已联调能力
+
+### 3.1 任务管理（发布 / 编辑）
+
+| 能力 | 后端 | 前端（典型路径） |
+|------|------|------------------|
+| 创建草稿 / 带参创建 | `POST /tasks` | `taskManage` / 发布页，需 `title`、`startAt`、`passScore`、`ddlAt`、平台勾选、可选 `autoNudgeRules` |
+| 任务列表 | `GET /tasks` | 总部列表、实时看板左侧任务卡 |
+| 任务详情 | `GET /tasks/:id` | 发布页编辑回显、看板「已布置的任务」展开详情 |
+| 更新任务 | `PATCH /tasks/:id` | **草稿**：可改全量业务字段；**已下发**：仅允许改 **`ddlAt`** 与 **`autoNudgeRules`**（其余字段后端拒绝，错误码见后端） |
+| 下发 | `POST /tasks/:id/dispatch` | 发布页下发 |
+| 删除 | `DELETE /tasks/:id` | 看板任务卡删除 |
+| AI 生成说明 | `POST /tasks/ai-generate-description` | 发布页 DeepSeek skill，展示为纯文本 |
+| 自动预警扫描 | `POST /tasks/:id/auto-nudge` | 实时看板「运行预警扫描」，触发 `services/autoNudge.js` |
+
+**说明**：自动预警规则引擎在服务端已实现；**无人值守定时扫描未做**，需总部手动点「运行预警扫描」或在外部用 Cron 调同一接口（见本文档第 6 节）。
+
+### 3.2 实时看板（`/central/board`）— 与 `/dashboard` 联调详情
+
+总部选中 **已下发** 任务时，前端并行请求以下接口，**全部使用真实聚合数据**（无随机数占位）：
+
+| 接口 | 用途 | 前端映射 |
+|------|------|----------|
+| `GET /dashboard/overview?taskId=` | 北极星、漏斗、执行异常三类指标 | `onTimeCompletionRate`、`avgCompletionTimeHours`、`taskReachRate`、`taskReadRate`、`nudgeConversionRate`、`startDelayRate`、`crisisP1Rate`、`crisisP0Rate` |
+| `GET /dashboard/heatmap?taskId=&rtmLevel=rtm` | 分桶进度（默认按门店 `rtm`） | 卡片「分 RTM L3 进度拆解」；**维度名称以数据库 `stores.rtm` 为准** |
+| `GET /dashboard/trend?taskId=&type=daily` | 按完成日聚合的完成人数趋势 | 折线/柱图「日」维度 |
+| `GET /dashboard/trend?taskId=&type=hourly&date=YYYY-MM-DD` | 指定日按小时聚合 | 「时」维度与日期下拉 |
+
+**草稿任务**：不调上述接口，界面展示全 0 /「暂无数据」占位，避免无意义请求。
+
+**后端指标含义提示（非前端造假，但需知悉）**：
+
+- **`taskReachRate`**：当前实现下，有 assignment 时常为 **100%**（代码注释含义为「创建即触达」），与真实「推送到达率」若需严格一致，需后续迭代埋点或表结构。
+- **读取率 / 催办转化率**：依赖 `read_receipts`、`notification_events`、`nudge_count` 等；种子数据或业务流程未写入时，界面可能长期为 **0**。
+- **执行异常三张卡**：与 `notification_events` 中自动预警产生的事件及 `dedupe_key` 规则相关；若从未跑过自动预警扫描，占比可能为 **0**。
+
+### 3.3 总部 WebSocket
+
+- **连接条件**：JWT `role` 为 `central` / `admin` / `executive` 且无 `employeeId` 时，服务端允许连接（见 `TOT_backend/server/ws/manager.js`），用于接收 **`task_updated`**。
+- **事件 `task_updated`**（已下发任务被 PATCH 修改 `ddlAt` 或 `auto_nudge_rules` 后）：负载包含 **`taskId`、`ddlAt`、`autoNudgeRules`**。总部看板用于刷新当前列表中的截止日与规则展示，并可重新拉取看板统计（与接口层一致）。
+
+---
+
+## 4. 店员端 (Employee) — 已联调能力
+
+| 能力 | 后端 | 说明 |
+|------|------|------|
+| 本人任务列表 | `GET /tasks` | Banner、瀑布流；未完成 assignment；倒计时基于 `ddlAt` |
+| 通知事件 | `GET /events` | `nudge_yellow` / `nudge_red` / `task_assigned` 等；`isActive` 过滤与未读角标 |
+| 标记已读 | `POST /events/:eventId/read` | 关闭预警卡片等 |
+| 未读数 | `GET /events/unread-count` | 角标（若页面已接） |
+| 整单完成 | `PUT /assignments/:id/status`，`{ operationType: 'complete_task' }` | 更新 `task_assignments` 完成态与进度 |
+| **WebSocket** | 同 `/ws?token=`，**需 JWT 含 `employeeId`** | `nudge_sent`：催办内容瀑布流；`task_assigned`：新任务提示等（见店员页实现） |
+
+店员端 **不**使用总部 `broadcastToHq`；店员接收的是按 `employeeId` 下发的业务事件。
+
+---
+
+## 5. 数据落库与关键表（联调对照）
+
+| 能力 | 主要数据表 |
+|------|------------|
+| 总部任务与预警规则 JSON | `tasks`（`auto_nudge_rules` 等） |
+| 每人每任务进度与完成态 | `task_assignments` |
+| 任务/催办通知 | `notification_events` |
+| 催办审计 | `nudge_records` |
+| 已读回执（读取率等） | `read_receipts`（与 `notification_events` 关联） |
+
+---
+
+## 6. 待完善 / 可选增强
+
+| 项目 | 说明 |
+|------|------|
+| **定时自动预警** | 服务端无内置 Cron；需总部手动「运行预警扫描」或外部调度调用 `POST /tasks/:id/auto-nudge` / 内部 `evaluateAndTriggerAutoNudges`。 |
+| **按平台分步完成** | 若产品以 `complete_platform` 为主路径，需与各学习平台回调及 assignments 接口进一步联调。 |
+| **看板扩展** | 后端另有 `GET /dashboard/store-rank`、`/warnings`、`/store-detail` 等，前端可按需在总部加模块对接。 |
+| **统计口径产品化** | `taskReachRate` 恒定 100%、漏斗与 PRD 文案若需严格一致，需与产品确认后改聚合逻辑或埋点。 |
+
+---
+
+## 7. 快速启动与测试账号
+
+### 后端
+
 ```bash
 cd TOT_backend/server
 npm install
-npm run dev
-# 默认运行在 3000 端口
+node db/seed.js   # 首次或重置库后
+npm run dev       # 默认端口 3000
 ```
 
-### 启动前端 (Frontend)
+### 前端
+
 ```bash
 cd TOT_frontend
 pnpm install
-pnpm run dev
-# 默认运行在 8001 端口
+pnpm run dev      # 默认端口以终端输出为准
 ```
 
-**快速测试入口**：
-- **总部端**：浏览器访问 `http://localhost:8001/hq` (自动带入总部免密权限进入看板)
-- **店员端**：浏览器模拟移动端尺寸访问 `http://localhost:8001/employee/login` (可使用 `test1@tot.com` 测试账号)
+### 不同端入口
+
+- **总部入口**：`http://<前端端口>/hq`（若项目配置了 HQ 入口）。
+- **店员登录**：`http://<前端端口>/employee/login`。
+
+更完整的 API 与模块说明见 **`TOT_backend/README.md`** 与 **`TOT_backend/docs/specs/`**。

@@ -1,5 +1,20 @@
 # ToT API 接口定义文档
 
+### v1.4.5（2026-04-03）
+
+- **任务创建**：新增 `startAt`（开始时间）与 `passScore`（达标分数）字段。
+- **数据看板**：
+  - `/dashboard/overview` 概览接口扩充了：人均完成时间、按时完成率、预警率（起步/P0/P1）、触达率、读取率、催办转化率。
+  - `/dashboard/heatmap` 区域热力图新增 `avgCompletionTimeHours`。
+  - 新增 `/dashboard/trend` 接口，支持按日/按小时查看完成人数的时间趋势。
+
+### v1.4.4（2026-04-03）
+
+- **用户认证：** `/auth/login` 与 `/auth/me` 响应的 `userInfo` 补充 `employeeName` 和 `storeName` 字段。
+- **任务列表/详情：** 店员请求时，`Task` 结构新增 `assignment` 对象返回分配记录详细信息。
+- **状态流转：** `PUT /assignments/{assignmentId}/status` 新增 `complete_task` 类型，支持一键完成整个任务。
+- **预警及通知：** 细化了临期预警规则（区分 `deadlineCrisisP0` 和 `deadlineCrisisP1`），`/events` 列表及 WebSocket `nudge_sent` 推送均增加了 `ruleType` 及 `content` 字段。
+- **自动催办规则**：创建任务配置 `autoNudgeRules` 的 `deadlineCrisis` 改为接收对象结构 `{ "p0": number, "p1": number }`。
 
 ### v1.4.3（2026-04-02）
 
@@ -96,9 +111,11 @@
       "userInfo": {
         "userId": "string",         // users.id（INTEGER 序列化为 string）
         "employeeId": "string|null",// employees.id；central/executive/admin 为 null
+        "employeeName": "string|null", // employees.name
         "username": "string",       // users.username
         "role": "string",           // central | employee | executive | admin
-        "storeId": "string|null"    // stores.id；central/executive/admin 为 null
+        "storeId": "string|null",   // stores.id；central/executive/admin 为 null
+        "storeName": "string|null"  // stores.name
       }
     },
     "requestId": "string"
@@ -147,7 +164,9 @@
       "username": "string",
       "role": "string",
       "storeId": "string|null",
+      "storeName": "string|null",
       "employeeId": "string|null",
+      "employeeName": "string|null",
       "createdAt": "string"
     },
     "requestId": "string"
@@ -185,10 +204,21 @@
 > >   rtmFilter: object[] | null,   // RTM 筛选规则数组；null = 不启用筛选
 >   storeScope: "all" | string[], // "all" 或门店 ID 数组（如 ["S001","S002"]）
 >   autoNudgeRules: object | null, // 自动预警与催办规则配置
->   ddlAt: string,             // 截止时间，ISO 8601（如 "2026-04-30T00:00:00.000Z"）
+>   startAt: string,           // 开始时间，ISO 8601（如 "2026-04-01T00:00:00.000Z"），必填
+>   passScore: number,         // 达标分数，整数（默认 100），必填
+>   ddlAt: string,             // 截止时间，ISO 8601（如 "2026-04-30T00:00:00.000Z"），必填
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
->   updatedAt: string          // ISO 8601
+>   updatedAt: string,         // ISO 8601
+>   // 仅当 employee 角色调用 GET /tasks 或 GET /tasks/:id 时返回
+>   assignment?: {
+>     id: string,
+>     status: "pending" | "in_progress" | "completed",
+>     progress: number,
+>     receivedAt: string | null,
+>     startedAt: string | null,
+>     completedAt: string | null
+>   }
 > }
 > 
 > // autoNudgeRules 结构说明
@@ -198,7 +228,10 @@
 >     mono: number       // 仅针对 Monobrand Mono：处于门店最后 N 位（如 1）
 >   },
 >   startDelay: number,    // 任务期限已度过 N%（如 50），个人进度仍为 0%
->   deadlineCrisis: number // 距离 Deadline 不足 N 小时（如 24）且未完成
+>   deadlineCrisis: {      // 临期危机预警
+>     p0: number,          // P0级预警：距离 Deadline 不足 N 小时（默认 24）且未完成
+>     p1: number           // P1级预警：距离 Deadline 不足 N 小时（默认 48）且未完成
+>   }
 > }
 > ```
 
@@ -218,13 +251,15 @@
     "hasAiDemo": false,          // 是否包含 AI Demo，可选（默认 false）
     "hasLiveBroadcast": false,   // 是否包含 Live Broadcast，可选（默认 false）
     // 四平台至少一个为 true，否则 400（TASK_001）
+    "startAt": "2026-04-01T00:00:00Z", // 开始时间，ISO 8601，必填
+    "passScore": 100,            // 达标分数，整数，必填
     "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，ISO 8601，必填
     "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
     "autoNudgeRules": {          // 自动预警与催办规则，可选
       "progressLag": { "lifestyle": 3, "mono": 1 },
       "startDelay": 50,
-      "deadlineCrisis": 24
+      "deadlineCrisis": { "p0": 24, "p1": 48 }
     }
   }
   ```
@@ -296,6 +331,8 @@
     "hasLiveBroadcast": false,
     "rtmFilter": null,
     "storeScope": "all",
+    "startAt": "2026-04-01T00:00:00Z",
+    "passScore": 100,
     "ddlAt": "2026-05-01T00:00:00Z"
   }
   ```
@@ -574,10 +611,14 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **请求体**：
   ```json
   {
-    "operationType": "start_task/complete_platform", // 必填
-    "platform": "MyPAL/SmartSell/AI Demo/Live Broadcast" // 仅 complete_platform 必填
+    "operationType": "start_task/complete_platform/complete_task", // 必填
+    "platform": "MyPAL/SmartSell/AI Demo/Live Broadcast" // 仅 complete_platform 时必填
   }
   ```
+- **`operationType` 取值说明**：
+  - `start_task`：将 `pending` 状态流转为 `in_progress`，记录 `started_at`。
+  - `complete_platform`：标记单一平台完成并重算 `progress`，若全平台完成则触发自动 `completed`。
+  - `complete_task`：一键标记该任务下所有平台为完成状态，将 `progress` 置为 100，并完成任务。
 - **`platform` 取值**：服务端对字符串做 `trim().toLowerCase()` 后按下表匹配；未命中任一别名则 **400**（`ASSIGN_012`）。
 
   | 归一化后的键（等价输入示例） | 对应任务字段 `tasks.has_*` | 写入列 `task_assignments.*_completed` |
@@ -965,6 +1006,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "targetUserId": "string", // notification_events.target_user_id（= employees.id）
           "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
           "severity": "string",    // notification_events.severity（yellow/red），非催办事件时为 null
+          "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, startDelay），非预警时为 null
           // isActive 计算规则（不存储于 DB）：
           //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
           //     → ta.status != 'completed'（任务未完成时为 true，完成后为 false）
@@ -1259,22 +1301,30 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       // ★ 以下数据均从 task_assignments / notification_events / read_receipts 实时聚合
       "totalAssignments": 300, // COUNT(*) FROM task_assignments WHERE task_id=?
-      // pushUserCount = COUNT DISTINCT notification_events.target_user_id WHERE task_id=? AND event_type='task_assigned'
       "pushUserCount": 300,
-      // employeeReadCount = COUNT DISTINCT read_receipts.user_id JOIN notification_events WHERE source='task_detail_open'
       "employeeReadCount": 180,
-      "totalReadCount": 180, // = employeeReadCount
-      // realDeliveryRate = totalReadCount / totalAssignments（PRD §6.12 口径）
-      "realDeliveryRate": 74.0,
-      // completedCount = COUNT WHERE status='completed'（来自 task_assignments）
+      "totalReadCount": 180, 
+
+      // 核心北极星指标
+      "completionRate": 72.0,       // 按 status='completed' 计算 (0-100)
       "completedCount": 216,
-      "completionRate": 72.0, // completedCount / totalAssignments * 100
-      "inProgressCount": 60,  // COUNT WHERE status='in_progress'
-      "pendingCount": 24,     // COUNT WHERE status='pending'
-      // overdueCount = COUNT WHERE status!='completed' AND tasks.ddl_at < now()
+      "onTimeCompletionRate": 70,   // 按时完成率：completed_at <= ddl_at
+      "avgCompletionTimeHours": 12.5, // 人均完成耗时 (从任务下发 created_at 到 completed_at)
+
+      // 链路数据
+      "taskReachRate": 100,         // 触达率 (百分比，默认100表示推送到全量)
+      "taskReadRate": 60.0,         // 任务读取率：totalReadCount / totalAssignments
+      "nudgeConversionRate": 50,    // 催办转化率：被催办后转化为在学或完成的比例
+      
+      // 预警数据
+      "startDelayRate": 5.5,        // 起步异常预警人数 / 任务总人数
+      "crisisP0Rate": 2.1,          // 进度危机P0预警人数 / 任务总人数
+      "crisisP1Rate": 4.0,          // 进度危机P1预警人数 / 任务总人数
+
+      "inProgressCount": 60,
+      "pendingCount": 24,
       "overdueCount": 10,
-      "updatedAt": "string", // 本次聚合计算时间
-      // warningCount 从 task_assignments 实时聚合（无 alerts 表），规则见 §5.5
+      "updatedAt": "string",
       "warningCount": {
         "p1": 5, // 门店完成率<50%且距DDL<24h的门店数
         "p2": 3  // 门店完成率<80%的门店数（未达P1阈值）
@@ -1311,6 +1361,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
         {
           "rtmValue": "string",
           "completionRate": 65.0,
+          "avgCompletionTimeHours": 12.5,
           "color": "#FF9900", // 热力图颜色（按完成率）
           "assignmentCount": 50,
           "completedCount": 32
@@ -1414,6 +1465,41 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 400：dimension/format/include参数缺失
   - 403：非总部/executive角色调用
   - 503：报表生成服务不可用
+
+### 5.4.5 获取完成人数时间趋势（新增）**P0**
+
+- **接口名称**：完成人数时间趋势
+- **接口路径**：`/dashboard/trend`
+- **请求方法**：GET
+- **请求头**：需携带通用请求头（Role=central/executive/admin）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 是 | 任务ID |
+  | type | string | 否 | `daily`（按天，默认）或 `hourly`（按小时） |
+  | date | string | 否 | 查询具体日期的 `hourly` 数据时传入（格式 `YYYY-MM-DD`），默认当天 |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "taskId": "string",
+      "type": "daily",
+      "date": "2026-04-03", // 仅 type=hourly 时有效
+      "trendData": [
+        {
+          "timeKey": "2026-04-01",  // daily返回日期，hourly返回小时(如 "09", "10")
+          "newCompleted": 15,       // 该时间段内新增完成人数
+          "cumulativeCompleted": 15 // 该时间段结束时的累计完成人数（hourly为当日累计）
+        }
+      ]
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：用于绘制完成趋势折线图与柱状图。
+- **权限要求**：central/executive
 
 ### 5.5 获取预警列表**P0**
 
@@ -2717,10 +2803,11 @@ ws://[host]/ws?token=<JWT Bearer Token>
 {
   "event": "nudge_sent",
   "data": {
-    "nudgeRecordId": "string",
     "taskId": "string",
     "severity": "yellow | red",
     "eventType": "nudge_yellow | nudge_red",
+    "content": "string", // AI 生成的催办话术或降级文案
+    "ruleType": "string" // 如 'progressLag', 'deadlineCrisisP0' 等
   }
 }
 ```

@@ -73,8 +73,11 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          SUM(CASE WHEN ta.status = 'completed'  THEN 1 ELSE 0 END) AS completed_count,
          SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
          SUM(CASE WHEN ta.status = 'pending'     THEN 1 ELSE 0 END) AS pending_count,
+         SUM(CASE WHEN ta.status = 'completed' AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS completed_on_time_count,
+         AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
        FROM task_assignments ta
+       JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
       allParams
@@ -85,6 +88,11 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const inProgCnt    = base.in_progress_count  || 0;
     const pendingCnt   = base.pending_count      || 0;
     const completionRate = total > 0 ? Math.round(100 * completedCnt / total) : 0;
+    
+    // 新增: 整体任务按时完成率 & 人均完成时间 (小时)
+    const completedOnTimeCnt = base.completed_on_time_count || 0;
+    const onTimeCompletionRate = total > 0 ? Math.round(100 * completedOnTimeCnt / total) : 0;
+    const avgCompletionTimeHours = base.avg_completion_time_hours ? parseFloat(base.avg_completion_time_hours.toFixed(1)) : 0;
 
     // ─ 逾期数（未完成 AND 当前时间 > ddl_at）──
     const overdueRow = db.get(
@@ -160,6 +168,40 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       else if (rate < 80) warnP2++;
     }
 
+    // ─ 预警及链路相关指标 (PRD 1.3) ──
+    // 催办转化率：有被催办且在催办后开始任务/完成任务的 assignment 数？
+    // 简化处理：若 PRD 只写“点击任务开始学习任务数/总任务数”，那可能就是 `started` / `total`。但因为名字叫“催办转化率”，我们取:
+    // 有被催办记录（nudge_count > 0）且已开始或已完成的数量 / 被催办的总数量。
+    const nudgeRow = db.get(
+      `SELECT
+         COUNT(ta.id) AS total_nudged,
+         SUM(CASE WHEN ta.started_at IS NOT NULL OR ta.status = 'completed' THEN 1 ELSE 0 END) AS converted_nudged
+       FROM task_assignments ta
+       ${joinStore}
+       WHERE ${taConditions.join(' AND ')} ${storeWhere} AND ta.nudge_count > 0`,
+      allParams
+    );
+    const nudgeConversionRate = nudgeRow.total_nudged > 0 
+      ? Math.round(100 * nudgeRow.converted_nudged / nudgeRow.total_nudged) 
+      : 0;
+
+    // 起步异常/P0/P1预警统计 (基于 notification_events dedupe_key 包含的 ruleType 或事件类型)
+    const warnStatsRow = db.get(
+      `SELECT
+         SUM(CASE WHEN ne.dedupe_key LIKE '%startDelay%' THEN 1 ELSE 0 END) AS start_delay_cnt,
+         SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP0%' THEN 1 ELSE 0 END) AS p0_cnt,
+         SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP1%' THEN 1 ELSE 0 END) AS p1_cnt
+       FROM notification_events ne
+       JOIN task_assignments ta ON ne.assignment_id = ta.id
+       ${joinStore}
+       WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
+      allParams
+    );
+    // 这里使用 total(即当次范围内的分配总数)作为分母计算占比
+    const startDelayRate = total > 0 ? parseFloat((100 * (warnStatsRow.start_delay_cnt || 0) / total).toFixed(1)) : 0;
+    const crisisP0Rate = total > 0 ? parseFloat((100 * (warnStatsRow.p0_cnt || 0) / total).toFixed(1)) : 0;
+    const crisisP1Rate = total > 0 ? parseFloat((100 * (warnStatsRow.p1_cnt || 0) / total).toFixed(1)) : 0;
+
     res.json({
       code: 200,
       message: 'success',
@@ -169,9 +211,23 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         employeeReadCount,
         managerReadCount,
         totalReadCount,
-        realDeliveryRate,
-        completedCount:  completedCnt,
+        
+        // 核心北极星指标
         completionRate,
+        completedCount:  completedCnt,
+        onTimeCompletionRate,
+        avgCompletionTimeHours,
+
+        // 链路数据
+        taskReachRate: total > 0 ? 100 : 0, // 系统目前创建即触达
+        taskReadRate: total > 0 ? parseFloat((totalReadCount / total * 100).toFixed(1)) : 0,
+        nudgeConversionRate,
+        
+        // 预警数据
+        startDelayRate,
+        crisisP0Rate,
+        crisisP1Rate,
+
         inProgressCount: inProgCnt,
         pendingCount:    pendingCnt,
         overdueCount,
@@ -205,9 +261,11 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
          COUNT(ta.id) AS assignment_count,
          SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
          ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
+         AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
+       JOIN tasks t ON t.id = ta.task_id
        WHERE ta.task_id = ?
        GROUP BY ${groupCol}
        ORDER BY completion_rate DESC`,
@@ -217,6 +275,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     const heatmapData = rows.map(r => ({
       rtmValue:       r.rtm_value || '(未知)',
       completionRate: r.completion_rate || 0,
+      avgCompletionTimeHours: r.avg_completion_time_hours ? parseFloat(r.avg_completion_time_hours.toFixed(1)) : 0,
       color:          heatmapColor(r.completion_rate || 0),
       assignmentCount: r.assignment_count,
       completedCount:  r.completed_count,
@@ -471,6 +530,67 @@ router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (re
         })),
         updatedAt: new Date().toISOString(),
       },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/v1/dashboard/trend ──────────────────────────────────────────────
+// 完成人数的时间趋势（按天/按小时）
+router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
+  try {
+    const { taskId, type = 'daily', date } = req.query;
+    if (!taskId) throw createError(400, 'taskId 不能为空', 'DASH_001');
+    if (!['daily', 'hourly'].includes(type)) {
+      throw createError(400, 'type 必须是 daily 或 hourly', 'DASH_005');
+    }
+
+    const targetDate = date || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    let rows;
+    if (type === 'daily') {
+      // 每日新增
+      rows = db.all(
+        `SELECT
+           date(completed_at) AS time_key,
+           COUNT(id) AS new_completed
+         FROM task_assignments
+         WHERE task_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+         GROUP BY date(completed_at)
+         ORDER BY date(completed_at) ASC`,
+        [taskId]
+      );
+    } else {
+      // 分小时新增 (指定日期)
+      rows = db.all(
+        `SELECT
+           strftime('%H', completed_at) AS time_key,
+           COUNT(id) AS new_completed
+         FROM task_assignments
+         WHERE task_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+           AND date(completed_at) = ?
+         GROUP BY strftime('%H', completed_at)
+         ORDER BY strftime('%H', completed_at) ASC`,
+        [taskId, targetDate]
+      );
+    }
+
+    let cumulativeCount = 0;
+    const trendData = rows.map(r => {
+      cumulativeCount += r.new_completed;
+      return {
+        timeKey: r.time_key,
+        newCompleted: r.new_completed,
+        cumulativeCompleted: cumulativeCount
+      };
+    });
+
+    res.json({
+      code: 200,
+      message: 'success',
+      data: { taskId, type, date: targetDate, trendData },
       requestId: req.requestId,
     });
   } catch (err) {

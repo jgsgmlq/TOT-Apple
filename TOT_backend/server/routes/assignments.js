@@ -379,11 +379,11 @@ router.delete('/:id', authenticate, requireRole(['central', 'admin']), (req, res
 });
 
 // ─── PUT /api/v1/assignments/:id/status ───────────────────────────────────────
-// start_task（pending→in_progress）、complete_platform、进度计算、完成时 WS 广播
+// start_task（pending→in_progress）、complete_platform、complete_task 进度计算、完成时 WS 广播
 router.put('/:id/status', authenticate, (req, res, next) => {
   try {
     const { operationType, platform } = req.body || {};
-    if (!operationType || !['start_task', 'complete_platform'].includes(operationType)) {
+    if (!operationType || !['start_task', 'complete_platform', 'complete_task'].includes(operationType)) {
       throw createError(400, 'operationType 非法', 'ASSIGN_011');
     }
 
@@ -402,6 +402,7 @@ router.put('/:id/status', authenticate, (req, res, next) => {
 
     db.transaction(() => {
       const current = db.get('SELECT * FROM task_assignments WHERE id = ?', [assignment.id]);
+      const configuredColumns = getConfiguredPlatformColumns(task);
 
       if (operationType === 'start_task') {
         if (current.status !== 'pending') {
@@ -411,6 +412,32 @@ router.put('/:id/status', authenticate, (req, res, next) => {
           'UPDATE task_assignments SET status = ?, started_at = ?, updated_at = ? WHERE id = ?',
           ['in_progress', now, now, current.id]
         );
+        return;
+      }
+
+      if (operationType === 'complete_task') {
+        if (current.status === 'completed') {
+          throw createError(409, '任务已完成，禁止重复操作', 'ASSIGN_014');
+        }
+        
+        let updates = configuredColumns.map(col => `${col} = 1`).join(', ');
+        if (updates) updates += ', ';
+        
+        db.run(
+          `UPDATE task_assignments
+           SET ${updates}progress = 100, status = 'completed', completed_at = ?, updated_at = ?
+           WHERE id = ?`,
+          [now, now, current.id]
+        );
+
+        const count = db.get(
+          `SELECT COUNT(*) AS count
+           FROM notification_events
+           WHERE assignment_id = ?
+             AND event_type IN ('nudge_yellow', 'nudge_red')`,
+          [current.id]
+        );
+        resolvedNudgeCount = (count && count.count) || 0;
         return;
       }
 
@@ -428,7 +455,6 @@ router.put('/:id/status', authenticate, (req, res, next) => {
         throw createError(400, 'platform 非法', 'ASSIGN_012');
       }
 
-      const configuredColumns = getConfiguredPlatformColumns(task);
       if (!configuredColumns.includes(platformColumn)) {
         throw createError(400, '该任务未配置此平台', 'ASSIGN_015');
       }

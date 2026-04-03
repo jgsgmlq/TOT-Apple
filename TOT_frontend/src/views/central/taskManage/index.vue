@@ -108,13 +108,12 @@
           </n-form>
         </n-card>
 
-        <!-- 预警规则卡片 -->
+        <!-- 预警规则卡片（已下发任务也可改，保存后写入 auto_nudge_rules） -->
         <n-card :bordered="false" class="form-card" title="预警规则参数设置">
           <n-form
             :model="formValue.alertRules"
             label-placement="top"
             size="large"
-            :disabled="isDispatched"
           >
             <div class="alert-rules-container">
               <!-- 进度掉队 -->
@@ -249,6 +248,8 @@ const loadTaskDetail = async (id: string) => {
     taskStatus.value = res.status;
     formValue.taskName = res.title;
     formValue.description = res.description || '';
+    formValue.startTime = res.startAt ? new Date(res.startAt).getTime() : null;
+    formValue.passScore = res.passScore ?? 80;
     formValue.endTime = res.ddlAt ? new Date(res.ddlAt).getTime() : null;
     
     // 还原覆盖范围
@@ -285,6 +286,8 @@ watch(() => route.query.id, (newId) => {
     taskStatus.value = 'draft';
     formValue.taskName = '';
     formValue.description = defaultDesc;
+    formValue.startTime = null;
+    formValue.passScore = 80;
     formValue.endTime = null;
     formValue.platforms = ['MyPal'];
     formValue.coverage = '全员';
@@ -301,6 +304,8 @@ onActivated(() => {
     taskStatus.value = 'draft';
     formValue.taskName = '';
     formValue.description = defaultDesc;
+    formValue.startTime = null;
+    formValue.passScore = 80;
     formValue.endTime = null;
     formValue.platforms = ['MyPal'];
     formValue.coverage = '全员';
@@ -318,6 +323,7 @@ const rules = {
   taskName: { required: true, message: '请输入任务名称', trigger: 'blur' },
   passScore: { required: true, type: 'number', message: '请输入达标分数', trigger: ['blur', 'change'] },
   description: { required: true, message: '请完善任务描述', trigger: 'blur' },
+  startTime: { required: true, type: 'number', message: '请选择开始时间', trigger: 'change' },
   endTime: { required: true, type: 'number', message: '请选择结束时间', trigger: 'change' },
   platforms: { required: true, type: 'array', message: '请至少选择一个学习平台', trigger: 'change' },
   coverage: { required: true, message: '请选择覆盖范围', trigger: 'change' }
@@ -349,49 +355,93 @@ const parseMarkdownToText = (text: string) => {
 
 // --- AI 优化逻辑 ---
 const aiLoading = ref(false);
-const handleAIOptimize = async () => {
-  if (!formValue.taskName && (!formValue.description || formValue.description === defaultDesc)) {
-    message.warning('请先输入任务名称或一些基础描述，AI才能更好为您润色！');
-    return;
-  }
-  
-  aiLoading.value = true;
-  const msgReactive = message.loading('AI 正在为您重构并润色培训文案...', { duration: 0 });
-  
-  try {
-    const payload = {
-      instruction: `任务名称：${formValue.taskName}\n附加说明：${formValue.description === defaultDesc ? '' : formValue.description}`,
-      ddlAt: formValue.endTime ? new Date(formValue.endTime).toISOString() : undefined,
-      platforms: formValue.platforms
-    };
+const handleAIOptimize = () => {
+  formRef.value?.validate(async (errors: any) => {
+    if (errors) {
+      let firstErrorMsg = '请检查表单中未填写的必填项！';
+      try {
+        firstErrorMsg = errors[0][0].message || firstErrorMsg;
+      } catch (e) {}
+      message.warning(firstErrorMsg);
 
-    const res = await aiGenerateTaskDescription(payload).send();
-    
-    // 如果返回的结构包含 description 字段
-    if (res && res.description) {
-      // 解析 Markdown 为干净的纯文本后赋值给 textarea
-      formValue.description = parseMarkdownToText(res.description);
-      msgReactive.destroy();
-      message.success('AI 润色完成！');
-    } else {
-      throw new Error('未收到预期的润色结果');
+      setTimeout(() => {
+        const errorEl = document.querySelector('.n-form-item.n-form-item--error-status');
+        if (errorEl) {
+          errorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 50);
+      return;
     }
-  } catch (err: any) {
-    console.error('AI Generate Error:', err);
-    msgReactive.destroy();
-    message.error(err.message || 'AI 润色请求失败，请检查服务状态');
-  } finally {
-    aiLoading.value = false;
-  }
-};
 
-// 构造后端 API 需要的数据格式
+    if (!isDispatched.value && formValue.platforms.length === 0) {
+      message.warning('请至少选择一个学习平台！');
+      return;
+    }
+
+    aiLoading.value = true;
+    const msgReactive = message.loading('AI 正在为您重构并润色培训文案...', { duration: 0 });
+
+    try {
+      const userDesc = formValue.description === defaultDesc ? '无特殊要求' : formValue.description;
+      const startDateStr = formValue.startTime ? new Date(formValue.startTime).toLocaleString('zh-CN') : '即刻';
+      const endDateStr = formValue.endTime ? new Date(formValue.endTime).toLocaleString('zh-CN') : '未指定';
+      const platformsStr = formValue.platforms.length > 0 ? formValue.platforms.join('、') : '未指定';
+
+      const richInstruction = `【任务基本信息】
+- 任务名称：${formValue.taskName || '未命名任务'}
+- 达标要求：测试通过需达到 ${formValue.passScore !== null ? formValue.passScore : 100} 分
+- 任务时间：从 ${startDateStr} 至 ${endDateStr}
+- 学习平台：${platformsStr}
+- 目标人群：${formValue.coverage || '全员'}
+
+【任务附加说明】
+${userDesc}`;
+
+      const payload = {
+        instruction: richInstruction,
+        ddlAt: formValue.endTime ? new Date(formValue.endTime).toISOString() : undefined,
+        platforms: formValue.platforms
+      };
+
+      const res = await aiGenerateTaskDescription(payload).send();
+
+      // 如果返回的结构包含 description 字段
+      if (res && res.description) {
+        // 解析 Markdown 为干净的纯文本后赋值给 textarea
+        formValue.description = parseMarkdownToText(res.description);
+        msgReactive.destroy();
+        message.success('AI 润色完成！');
+      } else {
+        throw new Error('未收到预期的润色结果');
+      }
+    } catch (err: any) {
+      console.error('AI Generate Error:', err);
+      msgReactive.destroy();
+      message.error(err.message || 'AI 润色请求失败，请检查服务状态');
+    } finally {
+      aiLoading.value = false;
+    }
+  });
+};
+// 构造后端 API 需要的数据格式（POST /tasks 要求 startAt、passScore、ddlAt 均非空）
 const buildTaskPayload = () => {
   const ddlAt = formValue.endTime ? new Date(formValue.endTime).toISOString() : new Date().toISOString();
-  
+  const startAt = formValue.startTime
+    ? new Date(formValue.startTime).toISOString()
+    : new Date().toISOString();
+
   if (isDispatched.value) {
-    // 已下发的任务，只允许提交 ddlAt
-    return { ddlAt };
+    // 已下发：可改截止时间 + 预警规则（与后端 PATCH dispatched 分支一致）
+    return {
+      ddlAt,
+      autoNudgeRules: {
+        laggingLifestyle: formValue.alertRules.laggingLifestyle,
+        laggingMono: formValue.alertRules.laggingMono,
+        startDelayPercent: formValue.alertRules.startDelayPercent,
+        deadlineCrisisHours: formValue.alertRules.deadlineCrisisHours,
+        deadlineCrisisHoursSecondary: formValue.alertRules.deadlineCrisisHoursSecondary,
+      },
+    };
   }
 
   const isAll = formValue.coverage === '全员';
@@ -403,6 +453,8 @@ const buildTaskPayload = () => {
     hasSmartSell: formValue.platforms.includes('Sales Coach'),
     hasAiDemo: formValue.platforms.includes('AI Coach'),
     hasLiveBroadcast: formValue.platforms.includes('直播培训'),
+    startAt,
+    passScore: formValue.passScore ?? 80,
     ddlAt,
     storeScope: isAll ? 'all' : [],
     rtmFilter: isAll ? null : [{ rtm: formValue.coverage }],

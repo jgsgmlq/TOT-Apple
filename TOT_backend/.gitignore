@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
