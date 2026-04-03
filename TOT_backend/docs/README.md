@@ -58,7 +58,7 @@
   A: 查看 [04-WEBSOCKET.md](backend/04-WEBSOCKET.md)（WebSocket 广播机制）
 
 - Q: "前端各页面状态和 API 对应关系是什么?"
-  A: 查看 [frontend/01-CENTRAL.md](frontend/01-CENTRAL.md)、[02-STORE.md](frontend/02-STORE.md)、[03-EMPLOYEE.md](frontend/03-EMPLOYEE.md)
+  A: 查看 [frontend/01-CENTRAL.md](frontend/01-CENTRAL.md)、[03-EMPLOYEE.md](frontend/03-EMPLOYEE.md)
 
 ---
 
@@ -96,8 +96,8 @@
 - Q: "如何测试员工更新进度?"
   A: 查看 [QUICK_START.md](tests/QUICK_START.md) 第 4 章
 
-- Q: "系统支持多少学员?"
-  A: 50 个门店 × 5 名员工 = 250 名员工 + 50 名店长
+- Q: "系统支持哪些角色?"
+  A: 系统当前角色：central（总部）、employee（店员）、executive（高管）、admin（管理员）
 
 ---
 
@@ -137,7 +137,6 @@
 |------|--------|------|
 | [frontend/04-SHARED.md](frontend/04-SHARED.md) | ✅ 100% | 公共模块（auth / api / ws） |
 | [frontend/01-CENTRAL.md](frontend/01-CENTRAL.md) | ✅ 100% | 总部看板页（central.html） |
-| [frontend/02-STORE.md](frontend/02-STORE.md) | ✅ 100% | 店长移动端（store.html） |
 | [frontend/03-EMPLOYEE.md](frontend/03-EMPLOYEE.md) | ✅ 100% | 员工移动端（employee.html） |
 
 ### 补充文档
@@ -173,8 +172,8 @@
 ### "性能��标是什么?"
 → 查看 [04-API-SPEC.md](specs/04-API-SPEC.md) 第 8 章
 
-### "支持多少用户?"
-→ 50 个门店 × 5 名员工 = 250 名员工 + 50 名店长
+### "支持哪些角色?"
+→ 系统当前角色：central（总部）、employee（店员）、executive（高管）、admin（管理员）
 
 ---
 
