@@ -5,7 +5,7 @@
 **图例：** ✅ 符合 Spec | ⚠️ 部分实现 / 需修改 | ❌ 未实现
 
 > **当前唯一有效基线（请优先遵循）**
-> - 后端实施文档：`01-ROUTES.md`、`02-SERVICES.md`、`03-DATABASE.md`、`04-WEBSOCKET.md`
+> - 后端实施文档：`01-ROUTES.md`、`02-SERVICES.md`、`03-DATABASE.md`、`04-WEBSOCKET.md`、`06-MYPAL-INTEGRATION.md`（MyPal 对接）
 > - 产品与规格基线：`docs/product/PRODUCT_REQUIREMENTS.md` + `docs/specs/00-08`
 >
 > 历史文档仅用于追溯背景，不作为当前实现和验收依据。
@@ -19,8 +19,9 @@
 | [03-DATABASE.md](./03-DATABASE.md) | 数据库表结构现状对比 + 迁移脚本 | 3 |
 | [04-WEBSOCKET.md](./04-WEBSOCKET.md) | WebSocket 连接、事件类型、角色裁剪 | 4 |
 | [05-AGENT-FRAMEWORK.md](./05-AGENT-FRAMEWORK.md) | AI Agent 基础调度框架与 Skill 定义 | 5 |
+| [06-MYPAL-INTEGRATION.md](./06-MYPAL-INTEGRATION.md) | MyPal HTTP 签名、同步任务与 `POST /mypal/sync` | 6 |
+| [MYPAL-REQUEST-TO-PARTNER.md](../MYPAL-REQUEST-TO-PARTNER.md) | 致 MyPal 方：需对方提供的凭证与配合项（可对外转发） | — |
 
-## 历史文档（已过时）
+## 历史文档
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — 旧版架构设计（基于 2026-03-18，仅供参考）
-- [BACKEND_IMPLEMENTATION_REPORT.md](./BACKEND_IMPLEMENTATION_REPORT.md) — 旧版实现报告
+> 2026-03-18 版本的旧版架构设计（ARCHITECTURE.md）与实现报告（BACKEND_IMPLEMENTATION_REPORT.md）已于 2026-04-04 从仓库中删除，可通过 git history 查阅。
