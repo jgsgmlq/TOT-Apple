@@ -130,13 +130,14 @@ npm run dev       # 默认端口 3000
 
 ```bash
 cd TOT_frontend
-pnpm install
-pnpm run dev      # 默认端口以终端输出为准
+pnpm install（npm install不行就用pnpm）
+pnpm run dev      # 默认端口8001
+（npm run dev也行）
 ```
 
 ### 不同端入口
 
-- **总部入口**：`http://<前端端口>/hq`（若项目配置了 HQ 入口）。
-- **店员登录**：`http://<前端端口>/employee/login`。
+- **总部入口**：`http://<前端端口>/hq`。
+- **店员登录**：`http://<前端端口>/employee`。
 
 更完整的 API 与模块说明见 **`TOT_backend/README.md`** 与 **`TOT_backend/docs/specs/`**。
