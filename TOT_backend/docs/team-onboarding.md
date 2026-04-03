@@ -11,7 +11,7 @@
 |------|----|
 | 共享服务器 | Mac Studio（始终开机） |
 | macOS 用户名 | `skylerwang` |
-| Mac Studio Tailscale IP | `100.x.x.x`（问管理员获取，执行 `tailscale ip -4`） |
+| Mac Studio Tailscale IP | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`） |
 | 后端端口 | `3000` |
 | 前端开发端口 | `8001` |
 | Git 仓库 | GitHub（问管理员要链接） |
@@ -23,11 +23,11 @@
 
 1. 下载：https://tailscale.com/download
 2. 登录同一个 Tailscale 账号（问管理员发邀请链接加入 Network）
-3. 完成后你的设备会获得一个 `100.x.x.x` 虚拟 IP
+3. 完成后你的设备会获得一个 `100.65.95.128` 虚拟 IP
 4. 验证连通性：
 
 ```bash
-ping 100.x.x.x   # 换成 Mac Studio 的 Tailscale IP，能 ping 通即成功
+ping 100.65.95.128   # 换成 Mac Studio 的 Tailscale IP，能 ping 通即成功
 ```
 
 ---
@@ -64,7 +64,7 @@ chmod 600 ~/.ssh/authorized_keys
 
 ```
 Host mac-studio
-  HostName 100.x.x.x          # 换成 Mac Studio 的 Tailscale IP
+  HostName 100.65.95.128          # 换成 Mac Studio 的 Tailscale IP
   User skylerwang
   IdentityFile ~/.ssh/id_ed25519
   ServerAliveInterval 60
@@ -104,7 +104,7 @@ ssh mac-studio
   pnpm run dev
   # 前端跑在 Mac Studio 的 8001 端口
   ```
-- 浏览器访问：`http://100.x.x.x:8001`（用 Tailscale IP）
+- 浏览器访问：`http://100.65.95.128:8001`（用 Tailscale IP）
 - 无需在本机安装任何 Node.js 环境
 
 ### 选项 B：本地开发（适合只改 UI、不依赖后端实时数据时）
@@ -112,7 +112,7 @@ ssh mac-studio
 - 本机 `pnpm run dev`
 - 修改 `TOT_frontend/.env.development` 的 API 地址：
   ```
-  VITE_GLOB_API_URL = http://100.x.x.x:3000
+  VITE_GLOB_API_URL = http://100.65.95.128:3000
   ```
   > ⚠️ 这个文件不要 commit，每人本地维护自己的 IP
 
@@ -211,7 +211,7 @@ cat ~/.ssh/authorized_keys
 ssh mac-studio
 
 # 测试后端是否可访问
-curl http://100.x.x.x:3000/api/v1/auth/login \
+curl http://100.65.95.128:3000/api/v1/auth/login \
   -X POST -H "Content-Type: application/json" \
   -d '{"email":"test1@tot.com","password":"test123"}'
 ```
