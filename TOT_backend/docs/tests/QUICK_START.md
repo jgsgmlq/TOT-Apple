@@ -34,30 +34,30 @@ npm -v   # 应该输出 9.xx.x 以上
 
 ```bash
 # 进入服务器目录
-cd /Users/skyler/Desktop/MVP/server
+cd TOT_backend/server
 
 # 安装依赖
 npm install
 
 # 启动服务
-npm start
+npm run dev
 ```
 
 **预期输出:**
 
 ```
 [auth] WARNING: JWT_SECRET not set, using default dev secret. DO NOT use in production.
-MVP LAN server running at http://0.0.0.0:8080
-  Local:   http://localhost:8080
-  LAN:     http://192.168.x.x:8080 (use from other devices)
-  WS:      ws://localhost:8080/ws  or  ws://192.168.x.x:8080/ws (push updates)
+MVP LAN server running at http://0.0.0.0:3000
+  Local:   http://localhost:3000
+  LAN:     http://192.168.x.x:3000 (use from other devices)
+  WS:      ws://localhost:3000/ws  or  ws://192.168.x.x:3000/ws (push updates)
 ```
 
 ### 2.2 验证服务已启动
 
 ```bash
 # 在新终端窗口中执行
-curl http://localhost:8080/api/health
+curl http://localhost:3000/api/health
 
 # 预期响应
 {"ok":true,"service":"mvp-lan-api"}
@@ -66,8 +66,8 @@ curl http://localhost:8080/api/health
 ### 2.3 后续启动（已安装依赖）
 
 ```bash
-cd /Users/skyler/Desktop/MVP/server
-npm start
+cd TOT_backend/server
+npm run dev
 ```
 
 ---
@@ -78,9 +78,9 @@ npm start
 
 | 角色 | URL | 用户名 | 密码 |
 |------|-----|--------|------|
-| **总部** | http://localhost:8080/front-end/central.html | central | Train2026! |
-| **店长** | http://localhost:8080/front-end/store.html | store_S001 | Train2026! |
-| **员工** | http://localhost:8080/front-end/employee.html | emp_E002 | Train2026! |
+| **总部** | http://localhost:3000/front-end/central.html | central | Train2026! |
+| **店长** | http://localhost:3000/front-end/store.html | store_S001 | Train2026! |
+| **员工** | http://localhost:3000/front-end/employee.html | emp_E002 | Train2026! |
 
 > **注意:** 员工用户名格式为 `emp_E00X`（如 `emp_E002`～`emp_E006`）。`emp_E001` 是店长账号，不用于员工端登录。
 
@@ -97,7 +97,7 @@ npm start
 ### 4.1 场景：总部创建并下发培训任务
 
 **第一步：总部端创建任务**
-1. 访问 http://localhost:8080/front-end/central.html
+1. 访问 http://localhost:3000/front-end/central.html
 2. 用户名: `central`, 密码: `Train2026!`
 3. 在"创建任务"区域填入：
    - 任务名称：Q1新品培训
@@ -113,13 +113,13 @@ npm start
 3. 系统自动向 250 名学员分配任务
 
 **第三步：店长端查看任务**
-1. 访问 http://localhost:8080/front-end/store.html
+1. 访问 http://localhost:3000/front-end/store.html
 2. 用户名: `store_S001`, 密码: `Train2026!`
 3. 进入"我的任务"页面
 4. 应该看到刚分配的 Q1新品培训 任务（分配给本店6名员工）
 
 **第四步：员工端更新进度**
-1. 访问 http://localhost:8080/front-end/employee.html
+1. 访问 http://localhost:3000/front-end/employee.html
 2. 用户名: `emp_E002`, 密码: `Train2026!`
 3. 进入"我的任务"页面
 4. 找到 Q1新品培训 任务
@@ -186,7 +186,7 @@ npm start
 
 **登录并获取 Token:**
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/api/login \
+TOKEN=$(curl -s -X POST http://localhost:3000/api/login \
   -H "Content-Type: application/json" \
   -d '{"username":"central","password":"Train2026!"}' | \
   grep -o '"token":"[^"]*' | cut -d'"' -f4)
@@ -196,7 +196,7 @@ echo "Token: $TOKEN"
 
 **创建任务:**
 ```bash
-curl -X POST http://localhost:8080/api/tasks \
+curl -X POST http://localhost:3000/api/tasks \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -214,13 +214,13 @@ curl -X POST http://localhost:8080/api/tasks \
 # 将 <task-id> 替换为上面返回的 id
 TASK_ID="<task-id>"
 
-curl -X POST http://localhost:8080/api/tasks/$TASK_ID/dispatch \
+curl -X POST http://localhost:3000/api/tasks/$TASK_ID/dispatch \
   -H "Authorization: Bearer $TOKEN" | jq '.'
 ```
 
 **查询任务汇总:**
 ```bash
-curl -X GET http://localhost:8080/api/tasks/$TASK_ID/summary \
+curl -X GET http://localhost:3000/api/tasks/$TASK_ID/summary \
   -H "Authorization: Bearer $TOKEN" | jq '.'
 ```
 
@@ -239,18 +239,18 @@ curl -X GET http://localhost:8080/api/tasks/$TASK_ID/summary \
 ### 7.2 清空数据库
 ```bash
 # 重置数据库（删除 database.db）
-cd /Users/skyler/Desktop/MVP/server
+cd TOT_backend/server
 rm -f database.db database.db-shm database.db-wal
 
 # 重启服务，系统会自动重建数据库和初始数据
-npm start
+npm run dev
 ```
 
 ### 7.3 检查 WebSocket 连接
 ```bash
 # 在浏览器控制台中执行
 // 创建 WebSocket 连接
-const ws = new WebSocket('ws://localhost:8080/ws');
+const ws = new WebSocket('ws://localhost:3000/ws');
 
 ws.onopen = () => {
   console.log('✓ WebSocket 连接成功');
@@ -272,19 +272,19 @@ ws.onerror = (error) => {
 ### 8.1 端口被占用
 **错误信息:**
 ```
-Error: listen EADDRINUSE: address already in use 0.0.0.0:8080
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3000
 ```
 
 **解决方案:**
 ```bash
-# 查找占用 8080 的进程
-lsof -i :8080
+# 查找占用 3000 的进程
+lsof -i :3000
 
 # 杀死进程（macOS）
 kill -9 <PID>
 
 # 或改用其他端口
-PORT=8081 npm start
+PORT=3001 npm run dev
 ```
 
 ### 8.2 连接数据库失败
@@ -303,7 +303,7 @@ chmod 644 server/database.db
 
 # 如果问题持续，删除并重建
 rm -f server/database.db*
-npm start
+npm run dev
 ```
 
 ### 8.3 JWT Token 过期
@@ -334,24 +334,24 @@ Access to XMLHttpRequest blocked by CORS policy
 ### 9.1 单个操作性能
 ```bash
 # 创建任务（应在 10ms 内）
-time curl -X POST http://localhost:8080/api/tasks \
+time curl -X POST http://localhost:3000/api/tasks \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"title":"Test","targetRole":"both","storeScope":"all","ddlAt":"2026-04-01T00:00:00Z","platforms":["mypal"]}'
 
 # 下发任务 250 人（应在 50ms 内）
-time curl -X POST http://localhost:8080/api/tasks/$TASK_ID/dispatch \
+time curl -X POST http://localhost:3000/api/tasks/$TASK_ID/dispatch \
   -H "Authorization: Bearer $TOKEN"
 
 # 查询汇总（应在 20ms 内）
-time curl -X GET http://localhost:8080/api/tasks/$TASK_ID/summary \
+time curl -X GET http://localhost:3000/api/tasks/$TASK_ID/summary \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 9.2 并发测试
 ```bash
 # 使用 Apache Bench 测试并发性能
-ab -n 100 -c 10 http://localhost:8080/api/health
+ab -n 100 -c 10 http://localhost:3000/api/health
 
 # 结果解读：
 # 100 requests in X.xxx seconds
@@ -378,10 +378,10 @@ ab -n 100 -c 10 http://localhost:8080/api/health
 A: `rm -f server/database.db*` 然后重启服务
 
 **Q: 如何修改端口？**
-A: `PORT=8081 npm start`
+A: `PORT=3001 npm run dev`
 
 **Q: 能在局域网其他设备上访问吗？**
-A: 可以，使用输出中的 LAN 地址，如 `http://192.168.x.x:8080`
+A: 可以，使用输出中的 LAN 地址，如 `http://192.168.x.x:3000`
 
 **Q: JWT_SECRET 警告可以忽略吗？**
 A: 开发环境可忽略，生产环境需要设置 `JWT_SECRET=<your-secret>`
