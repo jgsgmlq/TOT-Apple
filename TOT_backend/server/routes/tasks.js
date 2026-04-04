@@ -516,6 +516,8 @@ function formatTask(row) {
     rtmFilter:        row.rtm_filter ? JSON.parse(row.rtm_filter) : null,
     storeScope:       row.store_scope === 'all' ? 'all' : (row.store_scope ? JSON.parse(row.store_scope) : []),
     autoNudgeRules:   row.auto_nudge_rules ? JSON.parse(row.auto_nudge_rules) : null, // 保留
+    mypalTaskWeek:    row.mypal_task_week ?? null,
+    mypalProductName: row.mypal_product_name ?? null,
     ddlAt:            row.ddl_at,
     createdBy:        row.created_by,
     createdAt:        row.created_at,
@@ -578,6 +580,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
       rtmFilter, storeScope, autoNudgeRules, ddlAt,  // 保留 autoNudgeRules
+      mypalTaskWeek, mypalProductName,
     } = req.body;
 
     if (!title)      throw createError(400, 'title 不能为空', 'TASK_005');
@@ -587,6 +590,17 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     if (platforms.every(v => v === 0)) {
       throw createError(400, '至少选择一个学习平台', 'TASK_001');
     }
+    if (platforms[0] === 1) {
+      const w = mypalTaskWeek != null ? String(mypalTaskWeek).trim() : '';
+      if (!w) throw createError(400, '启用 MyPal 时必须填写 mypalTaskWeek（任务周，如 FY26Q2W1）', 'TASK_007');
+    }
+
+    const mypalWeekStr =
+      platforms[0] === 1 && mypalTaskWeek != null ? String(mypalTaskWeek).trim() : null;
+    const mypalProductStr =
+      mypalProductName != null && String(mypalProductName).trim()
+        ? String(mypalProductName).trim()
+        : null;
 
     const id = nanoid();
     const now = new Date().toISOString();
@@ -597,10 +611,12 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     db.run(
       `INSERT INTO tasks
         (id, title, description, has_mypal, has_smartsell, has_ai_demo, has_live_broadcast,
-         status, rtm_filter, store_scope, auto_nudge_rules, ddl_at, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+         status, rtm_filter, store_scope, auto_nudge_rules, mypal_task_week, mypal_product_name,
+         ddl_at, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
-       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, ddlAt, req.user.username, now, now]
+       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, mypalWeekStr, mypalProductStr,
+       ddlAt, req.user.username, now, now]
     );
 
     const row = db.get('SELECT * FROM tasks WHERE id = ?', [id]);
@@ -625,6 +641,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
       rtmFilter, storeScope, autoNudgeRules, ddlAt,  // 保留 autoNudgeRules
+      mypalTaskWeek, mypalProductName,
     } = req.body;
 
     // dispatched 后只允许改 ddl_at
@@ -633,7 +650,8 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         title !== undefined || description !== undefined ||
         hasMypal !== undefined || hasSmartSell !== undefined ||
         hasAiDemo !== undefined || hasLiveBroadcast !== undefined ||
-        rtmFilter !== undefined || storeScope !== undefined || autoNudgeRules !== undefined; // 保留
+        rtmFilter !== undefined || storeScope !== undefined || autoNudgeRules !== undefined ||
+        mypalTaskWeek !== undefined || mypalProductName !== undefined;
 
       if (forbiddenChanged) {
         throw createError(400, '已下发任务只允许修改截止时间', 'TASK_004');
@@ -663,11 +681,28 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         ? (autoNudgeRules ? JSON.stringify(autoNudgeRules) : null)
         : task.auto_nudge_rules;
 
+      const mypalWeekResolved =
+        mypalTaskWeek !== undefined
+          ? (mypalTaskWeek != null && String(mypalTaskWeek).trim() ? String(mypalTaskWeek).trim() : null)
+          : task.mypal_task_week;
+      const mypalProductResolved =
+        mypalProductName !== undefined
+          ? (mypalProductName != null && String(mypalProductName).trim()
+        ? String(mypalProductName).trim()
+        : null)
+          : task.mypal_product_name;
+
+      if (platforms[0] === 1) {
+        const w = mypalWeekResolved != null ? String(mypalWeekResolved).trim() : '';
+        if (!w) throw createError(400, '启用 MyPal 时必须填写 mypalTaskWeek', 'TASK_007');
+      }
+
       db.run(
         `UPDATE tasks SET
            title = ?, description = ?,
            has_mypal = ?, has_smartsell = ?, has_ai_demo = ?, has_live_broadcast = ?,
-           rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?, ddl_at = ?,
+           rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?,
+           mypal_task_week = ?, mypal_product_name = ?, ddl_at = ?,
            updated_at = ?
          WHERE id = ?`,
         [
@@ -676,7 +711,9 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           platforms[0], platforms[1], platforms[2], platforms[3],
           rtmFilterStr,
           storeScopeStr,
-          autoNudgeRulesStr,  // 保留
+          autoNudgeRulesStr,
+          platforms[0] === 1 ? mypalWeekResolved : null,
+          platforms[0] === 1 ? mypalProductResolved : null,
           ddlAt ?? task.ddl_at,
           new Date().toISOString(),
           task.id,
@@ -793,6 +830,13 @@ router.post('/:id/dispatch', authenticate, requireRole(['central', 'admin']), (r
     const matchedStoreIds = getMatchedStoreIds(task);
     if (matchedStoreIds.length === 0) {
       throw createError(400, '当前筛选无门店命中，请调整筛选条件', 'RTM_001');
+    }
+
+    if (task.has_mypal === 1) {
+      const w = task.mypal_task_week && String(task.mypal_task_week).trim();
+      if (!w) {
+        throw createError(400, '下发前请为 MyPal 任务配置 mypalTaskWeek（任务周，如 FY26Q2W1）', 'TASK_007');
+      }
     }
 
     const targetUsers = getTargetUsers(matchedStoreIds);

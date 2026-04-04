@@ -9,7 +9,7 @@
 
 | 表 | 当前状态 | 主要差异 |
 |----|---------|---------|
-| `tasks` | ✅ | 已与 Spec 主体字段对齐（`title/platforms/rtm_filter/ddl_at`） |
+| `tasks` | ✅ | 含 `mypal_task_week` / `mypal_product_name`（MyPal HTTP 同步映射，见 `06-MYPAL-INTEGRATION.md`） |
 | `task_assignments` | ✅ | 已包含平台完成字段、`nudge_count`、`user_id/user_role` |
 | `notification_events` | ✅ | 已存在（由 `server/schema/tasks.sql` 初始化） |
 | `read_receipts` | ✅ | 已存在（由 `server/schema/tasks.sql` 初始化） |
@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- 已完成：tasks 表迁移到 Spec 字段（见 server/schema/tasks.sql）
 -- 如需回补历史库，仅对旧库执行一次性迁移脚本
 ```
+
+### MyPal 对接列（`server/db/schema.sql`）
+
+| 列 | 类型 | 说明 |
+|----|------|------|
+| `mypal_task_week` | TEXT NULL | 对应 MyPal 请求参数 `queryDate`（任务周，如 `FY26Q2W1`）。`has_mypal=1` 时创建/更新任务建议必填。 |
+| `mypal_product_name` | TEXT NULL | 与 MyPal 响应字段 `productName` 精确匹配；未填时同步仅在该学员该周**唯一一条**记录时回写，否则可能歧义。 |
+
+已有 SQLite 库在启动时由 `server/db/index.js` 的 `migrateTasksMypalColumns` 自动 `ALTER TABLE` 补列。
 
 **说明：历史库重建方式（仅旧库需要）**
 

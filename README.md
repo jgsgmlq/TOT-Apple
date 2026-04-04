@@ -1,8 +1,20 @@
 # TOT 培训任务管理系统 - 前后端联调进度文档
 
-本文档记录了 `TOT_joint`（TOT-Apple 培训任务管理系统 MVP P0）项目当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。
+本文档记录本仓库（主线分支 **`dev_joint`**，TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。更完整的后端/前端说明见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
-> 更新日期：2026年4月3日
+> 更新日期：2026年4月4日
+
+---
+
+## 当前阶段：内部联调（MyPal 使用本地 Mock）
+
+**现阶段不接入 MyPal 真实接口或对方数据库。** 前后端联调请统一走后端已实现的 **本地 Mock**：
+
+| 做法 | 说明 |
+|------|------|
+| 环境变量 | 在 **`TOT_backend/.env`** 中设置 **`MYPAL_MOCK=1`**（`server/app.js` 从此文件加载；勿打开 **`MYPAL_ENABLED=1`**，除非已与 MyPal 开通真实联调）。模板见 `TOT_backend/.env.example`。 |
+| 接口 | **`GET /api/v1/mypal/mock/learning`**（需登录），返回与 MyPal 文档同形态的字段；数据来自 SQLite 表 **`mypal_learning_mock`**。在 `TOT_backend/server` 下执行 **`npm run seed`**（或 `node db/seed.js`）生成/刷新种子数据。 |
+| 与正式 HTTP 对接 | `POST /api/v1/mypal/sync`、凭证变量等见 [`TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md`](TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md)，待与 MyPal 正式开通后再启用。 |
 
 ---
 
@@ -14,7 +26,7 @@
 |------|----|
 | 后端地址 | `http://100.65.95.128:3000` |
 | Tailscale IP | `100.65.95.128`（需加入团队 Network） |
-| 进程管理 | PM2（`pm2 status` 查看状态） |
+| 进程管理 | PM2（`pm2 status tot-api` 查看共享后端进程） |
 | 主开发分支 | `dev_joint` |
 | 远程开发 | Cursor Remote SSH → `mac-studio` |
 
@@ -24,6 +36,20 @@
 ```bash
 bash scripts/deploy.sh
 ```
+
+**后端代码更新与 PM2 重载**：在 Mac Studio 上由 PM2 跑的是**当时磁盘上的代码**；你改了后端并需要共享环境生效时，必须把新代码同步到 Mac Studio，再重载进程（不会自动热更新）。
+
+| 操作 | 命令 / 说明 |
+|------|-------------|
+| 推荐流程（拉代码 + 依赖 + 重载） | 在仓库根目录执行 `bash scripts/deploy.sh`（默认分支 `dev_joint`） |
+| 指定分支部署 | `bash scripts/deploy.sh <分支名>` |
+| 仅重载 PM2（已是最新代码时） | `cd TOT_backend/server && pm2 reload ecosystem.config.js --env development` |
+| 查看状态 | `pm2 status tot-api`（进程名 **`tot-api`**，定义见 `TOT_backend/server/ecosystem.config.js`） |
+| 硬重启（`reload` 异常时） | 同上目录下执行 `pm2 restart tot-api` |
+
+`reload` 按 PM2 方式重载进程（会重启 Node，单实例时接口会短暂不可用）；`restart` 为直接重启。数据库结构变更请按项目迁移步骤单独处理，PM2 不负责迁移。
+
+若你**只在个人电脑改后端、且前端连本机 `localhost:3000`**，用下文 **「本地独立开发」** 里的 `npm run dev` 即可，**不必**在 Mac Studio 上执行 `deploy.sh` 或 `pm2 reload`；只有需要团队共用那台机上的接口时，才要部署并重载。
 
 **测试账号**：
 | 账号 | 密码 | 角色 |
@@ -43,7 +69,7 @@ bash scripts/deploy.sh
 
 ### 2. 总部端 (HQ Central)
 - **AI 智能文案生成 (DeepSeek)**：
-  - 前端发布页（`taskManage/index.vue`）点击“AI 智能润色”成功调用后端 `POST /api/v1/tasks/ai-generate-description` 接口。
+  - 前端发布页（`src/views/central/taskManage/index.vue`）点击“AI 智能润色”成功调用后端 `POST /api/v1/tasks/ai-generate-description` 接口。
   - **后端已成功切换至 DeepSeek 模型** (`generate_task_description_deepseek`)，彻底解决了原代理 API 导致的 Token 截断与输出不完整问题。
 - **任务发布与预警规则下发**：
   - 前端表单可以成功将任务基础信息、平台（MyPal, Sales Coach, AI Coach, 直播等）、覆盖范围传递给后端。
@@ -66,20 +92,21 @@ bash scripts/deploy.sh
 ## 🚧 后续待完成联调的部分 (Pending / To-Do)
 
 ### 1. WebSocket 实时预警推送 (Real-time Nudge & WS)
-- **现状**：目前后端 `server/ws/manager.js` 已有 WebSocket 广播逻辑；前端店员端页面的“预警消息灯箱”及瀑布流使用的还是模拟数据 (`mockWarnings`)。
+- **现状**：目前后端 [`TOT_backend/server/ws/manager.js`](TOT_backend/server/ws/manager.js) 已有 WebSocket 广播逻辑（HTTP 服务启动后见控制台输出的 `ws://…/ws?token=`）；前端店员端页面的“预警消息灯箱”及瀑布流使用的还是模拟数据（`employee/index.vue` 内 `mockWarnings`）。
 - **待联调**：
   - 店员端登录后需要真实建立 WebSocket 连接（携带 JWT token）。
   - 后端触发自动催办 (`task_assigned`, `nudge_sent` 等事件) 时，前端需要监听 `message` 并将真实的预警数据推入 `waterfallMessages` 中，并触发预警弹窗。
 
 ### 2. 自动化催办后台服务 (Auto Nudge Cron Trigger)
-- **现状**：后端 `services/autoNudge.js` 具备基于预警规则（包括我们新加的 48 小时临期）评估进度并生成催办文案的能力，但可能缺乏持续的全局定时触发器（Cron Job）。
+- **现状**：后端 [`TOT_backend/server/services/autoNudge.js`](TOT_backend/server/services/autoNudge.js) 具备基于预警规则（包括 48 小时临期）评估进度并生成催办文案的能力，但可能缺乏持续的全局定时触发器（Cron Job）。
 - **待联调**：后端需部署一个定时任务（例如每小时执行一次），遍历所有 `in_progress` 的 Task，对比当前时间与 `ddl_at`，触发对应的 24h / 48h 临期预警，写入 `notification_events` 表并通过 WS 广播给对应店员。
 
 ### 3. 学习平台任务真实完成回调 (Task Completion Workflow)
 - **现状**：目前前端店员端点击“去完成”是直接唤起微信小程序，点击“标记完成”只在前端列表做了 UI 上的本地移除（Mock 完成）。
+- **内部联调阶段**：MyPal 侧 **`MYPAL_MOCK=1` + `GET /api/v1/mypal/mock/learning`** 与 `mypal_learning_mock` 表已可支撑开发自测，**不要求**接通 MyPal 真实环境。
 - **待联调**：
   - 需接入真实的 `/assignments/:id/platforms/:platform/complete` 接口（对于无需自动回传的平台如直播）。
-  - 对于 MyPal，需与后端的 `mypal_learning_mock` 同步机制联调，让后端的 `task_assignments` 进度表（progress）真实变为 100% 并流转到 `completed` 状态。
+  - 对于 MyPal，在内部阶段可继续用 mock 表对齐字段；**与 MyPal 真实 HTTP 同步**（`POST /api/v1/mypal/sync`）与任务进度自动回写可在对方凭证就绪后再做端到端验收。
 
 ### 4. 总部端看板数据真实统计 (HQ Dashboard Stats)
 - **现状**：总部看板页面 (`/central/board`) 中的通过率、排名等图表数据部分处于静态/Mock状态。
@@ -91,13 +118,15 @@ bash scripts/deploy.sh
 
 ### Mac Studio 共享服务器（推荐）
 
-后端已由 PM2 守护，无需手动启动。前端连接 Mac Studio：
+后端已由 PM2 守护，**平时不必手起 `npm run dev`**；若你改了后端并要 Mac Studio 上的接口用上新代码，见上文 **「后端代码更新与 PM2 重载」**。前端仍需本机执行 `pnpm run dev`。
+
+`TOT_frontend/.env.development` 中 **`VITE_GLOB_API_URL`** 默认指向 Mac Studio 的 Tailscale 地址（与上表一致时可直接联调）；若**只连本机后端**，请改为 `http://localhost:3000` 后再启动前端（勿把个人本机地址提交进 Git）。
 
 ```bash
-# 确认后端正在运行
-pm2 status   # 在 Mac Studio 上执行
+# 确认后端正在运行（在 Mac Studio 上执行）
+pm2 status tot-api
 
-# 前端本地开发（.env.development 已配置 Tailscale IP）
+# 前端本地开发（Vite 已 `host: true`，局域网/Tailscale 可访问）
 cd TOT_frontend && pnpm run dev
 ```
 
@@ -107,14 +136,14 @@ cd TOT_frontend && pnpm run dev
 # 后端
 cd TOT_backend/server
 npm install
-npm run dev          # node --watch，修改自动重启，端口 3000
+npm run dev          # node --watch app.js，修改自动重启，端口 3000
 
-# 前端
+# 前端（先将 .env.development 里 VITE_GLOB_API_URL 设为 http://localhost:3000）
 cd TOT_frontend
 pnpm install
-pnpm run dev         # 端口 8001
+pnpm run dev         # 默认端口 8001（见 .env.development 中 VITE_PORT）
 ```
 
 **快速测试入口**：
-- **总部端**：`http://localhost:8001/hq`（或 `http://100.65.95.128:8001/hq`）
+- **总部入口**：`http://localhost:8001/hq`（或同网段/Tailscale 下 `http://100.65.95.128:8001/hq`，需本机已 `pnpm run dev` 且 Vite 在跑）
 - **店员端**：`http://localhost:8001/employee/login`（账号见上方测试账号表）

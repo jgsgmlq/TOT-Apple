@@ -17,6 +17,7 @@ server/
     employees.js    ← /api/employees/:id
     notifications.js ← /api/notifications, /api/notifications/:eventId/read
     store-progress.js ← /api/store/tasks/:id/progress
+    mypal.js          ← /api/v1/mypal/sync（MyPal 学习进度同步）
 ```
 
 ---
@@ -339,7 +340,18 @@ GET /api/notifications?unread=true&taskId=
 
 ---
 
-## 8. 废弃路由（待清理）
+## 8. MyPal 同步 API（`server/routes/mypal.js`）✅
+
+### POST /api/v1/mypal/sync ✅
+
+- **鉴权：** `authenticate` + `requireRole(['central','admin'])`
+- **配置：** 需 `MYPAL_ENABLED=1` 且 `MYPAL_API_BASE`、`MYPAL_APP_ID`、`MYPAL_APP_SECRET`；否则 **503** / `errorCode: MYPAL_DISABLED`
+- **请求体：** `{ "mode": "batch" | "weekly", "taskId"?: string, "queryDate"?: string }`（`mode` 默认 `batch`）
+- **详细说明：** [`06-MYPAL-INTEGRATION.md`](./06-MYPAL-INTEGRATION.md)
+
+---
+
+## 9. 废弃路由（待清理）
 
 以下路由不在新 Spec 中，后期清理（MVP 阶段可保留不调用）：
 

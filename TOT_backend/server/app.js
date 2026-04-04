@@ -17,6 +17,7 @@ const assignmentsRoutes   = require('./routes/assignments');
 const notificationsRoutes = require('./routes/notifications');
 const nudgeRoutes         = require('./routes/nudge');
 const dashboardRoutes     = require('./routes/dashboard');
+const mypalRoutes         = require('./routes/mypal');
 
 const MYPAL_MOCK = process.env.MYPAL_MOCK === '1';
 const mypalMockRoutes = MYPAL_MOCK ? require('./routes/mypalMock') : null;
@@ -43,6 +44,7 @@ app.use('/api/v1/assignments', assignmentsRoutes);
 app.use('/api/v1/events',      notificationsRoutes);
 app.use('/api/v1/nudges',      nudgeRoutes);
 app.use('/api/v1/dashboard',  dashboardRoutes);
+app.use('/api/v1/mypal',      mypalRoutes);
 
 // ─── MyPal（开发环境 Mock）──────────────────────────────────────────────────
 if (mypalMockRoutes) {

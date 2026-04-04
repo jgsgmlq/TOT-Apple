@@ -7,6 +7,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const { broadcastToUser, broadcastToUsers } = require('../ws/manager');
 const { batchCreateAssignments } = require('../services/assignmentBatch');
+const { getConfiguredPlatformColumns, computeAssignmentProgressStatus } = require('../services/assignmentProgress');
 
 const router = express.Router();
 
@@ -109,15 +110,6 @@ function mapPlatformToColumn(platform) {
     livebroadcast: 'live_broadcast_completed',
   };
   return dict[key] || null;
-}
-
-function getConfiguredPlatformColumns(task) {
-  const configured = [];
-  if (task.has_mypal === 1) configured.push('mypal_completed');
-  if (task.has_smartsell === 1) configured.push('smartsell_completed');
-  if (task.has_ai_demo === 1) configured.push('ai_demo_completed');
-  if (task.has_live_broadcast === 1) configured.push('live_broadcast_completed');
-  return configured;
 }
 
 // ─── GET /api/v1/assignments ──────────────────────────────────────────────────
@@ -445,11 +437,7 @@ router.put('/:id/status', authenticate, (req, res, next) => {
       );
 
       const updated = db.get('SELECT * FROM task_assignments WHERE id = ?', [current.id]);
-      const totalConfigured = configuredColumns.length;
-      const completedCount = configuredColumns.reduce((acc, col) => acc + (updated[col] === 1 ? 1 : 0), 0);
-      const progress = totalConfigured === 0 ? 0 : Math.round((completedCount / totalConfigured) * 100);
-      const nextStatus = completedCount === totalConfigured ? 'completed' : 'in_progress';
-      const completedAt = nextStatus === 'completed' ? now : null;
+      const { progress, nextStatus, completedAt } = computeAssignmentProgressStatus(updated, task, now);
 
       db.run(
         `UPDATE task_assignments

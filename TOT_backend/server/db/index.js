@@ -21,6 +21,7 @@ function getDb() {
     migrateEmployeesEmail(_db);
     ensureEmployeesEmailIndex(_db);
     ensureMypalLearningMockIndexes(_db);
+    migrateTasksMypalColumns(_db);
     migrateNudgeRecordsConstraints(_db);
   }
   return _db;
@@ -46,6 +47,18 @@ function ensureEmployeesEmailIndex(database) {
  * 已有库补齐：mypal_learning_mock 索引（开发联调表）。
  * schema.sql 使用 IF NOT EXISTS，这里做二次确保以覆盖旧库缺索引的情况。
  */
+/** 已有库补列：tasks.mypal_task_week / mypal_product_name（MyPal 对接） */
+function migrateTasksMypalColumns(database) {
+  const cols = database.prepare('PRAGMA table_info(tasks)').all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('mypal_task_week')) {
+    database.exec('ALTER TABLE tasks ADD COLUMN mypal_task_week TEXT');
+  }
+  if (!names.has('mypal_product_name')) {
+    database.exec('ALTER TABLE tasks ADD COLUMN mypal_product_name TEXT');
+  }
+}
+
 function ensureMypalLearningMockIndexes(database) {
   const row = database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mypal_learning_mock'")

@@ -15,7 +15,11 @@ server/services/
   stateSync.js            ← WebSocket 广播（✅ 已接入角色裁剪）
   nudgeService.js         ← 催办服务（✅ 已创建）
   notificationService.js  ← 通知服务（✅ 已创建）
-  assignmentService.js    ← 平台完成逻辑 + 进度计算（✅ 已创建）
+  assignmentProgress.js   ← 平台进度与 status 重算（✅ assignments + MyPal 同步共用）
+  mypalSign.js            ← MyPal HMAC-SHA256（✅）
+  mypalClient.js          ← MyPal HTTP 客户端（✅ getUserWeeklyStatus / getUserDatas）
+  mypalSyncService.js     ← 批量或单学员同步，回写 mypal_completed（✅）
+  mypalLink.js            ← seedId ↔ employees.email（✅）
 ```
 
 ---
@@ -484,11 +488,11 @@ static markRead(eventId, userId, source) {
 
 ---
 
-## 7. assignmentService.js（新增）
+## 7. assignmentService.js / assignmentProgress.js（命名说明）
 
-**文件：** `server/services/assignmentService.js`（已创建）
+**文件：** `server/services/assignmentProgress.js`（✅ 已实现；与 `routes/assignments.js` 及 MyPal 同步共用进度重算）
 
-**职责：** 处理 Assignment 状态转换和平台完成逻辑，是 `POST .../start` 和 `POST .../platforms/:p/complete` 路由的核心依赖。
+**职责：** 处理 Assignment 状态转换和平台完成逻辑，是 `PUT .../assignments/:id/status`（`start_task` / `complete_platform`）及 MyPal 回写的核心依赖。下文伪代码仍沿用旧文档中的 `assignmentService` 命名，便于对照 Spec。
 
 ### 7.1 进度计算（必读：03-PLATFORM-COMPLETION.md）
 
@@ -631,7 +635,7 @@ static completePlatform(assignmentId, platform, userId) {
 
 ### Gap 清单
 
-- [x] `assignmentService.js` 已创建
+- [x] `assignmentProgress.js` 已实现（原计划的 assignmentService 由路由内联 + 本模块承担）
 - [x] `POST /api/assignments/:id/start` 已接入服务
 - [x] `POST /api/assignments/:id/platforms/:p/complete` 已接入服务
 - [~] 路由层响应字段驼峰/蛇形一致性持续校准

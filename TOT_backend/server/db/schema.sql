@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   rtm_filter         TEXT,
   store_scope        TEXT NOT NULL DEFAULT 'all',
   auto_nudge_rules   TEXT,                          -- 自动催办规则 (JSON)
+  mypal_task_week    TEXT,                          -- MyPal queryDate，如 FY26Q2W1（has_mypal 时建议必填）
+  mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空，见对接文档）
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
