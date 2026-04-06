@@ -16,16 +16,12 @@ export type LoginBody = {
  * @description: 用户登录（ToT API: POST /api/v1/auth/login）
  */
 export function login(params: LoginBody) {
-  return Alova.Post<InResult>(
-    '/auth/login',
-    params,
-    {
-      meta: {
-        isReturnNativeResponse: true,
-        ignoreToken: true,
-      },
-    }
-  );
+  return Alova.Post<InResult>('/auth/login', params, {
+    meta: {
+      isReturnNativeResponse: true,
+      ignoreToken: true,
+    },
+  });
 }
 
 /**

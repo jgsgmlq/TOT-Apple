@@ -29,3 +29,10 @@ export const putAssignmentStatus = (
 ) => {
   return Alova.Put<AssignmentStatusResponse>(`/assignments/${assignmentId}/status`, body);
 };
+
+/**
+ * 记录任务详情已读（task_detail_open）
+ */
+export const postAssignmentViewed = (assignmentId: string) => {
+  return Alova.Post(`/assignments/${assignmentId}/viewed`);
+};

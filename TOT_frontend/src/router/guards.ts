@@ -45,7 +45,7 @@ async function bootstrapHqSession(
       role: 'central',
     });
   }
-  
+
   const routes = await asyncRouteStore.generateRoutes(fakeUser);
   routes.forEach((item) => {
     router.addRoute(item as unknown as RouteRecordRaw);
@@ -79,27 +79,30 @@ export function createRouterGuards(router: Router) {
     // ------------------------------------------
     // 核心拦截区 0: 总部入口识别与清理
     // ------------------------------------------
-    const isHqQuery =
-      to.query.entry === 'hq' || to.query.hq === '1' || to.query.hq === 'true';
+    const isHqQuery = to.query.entry === 'hq' || to.query.hq === '1' || to.query.hq === 'true';
 
     // 如果是通过特权入口进入，写入标记并立刻跳去中央面板
-    if ((isHqQuery && !to.path.startsWith('/employee')) || to.path === '/hq' || to.path === '/hq/') {
+    if (
+      (isHqQuery && !to.path.startsWith('/employee') && !to.path.startsWith('/executive')) ||
+      to.path === '/hq' ||
+      to.path === '/hq/'
+    ) {
       sessionStorage.setItem(HQ_ENTRY_KEY, '1');
       storage.clear(); // 清除可能存在的失效/店员 token
       userStore.setToken('');
-      
+
       // 如果目标已经是面板，不要死循环
       if (to.path === '/central/board') {
         next();
         return;
       }
-      
+
       next({ path: '/central/board', replace: true });
       return;
     }
 
     // 如果用户主动访问店员端，清除总部标记，避免冲突
-    if (to.path.startsWith('/employee')) {
+    if (to.path.startsWith('/employee') || to.path.startsWith('/executive')) {
       sessionStorage.removeItem(HQ_ENTRY_KEY);
     }
 
@@ -107,7 +110,11 @@ export function createRouterGuards(router: Router) {
     // 核心拦截区 1: 是否已标记为总部会话
     // 如果已经带有 HQ 标记，跳过所有的店员 token 和 login 检查
     // ------------------------------------------
-    if (sessionStorage.getItem(HQ_ENTRY_KEY) === '1' && !to.path.startsWith('/employee')) {
+    if (
+      sessionStorage.getItem(HQ_ENTRY_KEY) === '1' &&
+      !to.path.startsWith('/employee') &&
+      !to.path.startsWith('/executive')
+    ) {
       if (!asyncRouteStore.getIsDynamicRouteAdded) {
         await bootstrapHqSession(router, asyncRouteStore, userStore);
         // 动态 addRoute 后必须重放当前导航，否则仍按「无匹配路由」解析，页面空白
@@ -172,6 +179,67 @@ export function createRouterGuards(router: Router) {
     }
 
     // ------------------------------------------
+
+    // ------------------------------------------
+    // 核心拦截区 3: 主管端逻辑
+    // ------------------------------------------
+    if (to.path === '/executive/login') {
+      if (token) {
+        if (!userStore.info.role) {
+          try {
+            await userStore.getInfo();
+          } catch {
+            storage.clear();
+            next();
+            return;
+          }
+        }
+        if (
+          userStore.info.role === 'executive' ||
+          userStore.info.role === 'central' ||
+          userStore.info.role === 'admin'
+        ) {
+          next('/executive');
+          return;
+        }
+        storage.clear();
+        userStore.setToken('');
+        next();
+        return;
+      }
+      next();
+      return;
+    }
+
+    if (to.path.startsWith('/executive') && to.path !== '/executive/login') {
+      if (!token) {
+        next({ path: '/executive/login', query: { redirect: to.fullPath } });
+        return;
+      }
+      if (!userStore.info.role) {
+        try {
+          await userStore.getInfo();
+        } catch {
+          storage.clear();
+          next({ path: '/executive/login', query: { redirect: to.fullPath } });
+          return;
+        }
+      }
+      if (
+        userStore.info.role !== 'executive' &&
+        userStore.info.role !== 'central' &&
+        userStore.info.role !== 'admin'
+      ) {
+        storage.clear();
+        userStore.setToken('');
+        next({ path: '/executive/login', replace: true });
+        return;
+      }
+      next();
+      return;
+    }
+
+    // ------------------------------------------
     // 全局未登录拦截兜底
     // ------------------------------------------
     if (!token) {
@@ -179,7 +247,7 @@ export function createRouterGuards(router: Router) {
         next();
         return;
       }
-      
+
       // 对于访问中央管理端的请求，如果没有 token（且没有 HQ_ENTRY_KEY，因为前面已经处理了），
       // 为了安全，应该引导至总部登录（当前项目总部入口即为 /hq 自动静默，所以跳 /hq 重新跑静默登录流程）
       if (to.path.startsWith('/central')) {
@@ -201,6 +269,11 @@ export function createRouterGuards(router: Router) {
     if (userStore.info.role === 'employee' && !to.path.startsWith('/employee')) {
       // 员工试图越权访问非员工页面
       next('/employee');
+      return;
+    }
+
+    if (userStore.info.role === 'executive' && !to.path.startsWith('/executive')) {
+      next('/executive');
       return;
     }
 

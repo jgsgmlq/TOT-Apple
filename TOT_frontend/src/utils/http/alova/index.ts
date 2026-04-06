@@ -92,12 +92,12 @@ export const Alova = createAlova({
           window.location.href = targetPath;
         }
       };
-      
+
       // 兼容后端返回 200 和 201 (Created) 作为成功状态
       if (ResultEnum.SUCCESS === code || code === 201) {
         return payload;
       }
-      
+
       // 需要登录
       if (code === 912 || code === 401) {
         Message?.warning('登录身份已失效，正在跳转登录页');

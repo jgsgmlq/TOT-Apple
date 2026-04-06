@@ -3,9 +3,9 @@
     <div class="emp-login__card">
       <div class="emp-login__brand">
         <img :src="websiteConfig.loginImage" alt="" class="emp-login__logo" />
-        <h1 class="emp-login__title">店员登录</h1>
+        <h1 class="emp-login__title">TOT-店员登录</h1>
         <p class="emp-login__sub">请使用官方员工邮箱登录</p>
-        
+
         <!-- 假数据提醒小字 -->
         <div class="emp-login__mock">
           <p>温馨提示：请使用下发至您 MyPal 的工作邮箱登录测试：</p>
@@ -14,7 +14,7 @@
           <p>• Education 店员：e019@mypal.seed.local</p>
         </div>
       </div>
-      
+
       <n-form ref="formRef" :model="form" :rules="rules" size="large" class="emp-login__form">
         <n-form-item path="email">
           <n-input
@@ -27,7 +27,13 @@
             @keyup.enter="handleSubmit"
           />
         </n-form-item>
-        <n-button type="primary" block :loading="loading" class="emp-login__btn" @click="handleSubmit">
+        <n-button
+          type="primary"
+          block
+          :loading="loading"
+          class="emp-login__btn"
+          @click="handleSubmit"
+        >
           登录
         </n-button>
       </n-form>

@@ -81,7 +81,7 @@ export const useUserStore = defineStore({
         const response = await loginApi({ username: username, password: realPassword }).send();
         const { code, message } = response;
         const payload = (response as any).data ?? (response as any).result;
-        
+
         if (code === ResultEnum.SUCCESS && payload?.token) {
           const ex = 7 * 24 * 60 * 60;
           const { token, userInfo } = payload;
@@ -142,7 +142,7 @@ export const useUserStore = defineStore({
         createdAt?: string;
         email?: string;
       };
-      
+
       if (!user?.role) {
         throw new Error('getInfo: invalid user payload');
       }

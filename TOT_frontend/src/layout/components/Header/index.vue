@@ -374,7 +374,7 @@
         display: flex;
         align-items: center;
         height: 64px;
-        
+
         /* 强制头像背景为白色，不要灰色 */
         :deep(.n-avatar) {
           background-color: #ffffff;
@@ -440,7 +440,8 @@
         background: transparent; /* 取消右侧头像区域悬浮时的灰色背景 */
         cursor: default;
       }
-    }  }
+    }
+  }
 
   .layout-header-fix {
     position: fixed;
