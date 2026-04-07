@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.4.7（2026-04-07）
+
+- **§2.9 自动催办扫描**：补充**服务端定时调度**说明（`server/jobs/autoNudgeScheduler.js`，默认 1 小时）；环境变量 `AUTO_NUDGE_SCHEDULER`、`AUTO_NUDGE_INTERVAL_MS`；与手动 `POST /tasks/{id}/auto-nudge` 的关系。
+
 ### v1.4.5（2026-04-03）
 
 - **任务创建**：新增 `startAt`（开始时间）与 `passScore`（达标分数）字段。
@@ -450,12 +454,26 @@
 }
 ```
 
-### 2.9 触发自动催办扫描 (模拟定时任务)
+### 2.9 触发自动催办扫描
+
+自动预警的**业务逻辑**（读 `auto_nudge_rules`、命中规则、调用 `generate_nudge_message`、写 `notification_events` / `nudge_records`、WebSocket `nudge_sent`）在服务端 `evaluateAndTriggerAutoNudges` 中统一实现。触发方式有两种：
+
+#### 2.9.1 服务端定时调度（已实现）
+
+- **行为**：HTTP 服务进程启动后挂载 `server/jobs/autoNudgeScheduler.js`；按固定间隔查询所有 **`status = dispatched`** 且 **`auto_nudge_rules` 非空** 的任务，对每个任务 **ID** 调用与下述手动接口**相同**的扫描逻辑（即 `evaluateAndTriggerAutoNudges`）。
+- **默认间隔**：**1 小时**（`3600000` ms）。
+- **环境变量**（仓库根目录 `.env`，由 `server/app.js` 加载）：
+  | 变量 | 说明 |
+  |------|------|
+  | `AUTO_NUDGE_SCHEDULER` | 设为 `0` 时**不启动**定时调度（仅保留手动接口） |
+  | `AUTO_NUDGE_INTERVAL_MS` | 自定义扫描间隔，单位为**毫秒**；未设置则默认 1 小时 |
+
+#### 2.9.2 手动触发单任务扫描（本接口）
 
 - **接口路径**：`/tasks/{id}/auto-nudge`
 - **请求方式**：`POST`
 - **权限要求**：`central`, `admin`
-- **接口说明**：读取该任务配置的 `auto_nudge_rules`（掉队预警、起步异常预警、临期危机预警），扫描所有进行中的员工进度。对命中规则的员工，自动调用 `generate_nudge_message` Skill 生成话术，并产生通知与 `nudge_records` 记录。
+- **接口说明**：对**指定任务 ID** 立即执行一轮与定时任务**相同**的扫描（无需等待下一个调度周期）。读取该任务配置的 `auto_nudge_rules`（掉队预警、起步异常预警、临期危机预警），扫描所有进行中的员工进度。对命中规则的员工，自动调用 `generate_nudge_message` Skill 生成话术，并产生通知与 `nudge_records` 记录。
 - **请求参数**：无 Body
 - **返回参数**：
 

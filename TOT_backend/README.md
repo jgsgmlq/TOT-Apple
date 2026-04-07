@@ -32,6 +32,7 @@
 | **催办** | 总部/店长按员工/门店/区域维度发起黄色/红色催办 |
 | **实时推送** | WebSocket 向员工和店长推送任务变更、催办、完成事件 |
 | **看板聚合** | 总部概览 KPI、RTM 热力图、门店排行、预警列表、门店下钻 |
+| **自动预警调度** | 服务端按间隔扫描已配置 `auto_nudge_rules` 的下发中任务；可调 `AUTO_NUDGE_INTERVAL_MS`，`AUTO_NUDGE_SCHEDULER=0` 关闭；详见 `docs/specs/04-API-SPEC.md` §2.9 |
 
 ---
 
@@ -64,7 +65,10 @@ node db/seed.js
 #   - 根目录 `.env` 里设置 `MYPAL_MOCK=1`
 #   - 不开启时，`GET /api/v1/mypal/mock/learning` 将返回 404
 #
-# 4. 启动服务（默认 PORT=3000）
+# 4. 自动预警定时调度（可选，见根目录 .env.example）
+#    AUTO_NUDGE_SCHEDULER=0 关闭；AUTO_NUDGE_INTERVAL_MS 调整间隔（毫秒），默认 1 小时
+#
+# 5. 启动服务（默认 PORT=3000）
 npm start
 
 # 开发模式（文件变更自动重启）

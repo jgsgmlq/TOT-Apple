@@ -8,72 +8,49 @@ const JWT_SECRET = process.env.JWT_SECRET || 'mvp-training-secret-2026';
 // Map<employeeId, Set<WebSocket>>
 const clients = new Map();
 
-/** 总部/管理端连接（JWT 无 employeeId，仅 central/admin/executive） */
-const hqSockets = new Set();
-
-const HQ_ROLES = new Set(['central', 'admin', 'executive']);
-
 function setupWebSocket(httpServer) {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost');
     const token = url.searchParams.get('token');
+    let employeeId = null;
 
-    if (!token) {
-      ws.close(4001, 'Missing token');
-      return;
-    }
-
-    let decoded;
-    try {
-      decoded = jwt.verify(token, JWT_SECRET);
-    } catch (_) {
-      ws.close(4001, 'Invalid token');
-      return;
-    }
-
-    const employeeId = decoded.employeeId || null;
-    const role = decoded.role || '';
-
-    if (employeeId) {
-      if (!clients.has(employeeId)) {
-        clients.set(employeeId, new Set());
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        employeeId = decoded.employeeId || null;
+      } catch (_) {
+        ws.close(4001, 'Invalid token');
+        return;
       }
-      clients.get(employeeId).add(ws);
+    }
 
-      ws.send(JSON.stringify({ event: 'connected', employeeId }));
-
-      ws.on('close', () => {
-        const set = clients.get(employeeId);
-        if (set) {
-          set.delete(ws);
-          if (set.size === 0) clients.delete(employeeId);
-        }
-      });
-
-      ws.on('error', () => {
-        const set = clients.get(employeeId);
-        if (set) set.delete(ws);
-      });
+    // central/admin/executive 没有 employeeId，暂不支持 WS 推送（可轮询）
+    if (!employeeId) {
+      ws.close(4002, 'No employeeId in token');
       return;
     }
 
-    if (HQ_ROLES.has(role)) {
-      hqSockets.add(ws);
-      ws.send(JSON.stringify({ event: 'connected', role: 'hq' }));
-
-      ws.on('close', () => {
-        hqSockets.delete(ws);
-      });
-
-      ws.on('error', () => {
-        hqSockets.delete(ws);
-      });
-      return;
+    if (!clients.has(employeeId)) {
+      clients.set(employeeId, new Set());
     }
+    clients.get(employeeId).add(ws);
 
-    ws.close(4002, 'No employeeId in token');
+    ws.send(JSON.stringify({ event: 'connected', employeeId }));
+
+    ws.on('close', () => {
+      const set = clients.get(employeeId);
+      if (set) {
+        set.delete(ws);
+        if (set.size === 0) clients.delete(employeeId);
+      }
+    });
+
+    ws.on('error', () => {
+      const set = clients.get(employeeId);
+      if (set) set.delete(ws);
+    });
   });
 
   return wss;
@@ -106,17 +83,4 @@ function broadcastToUsers(employeeIds, payload) {
   }
 }
 
-/**
- * 向所有已连接的总部/管理端 WebSocket 广播（如 task_updated 同步看板）
- * @param {object} payload { event: string, data: object }
- */
-function broadcastToHq(payload) {
-  const msg = JSON.stringify(payload);
-  for (const ws of hqSockets) {
-    if (ws.readyState === 1 /* OPEN */) {
-      try { ws.send(msg); } catch (_) { /* ignore */ }
-    }
-  }
-}
-
-module.exports = { setupWebSocket, broadcastToUser, broadcastToUsers, broadcastToHq };
+module.exports = { setupWebSocket, broadcastToUser, broadcastToUsers };

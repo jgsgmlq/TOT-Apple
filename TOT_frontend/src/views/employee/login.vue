@@ -11,7 +11,9 @@
           <p>温馨提示：请使用下发至您 MyPal 的工作邮箱登录测试：</p>
           <p>• Monobrand 店员：e001@mypal.seed.local</p>
           <p>• Multibrand 店员：e007@mypal.seed.local</p>
+          <p>• Carrier 店员：e013@mypal.seed.local</p>
           <p>• Education 店员：e019@mypal.seed.local</p>
+          <p>• Enterprise 店员：e025@mypal.seed.local</p>
         </div>
       </div>
 

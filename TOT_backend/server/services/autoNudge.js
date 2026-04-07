@@ -6,33 +6,6 @@ const mainAgent = require('../agent');
 const { broadcastToUsers } = require('../ws/manager');
 
 /**
- * 总部端表单保存的扁平 JSON → autoNudge 内部嵌套结构；兼容旧版 progressLag / startDelay / deadlineCrisis。
- */
-function normalizeAutoNudgeRules(raw) {
-  if (!raw || typeof raw !== 'object') return {};
-  const hasFlat =
-    raw.laggingLifestyle !== undefined ||
-    raw.laggingMono !== undefined ||
-    raw.startDelayPercent !== undefined ||
-    raw.deadlineCrisisHours !== undefined ||
-    raw.deadlineCrisisHoursSecondary !== undefined;
-  if (hasFlat) {
-    return {
-      progressLag: {
-        lifestyle: Number(raw.laggingLifestyle) || 3,
-        mono: Number(raw.laggingMono) || 1,
-      },
-      startDelay: Number(raw.startDelayPercent) || 50,
-      deadlineCrisis: {
-        p0: Number(raw.deadlineCrisisHours) || 24,
-        p1: Number(raw.deadlineCrisisHoursSecondary) || 48,
-      },
-    };
-  }
-  return { ...raw };
-}
-
-/**
  * 扫描并执行任务的自动预警与催办规则
  * @param {string} taskId 任务ID
  * @returns {Promise<Object>} 统计结果
@@ -44,19 +17,18 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     return { success: false, reason: 'Task not found or not dispatched' };
   }
 
-  let rawRules = {};
+  let rules = {};
   if (task.auto_nudge_rules) {
-    try { rawRules = JSON.parse(task.auto_nudge_rules); } catch (e) { /* ignore */ }
+    try { rules = JSON.parse(task.auto_nudge_rules); } catch (e) { /* ignore */ }
   }
-  const rules = normalizeAutoNudgeRules(rawRules);
 
-  // 2. 时间计算（任务窗口：start_at → ddl_at，与总部「任务时间」一致）
+  // 2. 时间计算
   const now = Date.now();
-  const windowStart = new Date(task.start_at || task.created_at).getTime();
+  const createdAt = new Date(task.created_at).getTime();
   const ddlAt = new Date(task.ddl_at).getTime();
-
-  const totalDuration = ddlAt - windowStart;
-  const passedDuration = now - windowStart;
+  
+  const totalDuration = ddlAt - createdAt;
+  const passedDuration = now - createdAt;
   const passedPercent = totalDuration > 0 ? (passedDuration / totalDuration) * 100 : 100;
   const hoursLeft = (ddlAt - now) / (1000 * 60 * 60);
 
@@ -69,7 +41,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   `, [taskId]);
 
   if (assignments.length === 0) {
-    return { success: true, nudgedCount: 0, reason: 'All completed or no assignments' };
+    return { success: true, nudgedUsers: 0, reason: 'All completed or no assignments' };
   }
 
   const triggeredUsers = []; // { userId, severity, ruleType }
@@ -172,10 +144,11 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     // 记录发送
     const eventId = nanoid();
     const eventType = target.severity === 'red' ? 'nudge_red' : 'nudge_yellow';
-    let nudgeRecordId;
 
     db.transaction(() => {
-      nudgeRecordId = nanoid();
+      // 这里不写 nudge_records 或者单独写一条系统级 record
+      // 为了与现有的兼容，写一条单人的 nudge_records
+      const nudgeRecordId = nanoid();
       db.run(
         `INSERT INTO nudge_records (id, task_id, target_type, target_id, initiator_id, severity, notification_event_ids, created_at)
          VALUES (?, ?, 'employee', ?, ?, ?, ?, ?)`,
@@ -195,14 +168,12 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     broadcastToUsers([target.userId], {
       event: 'nudge_sent',
       data: {
-        eventId,
         taskId,
-        nudgeRecordId,
         severity: target.severity,
         eventType,
-        content,
-        ruleType: target.ruleType,
-      },
+        content: content, // 把生成的文案发下去
+        ruleType: target.ruleType
+      }
     });
 
     nudgedCount++;

@@ -7,7 +7,7 @@
         <p class="desc">集中监控和管理总部下发的所有终端任务，实时追踪各门店执行进度与关键指标。</p>
       </div>
       <div class="board-header-actions">
-        <n-space>
+        <n-space align="center">
           <n-button type="primary" secondary @click="openDispatchedTasksDialog">
             <template #icon>
               <n-icon><UnorderedListOutlined /></n-icon>
@@ -20,9 +20,129 @@
             </template>
             任务预警规则
           </n-button>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button
+                quaternary
+                circle
+                class="hq-ai-robot-btn"
+                aria-label="AI洞察"
+                @click="openAiInsightWithAnalysis"
+              >
+                <img :src="aiWatchIcon" alt="" class="hq-ai-robot-img" />
+              </n-button>
+            </template>
+            AI洞察
+          </n-tooltip>
         </n-space>
       </div>
     </header>
+
+    <n-drawer
+      v-model:show="showAiInsightDrawer"
+      :width="472"
+      placement="right"
+      :trap-focus="false"
+      content-class="hq-ai-floating-panel"
+      class="hq-ai-insight-drawer"
+    >
+      <n-drawer-content
+        closable
+        :native-scrollbar="true"
+        class="hq-ai-drawer-content"
+        body-class="hq-ai-drawer-body"
+        body-content-class="hq-ai-drawer-body-inner"
+        :body-content-style="{
+          padding: 0,
+          height: '100%',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+        }"
+        header-class="hq-ai-drawer-header-wrap"
+      >
+        <template #header>
+          <div class="hq-ai-drawer-header">
+            <div class="hq-ai-drawer-header-brand">
+              <div class="hq-ai-drawer-header-avatar">
+                <n-icon size="28" color="#2563eb" class="hq-ai-header-icon"><RobotOutlined /></n-icon>
+              </div>
+              <div class="hq-ai-drawer-header-titles">
+                <span class="hq-ai-drawer-header-title">AI 洞察</span>
+                <span class="hq-ai-drawer-header-sub">看板数据 · 智能解读</span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <div class="hq-ai-insight-body">
+          <div ref="aiInsightChatRef" class="hq-ai-insight-messages custom-scroll-ai">
+            <div v-if="aiInsightMessages.length === 0" class="hq-ai-insight-empty">
+              <div class="hq-ai-insight-empty-card">
+                <p class="hq-ai-insight-kicker">智能助手</p>
+                <h3 class="hq-ai-insight-hi">Hi，{{ hqDisplayName }}</h3>
+                <p class="hq-ai-insight-desc">
+                  基于当前看板，可解读完成率、区域对比与链路触达；试试下方快捷问题。
+                </p>
+                <div class="hq-ai-insight-presets">
+                  <button
+                    v-for="(q, i) in aiInsightPresets"
+                    :key="i"
+                    type="button"
+                    class="hq-ai-preset-chip"
+                    @click="triggerPresetQuestion(q)"
+                  >
+                    {{ q }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div
+              v-for="(msg, idx) in aiInsightMessages"
+              :key="idx"
+              class="hq-ai-msg-row"
+              :class="msg.role === 'user' ? 'is-user' : 'is-ai'"
+            >
+              <div class="hq-ai-msg-avatar">
+                <template v-if="msg.role === 'user'">
+                  <div class="hq-ai-user-avatar">{{ hqAvatarLetter }}</div>
+                </template>
+                <template v-else>
+                  <div class="hq-ai-bot-icon">
+                    <n-icon size="18" color="#2563eb"><RobotOutlined /></n-icon>
+                  </div>
+                </template>
+              </div>
+              <div class="hq-ai-msg-bubble">{{ msg.content }}</div>
+            </div>
+          </div>
+
+          <div class="hq-ai-insight-footer">
+            <div class="hq-ai-insight-composer">
+              <n-input
+                v-model:value="aiInsightInput"
+                type="textarea"
+                placeholder="问问当前任务或指标…"
+                :autosize="{ minRows: 2, maxRows: 5 }"
+                class="hq-ai-insight-input"
+                @keydown="onAiInsightKeydown"
+              />
+              <n-button
+                type="primary"
+                round
+                :disabled="!aiInsightInput.trim()"
+                class="hq-ai-insight-send"
+                @click="handleAiInsightSend"
+              >
+                发送
+              </n-button>
+            </div>
+            <p class="hq-ai-insight-tip">AI 生成内容仅供参考，请结合业务实际情况判断。</p>
+          </div>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
 
     <!-- 已下发任务列表（瀑布流） -->
     <n-modal
@@ -592,7 +712,10 @@
     UnorderedListOutlined,
     DownOutlined,
     AlertOutlined,
+    RobotOutlined,
   } from '@vicons/antd';
+  import aiWatchIcon from '@/assets/icons/AI_watch.png';
+  import executiveAIIcon from '@/assets/images/ExecutiveAI.png';
   import { getTaskList, getTaskDetail, deleteTask, triggerTaskAutoNudge } from '@/api/task';
   import {
     getDashboardOverview,
@@ -609,6 +732,246 @@
   const router = useRouter();
   const userStore = useUserStore();
   const { apiUrl } = useGlobSetting();
+
+  const showAiInsightDrawer = ref(false);
+  const aiInsightInput = ref('');
+  const aiInsightChatRef = ref<HTMLElement | null>(null);
+  interface AiInsightMsg {
+    role: 'user' | 'ai';
+    content: string;
+  }
+  const aiInsightMessages = ref<AiInsightMsg[]>([]);
+  const aiInsightPresets = [
+    '当前选中任务完成率如何？',
+    '哪些区域落后需要关注？',
+    '概述一下链路触达与读取情况',
+  ];
+
+  const hqDisplayName = computed(() => {
+    const u = userStore.getUserInfo;
+    return u?.username || u?.email || '总部';
+  });
+  const hqAvatarLetter = computed(() => {
+    const n = hqDisplayName.value;
+    return n ? Array.from(n)[0].toUpperCase() : '总';
+  });
+
+  function scrollAiInsightToBottom() {
+    nextTick(() => {
+      const el = aiInsightChatRef.value;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }
+
+  function fillAiInsightInput(text: string) {
+    aiInsightInput.value = text;
+  }
+
+  /** 点击快捷问题：直接发送并获取回复 */
+  function triggerPresetQuestion(text: string) {
+    aiInsightMessages.value.push({ role: 'user', content: text });
+    scrollAiInsightToBottom();
+    setTimeout(() => {
+      const reply = generateMockFollowUpReply(text);
+      aiInsightMessages.value.push({
+        role: 'ai',
+        content: reply,
+      });
+      scrollAiInsightToBottom();
+    }, 400);
+  }
+
+  function onAiInsightKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleAiInsightSend();
+    }
+  }
+
+  /** 生成 Mock 任务分析报告（基于当前 activeTask 数据） */
+  function generateMockTaskAnalysis(): string {
+    const t = activeTask.value;
+    if (!t) {
+      return '暂无选中任务，请先在左侧任务列表中选择一个任务，我将为你分析其执行数据。';
+    }
+    const name = t.name || '该任务';
+    const overallRate = t.northStar?.overallRate ?? '—';
+    const onTimeRate = t.northStar?.onTimeRate ?? '—';
+    const avgTime = t.northStar?.avgTime ?? '—';
+    const total = t.overviewSummary?.totalAssignments ?? 0;
+    const completed = t.overviewSummary?.completedCount ?? 0;
+    const overdue = t.overviewSummary?.overdueCount ?? 0;
+    const pending = t.overviewSummary?.pendingCount ?? 0;
+    const reachRate = t.linkData?.reachRate ?? 100;
+    const readRate = t.linkData?.readRate ?? 0;
+
+    // 找出落后的区域（mock 分析）
+    let laggingAreas = '暂无';
+    if (t.rtmData && t.rtmData.length > 0) {
+      const sorted = [...t.rtmData].sort((a: any, b: any) => (a.rate || 0) - (b.rate || 0));
+      const bottom3 = sorted.slice(0, 3).filter((x: any) => x.rate < 60);
+      if (bottom3.length > 0) {
+        laggingAreas = bottom3.map((x: any) => `${x.name}(${x.rate}%)`).join('、');
+      }
+    }
+
+    // 风险评级
+    let riskLevel = '正常';
+    if (overdue > 0) riskLevel = '⚠️ 有风险';
+    if ((overallRate as number) < 50 && overdue > 5) riskLevel = '🔴 高风险';
+
+    return `【${name}】执行分析报告
+
+📊 整体进度
+• 完成率：${overallRate}%（按时完成率 ${onTimeRate}%）
+• 人均耗时：${avgTime} 小时
+• 总人数：${total} 人｜已完成：${completed} 人｜逾期：${overdue} 人｜待开始：${pending} 人
+
+📡 链路触达
+• 推送覆盖率：${reachRate}%｜已读率：${readRate}%
+
+📍 区域表现（需关注）
+• 落后区域：${laggingAreas}
+
+🎯 风险评级：${riskLevel}
+
+💡 建议行动
+1. ${overdue > 0 ? `重点关注 ${overdue} 位逾期学员，建议手动催办或调整截止时间` : '进度正常，继续保持'}
+2. ${readRate < 80 ? '读取率偏低，建议二次推送或短信提醒' : '读取率良好'}
+3. ${laggingAreas !== '暂无' ? `针对 ${laggingAreas} 区域启动专项督导` : '各区域进度均衡'}
+
+如需更详细分析，可直接追问，如「哪些门店最落后？」或「导出逾期名单」等。`;
+  }
+
+  /** 打开 AI 洞察并自动生成分析报告 */
+  function openAiInsightWithAnalysis() {
+    showAiInsightDrawer.value = true;
+    // 清空历史，重新开始分析
+    aiInsightMessages.value = [];
+    // 延迟一下让抽屉动画完成再显示分析
+    setTimeout(() => {
+      const analysis = generateMockTaskAnalysis();
+      aiInsightMessages.value.push({
+        role: 'ai',
+        content: analysis,
+      });
+      scrollAiInsightToBottom();
+    }, 300);
+  }
+
+  /** 追问：根据用户输入生成 mock 回复 */
+  function generateMockFollowUpReply(question: string): string {
+    const t = activeTask.value;
+    const q = question.toLowerCase();
+
+    // 识别关键词并返回相应的 mock 数据
+    if (q.includes('门店') || q.includes('store') || q.includes('排名')) {
+      return `门店完成率排名（Top 5 / Bottom 5）：
+
+🏆 领先门店：
+1. Apple 南京东路 - 98%
+2. Apple 三里屯 - 96%
+3. Apple 杭州西湖 - 95%
+4. Apple 成都太古里 - 94%
+5. Apple 深圳万象城 - 93%
+
+⚠️ 落后门店（需关注）：
+1. Apple 某三线城市店 - 23%
+2. Apple 某郊区店 - 28%
+3. Apple 某新开店 - 31%
+4. Apple 某维修中心 - 35%
+5. Apple 某授权店 - 38%
+
+建议：对 Bottom 5 门店启动一对一督导，了解是否存在人员不足或系统使用障碍。`;
+    }
+
+    if (q.includes('逾期') || q.includes('名单') || q.includes('导出')) {
+      return `逾期学员清单（${t?.overviewSummary?.overdueCount ?? 0} 人）：
+
+已逾期 > 24h：
+• 张三（Apple 某三线城市店）- 逾期 3 天
+• 李四（Apple 某郊区店）- 逾期 2 天
+• 王五（Apple 某新开店）- 逾期 1 天
+
+即将逾期（< 12h）：
+• 赵六、孙七、周八...等 12 人
+
+📥 导出功能：如需完整名单 Excel，请告诉我邮箱，系统将自动发送（演示模式暂不支持真实导出）。`;
+    }
+
+    if (q.includes('区域') || q.includes('rtm') || q.includes('华东') || q.includes('华北')) {
+      return `区域完成率对比：
+
+华东区：76%（领先，但环比下降 5%）
+华北区：68%（稳定，北京门店表现突出）
+华南区：82%（最优，深圳/广州双核驱动）
+西南区：45%（⚠️ 落后，成都一枝独秀但周边偏弱）
+西北区：38%（🔴 严重落后，需重点关注）
+
+区域差距分析：
+• 最大差距：44 个百分点（华南 vs 西北）
+• 建议：西北区启动「一对一帮扶计划」，复制华南经验。`;
+    }
+
+    if (q.includes('时间') || q.includes('趋势') || q.includes('每天') || q.includes('进度')) {
+      return `近 7 日完成趋势：
+
+04/01：+12 人完成（启动日，集中学习）
+04/02：+28 人完成（高峰，工作日空闲时段）
+04/03：+15 人完成（回落，正常波动）
+04/04：+8 人完成（清明假期前）
+04/05：+5 人完成（假期，预期内低谷）
+04/06：+18 人完成（假期后反弹）
+04/07：+22 人完成（今日，冲刺迹象）
+
+📈 预测：按当前趋势，预计 04/10 可达 85% 完成率，04/12 接近 95%。建议 04/10 前集中资源推动剩余 35% 学员。`;
+    }
+
+    if (q.includes('原因') || q.includes('为什么') || q.includes('分析')) {
+      return `进度分析（基于当前数据推测）：
+
+主要阻碍因素：
+1. 时间因素：40% 逾期集中在周末/节假日，门店轮班导致学习时间碎片化
+2. 系统门槛：15% 学员反馈「AI Coach 登录异常」（IT 已修复，需二次通知）
+3. 内容难度：SmartSell 模块平均耗时 2.5h（预期 1.5h），内容偏长
+4. 督导断层：西北区缺乏专职培训督导，依赖店长自发推动
+
+优化建议：
+• 拆分模块：将 SmartSell 拆分为 3 个 45 分钟小节
+• 错峰学习：针对轮班门店开放「早班前 30 分钟」集中学习时段
+• 补推机制：对系统故障期间受影响学员自动延长 24h 并重新推送`;
+    }
+
+    // 默认回复
+    return `已收到你的追问：「${question}」
+
+我已在分析「${t?.name || '当前任务'}」的相关数据。由于当前为演示模式，我基于看板数据生成了模拟解读。
+
+你可以尝试询问以下方向获取更详细分析：
+• 「哪些门店最落后？」 - 查看门店排名
+• 「导出逾期名单」 - 查看逾期学员清单
+• 「区域对比」 - 查看各 RTM 区域表现
+• 「近7日趋势」 - 查看完成趋势
+• 「为什么进度慢」 - 查看原因分析
+
+如需真实 AI 分析能力，后续将对接大模型 API。`;
+  }
+
+  function handleAiInsightSend() {
+    const text = aiInsightInput.value.trim();
+    if (!text) return;
+    aiInsightMessages.value.push({ role: 'user', content: text });
+    aiInsightInput.value = '';
+    scrollAiInsightToBottom();
+    setTimeout(() => {
+      const reply = generateMockFollowUpReply(text);
+      aiInsightMessages.value.push({
+        role: 'ai',
+        content: reply,
+      });
+      scrollAiInsightToBottom();
+    }, 600);
+  }
 
   /** 总部看板：已下发任务 PATCH 后 WS 推送 task_updated，同步列表/详情中的 ddl 与预警规则 */
   let hqWs: WebSocket | null = null;
@@ -1128,8 +1491,8 @@
             barMaxWidth: 28,
             itemStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: '#60a5fa' },
-                { offset: 1, color: '#2563eb' },
+                { offset: 0, color: '#2997ff' },
+                { offset: 1, color: '#0071e3' },
               ]),
               borderRadius: [6, 6, 0, 0],
             },
@@ -1142,18 +1505,18 @@
             symbol: 'circle',
             symbolSize: 8,
             showSymbol: false,
-            itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
+            itemStyle: { color: '#0071e3', borderColor: '#ffffff', borderWidth: 2 },
             lineStyle: {
               width: 3,
-              color: '#1e40af',
-              shadowColor: 'rgba(30, 64, 175, 0.25)',
+              color: '#0071e3',
+              shadowColor: 'rgba(0, 113, 227, 0.25)',
               shadowBlur: 10,
               shadowOffsetY: 6,
             },
             areaStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
-                { offset: 1, color: 'rgba(30, 64, 175, 0.01)' },
+                { offset: 0, color: 'rgba(0, 113, 227, 0.15)' },
+                { offset: 1, color: 'rgba(0, 113, 227, 0.01)' },
               ]),
             },
             data: cumulativeData,
@@ -1173,8 +1536,8 @@
             barMaxWidth: 28,
             itemStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: '#60a5fa' },
-                { offset: 1, color: '#2563eb' },
+                { offset: 0, color: '#2997ff' },
+                { offset: 1, color: '#0071e3' },
               ]),
               borderRadius: [6, 6, 0, 0],
             },
@@ -1187,18 +1550,18 @@
             symbol: 'circle',
             symbolSize: 8,
             showSymbol: false,
-            itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
+            itemStyle: { color: '#0071e3', borderColor: '#ffffff', borderWidth: 2 },
             lineStyle: {
               width: 3,
-              color: '#1e40af',
-              shadowColor: 'rgba(30, 64, 175, 0.25)',
+              color: '#0071e3',
+              shadowColor: 'rgba(0, 113, 227, 0.25)',
               shadowBlur: 10,
               shadowOffsetY: 6,
             },
             areaStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
-                { offset: 1, color: 'rgba(30, 64, 175, 0.01)' },
+                { offset: 0, color: 'rgba(0, 113, 227, 0.15)' },
+                { offset: 1, color: 'rgba(0, 113, 227, 0.01)' },
               ]),
             },
             data: cumulativeData,
@@ -1233,8 +1596,8 @@
           barMaxWidth: 28,
           itemStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: '#60a5fa' },
-              { offset: 1, color: '#2563eb' },
+              { offset: 0, color: '#2997ff' },
+              { offset: 1, color: '#0071e3' },
             ]),
             borderRadius: [6, 6, 0, 0],
           },
@@ -1247,18 +1610,18 @@
           symbol: 'circle',
           symbolSize: 8,
           showSymbol: false,
-          itemStyle: { color: '#1e40af', borderColor: '#ffffff', borderWidth: 2 },
+          itemStyle: { color: '#0071e3', borderColor: '#ffffff', borderWidth: 2 },
           lineStyle: {
             width: 3,
-            color: '#1e40af',
-            shadowColor: 'rgba(30, 64, 175, 0.25)',
+            color: '#0071e3',
+            shadowColor: 'rgba(0, 113, 227, 0.25)',
             shadowBlur: 10,
             shadowOffsetY: 6,
           },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(30, 64, 175, 0.15)' },
-              { offset: 1, color: 'rgba(30, 64, 175, 0.01)' },
+              { offset: 0, color: 'rgba(0, 113, 227, 0.15)' },
+              { offset: 1, color: 'rgba(0, 113, 227, 0.01)' },
             ]),
           },
           data: hourlyCumulative,
@@ -1363,15 +1726,14 @@
   }
 
   .hq-board {
-    padding: 24px;
+    padding: 32px 40px;
     min-height: 100%;
-    background-color: #f0f2f5;
-    font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, Arial, 'Hiragino Sans GB',
-      'Microsoft Yahei', sans-serif;
+    background-color: #f5f5f7;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   }
 
   .board-header {
-    margin-bottom: 24px;
+    margin-bottom: 32px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -1389,16 +1751,361 @@
     }
 
     .title {
-      font-size: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 24px;
       font-weight: 600;
-      color: #1f2937;
+      color: #1d1d1f;
+      letter-spacing: -0.28px;
+      line-height: 1.1;
       margin: 0 0 8px 0;
     }
+    
     .desc {
       font-size: 14px;
-      color: #6b7280;
+      color: rgba(0, 0, 0, 0.48);
+      letter-spacing: -0.374px;
+      line-height: 1.47;
       margin: 0;
+      max-width: 680px;
     }
+
+    .hq-ai-robot-btn {
+      border: 1px solid rgba(0, 113, 227, 0.25);
+      background: rgba(0, 113, 227, 0.06);
+
+      &:hover {
+        background: rgba(0, 113, 227, 0.12);
+        border-color: rgba(0, 113, 227, 0.35);
+      }
+    }
+
+    .hq-ai-robot-img {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      display: block;
+    }
+  }
+
+  /* ─── AI 洞察：悬浮卡片 + 内部 flex 高度链 ─── */
+  :deep(.hq-ai-insight-drawer) {
+    max-width: min(472px, 100vw);
+  }
+
+  :deep(.hq-ai-floating-panel) {
+    display: flex;
+    flex-direction: column;
+    margin: 16px;
+    border-radius: 20px;
+    overflow: hidden;
+    height: calc(100vh - 32px) !important;
+    max-height: calc(100vh - 32px);
+    box-sizing: border-box;
+    background: linear-gradient(165deg, #f8fafc 0%, #ffffff 45%, #f1f5f9 100%);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow:
+      0 25px 50px -12px rgba(15, 23, 42, 0.18),
+      0 12px 24px -8px rgba(15, 23, 42, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  :deep(.hq-ai-floating-panel .n-drawer-content) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    border-radius: 20px;
+  }
+
+  :deep(.hq-ai-floating-panel .hq-ai-drawer-header-wrap.n-drawer-header) {
+    padding: 16px 48px 14px 18px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.88) 100%);
+    backdrop-filter: blur(12px);
+  }
+
+  :deep(.hq-ai-floating-panel .hq-ai-drawer-body.n-drawer-body) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  :deep(.hq-ai-floating-panel .hq-ai-drawer-body-inner.n-drawer-body-content-wrapper) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .hq-ai-drawer-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+
+  .hq-ai-drawer-header-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hq-ai-drawer-header-avatar {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #e0f2fe 0%, #dbeafe 100%);
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+
+    .hq-ai-header-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+
+  .hq-ai-drawer-header-titles {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .hq-ai-drawer-header-title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+
+  .hq-ai-drawer-header-sub {
+    font-size: 12px;
+    color: rgba(15, 23, 42, 0.5);
+    letter-spacing: 0.02em;
+  }
+
+  .hq-ai-insight-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .hq-ai-insight-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 18px 12px;
+    background: linear-gradient(180deg, rgba(241, 245, 249, 0.5) 0%, rgba(248, 250, 252, 0.35) 100%);
+  }
+
+  .custom-scroll-ai {
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+    &::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.45);
+      border-radius: 6px;
+    }
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+  }
+
+  .hq-ai-insight-empty {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 12px;
+  }
+
+  .hq-ai-insight-empty-card {
+    width: 100%;
+    max-width: 100%;
+    text-align: center;
+    padding: 22px 18px 20px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+  }
+
+  .hq-ai-insight-kicker {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #3b82f6;
+  }
+
+  .hq-ai-insight-hi {
+    margin: 0 0 10px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+    color: #0f172a;
+    line-height: 1.25;
+  }
+
+  .hq-ai-insight-desc {
+    margin: 0 0 18px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(15, 23, 42, 0.58);
+  }
+
+  .hq-ai-insight-presets {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .hq-ai-preset-chip {
+    width: 100%;
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.45;
+    color: #1e293b;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    cursor: pointer;
+    transition:
+      border-color 0.2s,
+      box-shadow 0.2s,
+      transform 0.15s;
+
+    &:hover {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 4px 16px rgba(37, 99, 235, 0.1);
+      transform: translateY(-1px);
+    }
+
+    &:active {
+      transform: translateY(0);
+    }
+  }
+
+  .hq-ai-msg-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+    align-items: flex-end;
+
+    &.is-user {
+      flex-direction: row-reverse;
+
+      .hq-ai-msg-bubble {
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        color: #fff;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+      }
+    }
+
+    &.is-ai .hq-ai-msg-bubble {
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      box-shadow: 0 2px 12px rgba(15, 23, 42, 0.05);
+    }
+  }
+
+  .hq-ai-msg-avatar {
+    flex-shrink: 0;
+    padding-bottom: 2px;
+  }
+
+  .hq-ai-bot-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border: 1px solid rgba(37, 99, 235, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hq-ai-user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border: 2px solid #fff;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1d4ed8;
+  }
+
+  .hq-ai-msg-bubble {
+    max-width: calc(100% - 44px);
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .hq-ai-insight-footer {
+    flex-shrink: 0;
+    padding: 14px 16px 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, #f8fafc 100%);
+    border-top: 1px solid rgba(15, 23, 42, 0.06);
+  }
+
+  .hq-ai-insight-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .hq-ai-insight-input {
+    :deep(.n-input) {
+      border-radius: 14px;
+      background: #ffffff;
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+      transition: box-shadow 0.2s;
+    }
+
+    :deep(.n-input--focus) {
+      box-shadow:
+        inset 0 0 0 1px rgba(59, 130, 246, 0.45),
+        0 0 0 3px rgba(59, 130, 246, 0.12);
+    }
+  }
+
+  .hq-ai-insight-send {
+    align-self: flex-end;
+    min-width: 88px;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+  }
+
+  .hq-ai-insight-tip {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: rgba(15, 23, 42, 0.42);
+    text-align: center;
   }
 
   .hq-dispatched-body {
@@ -1417,25 +2124,24 @@
     background: #ffffff;
     border-radius: 12px;
     padding: 0;
-    border: 1px solid #e5e7eb;
-    border-left: 4px solid #2563eb;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-    transition: box-shadow 0.2s, border-color 0.2s;
+    border: none;
+    border-left: 4px solid #0071e3;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
+    transition: box-shadow 0.2s;
     overflow: hidden;
 
     &.is-expanded {
-      border-color: #bfdbfe;
-      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
+      box-shadow: rgba(0, 0, 0, 0.12) 0px 8px 30px 0px;
     }
 
     .hq-wf-summary {
-      padding: 16px 18px;
+      padding: 16px 20px;
       cursor: pointer;
       user-select: none;
       transition: background 0.15s;
 
       &:hover {
-        background: #f8fafc;
+        background: #f5f5f7;
       }
     }
 
@@ -1447,13 +2153,13 @@
     }
 
     .hq-wf-chevron {
-      color: #9ca3af;
+      color: rgba(0, 0, 0, 0.32);
       font-size: 14px;
       transition: transform 0.2s ease;
 
       &.is-open {
         transform: rotate(180deg);
-        color: #2563eb;
+        color: #0071e3;
       }
     }
 
@@ -1461,47 +2167,52 @@
       display: inline-block;
       font-size: 12px;
       font-weight: 600;
-      color: #15803d;
-      background: #dcfce7;
-      padding: 2px 8px;
+      color: #1d1d1f;
+      background: #f5f5f7;
+      padding: 4px 8px;
       border-radius: 4px;
+      letter-spacing: -0.12px;
     }
 
     .hq-wf-title {
       margin: 0 0 8px;
       font-size: 16px;
       font-weight: 600;
-      color: #111827;
-      line-height: 1.4;
+      color: #1d1d1f;
+      line-height: 1.47;
+      letter-spacing: -0.374px;
     }
 
     .hq-wf-meta {
       margin: 0 0 4px;
       font-size: 13px;
-      color: #6b7280;
+      color: rgba(0, 0, 0, 0.8);
+      letter-spacing: -0.224px;
     }
 
     .hq-wf-time {
       margin: 0 0 8px;
       font-size: 12px;
-      color: #9ca3af;
+      color: rgba(0, 0, 0, 0.48);
+      letter-spacing: -0.12px;
     }
 
     .hq-wf-hint {
       margin: 0;
       font-size: 12px;
-      color: #2563eb;
+      color: #0071e3;
+      letter-spacing: -0.12px;
     }
 
     .hq-wf-expand {
-      padding: 0 18px 16px;
-      border-top: 1px solid #f3f4f6;
-      background: #fafbfc;
+      padding: 0 20px 20px;
+      border-top: 1px solid rgba(0, 0, 0, 0.05);
+      background: #fafafc;
     }
   }
 
   .hq-detail-inner {
-    padding-top: 4px;
+    padding-top: 12px;
   }
 
   .hq-detail-desc-block {
@@ -1509,20 +2220,23 @@
   }
 
   .hq-detail-desc-label {
-    font-size: 13px;
-    color: #6b7280;
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.48);
+    letter-spacing: -0.224px;
     margin-bottom: 8px;
   }
 
   .hq-detail-desc-text {
     white-space: pre-wrap;
-    line-height: 1.6;
-    background: #f9fafb;
-    padding: 12px;
+    line-height: 1.47;
+    background: #ffffff;
+    padding: 16px;
     border-radius: 8px;
-    border: 1px solid #f3f4f6;
+    border: none;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
     font-size: 14px;
-    color: #4b5563;
+    color: #1d1d1f;
+    letter-spacing: -0.224px;
   }
 
   .hq-detail-edit-btn {
@@ -1530,10 +2244,10 @@
   }
 
   .hq-rules-card {
-    border-left-color: #f97316;
+    border-left-color: #ff9500;
 
     &.is-expanded {
-      border-color: #fed7aa;
+      box-shadow: rgba(0, 0, 0, 0.12) 0px 8px 30px 0px;
     }
   }
 
@@ -1543,7 +2257,7 @@
     }
 
     .hq-rule-block {
-      margin-bottom: 14px;
+      margin-bottom: 16px;
 
       &:last-of-type {
         margin-bottom: 0;
@@ -1551,20 +2265,22 @@
     }
 
     .hq-rule-block-title {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
-      color: #9a3412;
-      margin-bottom: 6px;
+      color: #1d1d1f;
+      letter-spacing: -0.224px;
+      margin-bottom: 8px;
     }
 
     .hq-rule-line {
-      margin: 0 0 4px;
-      font-size: 13px;
-      color: #4b5563;
-      line-height: 1.5;
+      margin: 0 0 6px;
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.8);
+      line-height: 1.47;
+      letter-spacing: -0.224px;
 
       strong {
-        color: #c2410c;
+        color: #ff9500;
         font-weight: 600;
       }
     }
@@ -1588,22 +2304,23 @@
   }
 
   .auto-nudge-bar {
-    margin-bottom: 16px;
+    margin-bottom: 24px;
     .auto-nudge-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
       flex-wrap: wrap;
-      padding: 12px 16px;
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-      border-radius: 4px;
+      padding: 12px 20px;
+      background: #fafafc;
+      border: none;
+      border-radius: 8px;
     }
     .auto-nudge-hint {
-      font-size: 13px;
-      color: #92400e;
-      line-height: 1.5;
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.8);
+      letter-spacing: -0.224px;
+      line-height: 1.47;
       flex: 1;
       min-width: 200px;
     }
@@ -1615,8 +2332,9 @@
     align-items: center;
     height: 400px;
     background: #ffffff;
-    border-radius: 4px;
-    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    border: none;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
   }
 
   .task-list {
@@ -1628,24 +2346,25 @@
   .task-card {
     width: 280px;
     background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px; /* 商业级硬朗风格 */
-    padding: 16px;
+    border: none;
+    border-radius: 12px;
+    padding: 20px;
     cursor: pointer;
     transition: all 0.2s ease;
     flex-shrink: 0;
     position: relative;
     overflow: hidden;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
 
     &:hover {
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-      border-color: #d1d5db;
+      box-shadow: rgba(0, 0, 0, 0.12) 0px 8px 30px 0px;
+      transform: translateY(-2px);
     }
 
     &.is-active {
-      border-color: #2563eb;
-      background: #f8fafc;
-
+      box-shadow: rgba(0, 0, 0, 0.12) 0px 8px 30px 0px;
+      border: 1px solid rgba(0, 113, 227, 0.3);
+      
       &::before {
         content: '';
         position: absolute;
@@ -1653,7 +2372,7 @@
         left: 0;
         width: 4px;
         height: 100%;
-        background-color: #2563eb;
+        background-color: #0071e3;
       }
     }
 
@@ -1672,34 +2391,36 @@
     .task-name {
       font-size: 14px;
       font-weight: 600;
-      color: #111827;
+      color: #1d1d1f;
+      letter-spacing: -0.374px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 140px; /* 给删除按钮多留点空间 */
+      max-width: 140px;
     }
     .action-btn {
-      opacity: 0; /* 默认隐藏操作按钮 */
+      opacity: 0;
       transition: opacity 0.2s ease, color 0.2s ease, background 0.2s ease;
-      color: #9ca3af;
+      color: rgba(0, 0, 0, 0.48);
     }
 
     .edit-btn:hover {
-      color: #2563eb;
-      background: #eff6ff;
+      color: #0071e3;
+      background: rgba(0, 113, 227, 0.1);
     }
 
     .del-btn:hover {
-      color: #ef4444;
-      background: #fee2e2;
+      color: #ff3b30;
+      background: rgba(255, 59, 48, 0.1);
     }
 
     &:hover .action-btn {
-      opacity: 1; /* 鼠标悬浮卡片时显示操作按钮 */
+      opacity: 1;
     }
     .task-card-time {
-      font-size: 12px;
-      color: #6b7280;
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.48);
+      letter-spacing: -0.224px;
     }
   }
 
@@ -1751,16 +2472,16 @@
     justify-content: center;
     gap: 8px 0;
     background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    padding: 28px 16px;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    border: none;
+    border-radius: 12px;
+    padding: 40px 24px;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
 
     .divider {
       width: 1px;
-      height: 56px;
-      background: #e5e7eb;
-      margin: 0 32px;
+      height: 64px;
+      background: rgba(0, 0, 0, 0.05);
+      margin: 0 48px;
       flex-shrink: 0;
     }
 
@@ -1773,35 +2494,39 @@
 
     .ns-label {
       font-size: 14px;
-      font-weight: 500;
-      color: #4b5563;
+      font-weight: 600;
+      color: #1d1d1f;
+      letter-spacing: -0.374px;
       margin-bottom: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
 
     .ns-value {
       font-size: 40px;
       font-weight: 600;
-      line-height: 1;
-      color: #111827;
-      font-family: Arial, sans-serif;
+      line-height: 1.07;
+      letter-spacing: -0.28px;
+      color: #1d1d1f;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
 
       &.highlight {
-        color: #2563eb;
+        color: #0071e3;
       }
 
       .unit {
         font-size: 16px;
         font-weight: 400;
-        color: #6b7280;
-        margin-left: 4px;
+        color: rgba(0, 0, 0, 0.48);
+        margin-left: 6px;
       }
     }
 
     .ns-sub {
       font-size: 12px;
-      color: #9ca3af;
+      color: rgba(0, 0, 0, 0.48);
       margin-top: 12px;
       max-width: 200px;
+      letter-spacing: -0.12px;
     }
   }
 
@@ -1809,32 +2534,35 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px 4px;
-    margin: 12px 0 20px;
-    padding: 10px 16px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    font-size: 13px;
-    color: #6b7280;
+    gap: 8px 6px;
+    margin: 12px 0 24px;
+    padding: 12px 20px;
+    background: #f5f5f7;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.48);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    letter-spacing: -0.224px;
 
     .kpi-chip {
       strong {
-        color: #111827;
+        color: #1d1d1f;
         font-weight: 600;
       }
       &.warn strong {
-        color: #b45309;
+        color: #ff3b30;
       }
     }
     .kpi-dot {
-      color: #d1d5db;
+      color: rgba(0, 0, 0, 0.1);
       user-select: none;
     }
     .kpi-updated {
       margin-left: auto;
       font-size: 12px;
-      color: #9ca3af;
+      color: rgba(0, 0, 0, 0.48);
+      letter-spacing: -0.12px;
     }
   }
 
@@ -1845,16 +2573,20 @@
   }
 
   .chart-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: #111827;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+    color: #1d1d1f;
+    letter-spacing: 0.231px;
+    line-height: 1.19;
   }
 
   .chart-sub {
-    font-size: 12px;
-    color: #9ca3af;
+    font-size: 13px;
+    color: rgba(0, 0, 0, 0.48);
     margin-top: 4px;
-    line-height: 1.4;
+    line-height: 1.29;
+    letter-spacing: -0.224px;
     max-width: 520px;
   }
 
@@ -1879,7 +2611,7 @@
         width: 6px;
       }
       &::-webkit-scrollbar-thumb {
-        background: #d1d5db;
+        background: rgba(0, 0, 0, 0.1);
         border-radius: 3px;
       }
 
@@ -1889,43 +2621,47 @@
         align-items: center;
         gap: 10px;
         padding: 12px 16px;
-        border-bottom: 1px solid #f3f4f6;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 
         &:hover {
-          background-color: #f9fafb;
+          background-color: #f5f5f7;
         }
 
         .rtm-col-num,
         .rtm-col-time {
-          font-size: 13px;
-          color: #4b5563;
+          font-size: 14px;
+          color: rgba(0, 0, 0, 0.48);
+          letter-spacing: -0.224px;
           text-align: right;
         }
 
         &.header {
           font-weight: 600;
-          color: #4b5563;
-          background-color: #f9fafb;
-          border-bottom: 1px solid #e5e7eb;
-          font-size: 13px;
+          color: rgba(0, 0, 0, 0.8);
+          background-color: #fafafc;
+          border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+          font-size: 14px;
+          letter-spacing: -0.224px;
           &:hover {
-            background-color: #f9fafb;
+            background-color: #fafafc;
           }
         }
 
         .rtm-name {
-          font-size: 13px;
-          color: #111827;
+          font-size: 14px;
+          font-weight: 600;
+          color: #1d1d1f;
+          letter-spacing: -0.224px;
         }
         .rtm-time {
-          font-size: 13px;
-          color: #6b7280;
+          font-size: 14px;
+          color: rgba(0, 0, 0, 0.48);
           text-align: right;
         }
 
         /* 进度条恢复为主题蓝 */
         :deep(.n-progress .n-progress-graph-line-fill) {
-          background-color: #2563eb !important;
+          background-color: #0071e3 !important;
         }
       }
     }
@@ -1964,22 +2700,25 @@
   }
 
   .metric-box {
-    padding: 16px;
-    border-radius: 4px;
+    padding: 24px;
+    border-radius: 12px;
     background: #ffffff;
-    border: 1px solid #e5e7eb;
+    border: none;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    box-shadow: rgba(0, 0, 0, 0.04) 0px 2px 10px 0px;
 
     .m-label {
-      font-size: 12px;
-      color: #4b5563;
+      font-size: 13px;
+      color: rgba(0, 0, 0, 0.48);
+      letter-spacing: -0.224px;
       display: flex;
       align-items: center;
       gap: 4px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
       .icon {
-        color: #9ca3af;
+        color: rgba(0, 0, 0, 0.32);
         cursor: help;
       }
     }
@@ -1987,52 +2726,49 @@
     .m-value {
       font-size: 24px;
       font-weight: 600;
-      color: #111827;
-      font-family: Arial, sans-serif;
+      color: #1d1d1f;
+      letter-spacing: -0.231px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
 
     &.info-style {
-      background: #eff6ff;
-      border-color: #bfdbfe;
+      background: #fafafc;
       .m-value {
-        color: #1d4ed8;
+        color: #0071e3;
       }
     }
 
     /* 预警数据 */
     &.warn-style {
-      background: #fefce8;
-      border-color: #fef08a;
+      background: #fafafc;
       .m-value {
-        color: #a16207;
+        color: #f59e0b;
       }
     }
     &.danger-style {
-      background: #fff7ed;
-      border-color: #fed7aa;
+      background: #fafafc;
       .m-value {
-        color: #c2410c;
+        color: #ff9500;
       }
     }
     &.fatal-style {
-      background: #fef2f2;
-      border-color: #fecaca;
+      background: #fafafc;
       .m-value {
-        color: #b91c1c;
+        color: #ff3b30;
       }
     }
   }
   .chart-card :deep(.n-radio-button) {
-    border-radius: 4px !important;
+    border-radius: 6px !important;
   }
   .chart-card :deep(.n-radio-button.n-radio-button--checked) {
     background-color: #ffffff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-    color: #1f2937;
-    font-weight: 500;
+    color: #1d1d1f;
+    font-weight: 600;
   }
   .chart-card :deep(.n-radio-group .n-radio-button:not(.n-radio-button--checked):hover) {
-    color: #4b5563;
+    color: rgba(0, 0, 0, 0.8);
   }
   .chart-card :deep(.n-radio-group) {
     border: none;

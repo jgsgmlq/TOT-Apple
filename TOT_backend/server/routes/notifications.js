@@ -213,7 +213,7 @@ router.get('/', authenticate, (req, res, next) => {
 
 router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
   try {
-    const { eventType, taskId, assignmentId, targetUserId, targetRole, dedupeKey } = req.body;
+    const { eventType, taskId, assignmentId, targetUserId, dedupeKey } = req.body;
 
     if (!eventType) throw createError(400, 'eventType 不能为空', 'EVENT_001');
     if (['nudge_yellow', 'nudge_red'].includes(eventType)) {
@@ -257,7 +257,7 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
       `INSERT INTO notification_events
         (id, task_id, assignment_id, target_user_id, store_id, event_type, dedupe_key, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, taskId, assignmentId || null, targetUserId, employee.store_id, eventType, dedupeKey || null, now]
+      [eventId, taskId, assignmentId || null, targetUserId, emp.store_id, eventType, dedupeKey || null, now]
     );
 
     res.json({

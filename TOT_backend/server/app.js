@@ -56,10 +56,13 @@ app.use(errorHandler);
 const server = http.createServer(app);
 setupWebSocket(server);
 
+const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws?token=<JWT>`);
+  startAutoNudgeScheduler();
 });
 
 module.exports = { app, server };

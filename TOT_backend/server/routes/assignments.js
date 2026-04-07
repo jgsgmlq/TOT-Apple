@@ -170,6 +170,10 @@ router.get('/', authenticate, (req, res, next) => {
         where.push('ta.store_id = ?');
         params.push(qStore);
       }
+      if (qEmp) {
+        where.push('ta.user_id = ?');
+        params.push(qEmp);
+      }
     } else if (role === 'employee') {
       if (qEmp && qEmp !== employeeId) {
         throw createError(403, '无权查询他人分配记录', 'AUTH_003');

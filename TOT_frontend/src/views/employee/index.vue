@@ -497,6 +497,35 @@
   const currentWarnings = ref<any[]>([]);
 
   let ws: WebSocket | null = null;
+  const NUDGE_COPY_CACHE_KEY = 'tot_employee_nudge_copy_cache_v1';
+
+  function readNudgeCopyCache(): Record<string, string> {
+    try {
+      const raw = localStorage.getItem(NUDGE_COPY_CACHE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeNudgeCopyCache(cache: Record<string, string>) {
+    try {
+      localStorage.setItem(NUDGE_COPY_CACHE_KEY, JSON.stringify(cache));
+    } catch {
+      // ignore
+    }
+  }
+
+  function cacheNudgeCopy(eventId: string | undefined, content: string | undefined) {
+    const id = String(eventId || '').trim();
+    const text = String(content || '').trim();
+    if (!id || !text) return;
+    const cache = readNudgeCopyCache();
+    cache[id] = text;
+    writeNudgeCopyCache(cache);
+  }
 
   const initWebSocket = () => {
     const token = userStore.getToken;
@@ -519,6 +548,7 @@
         } else if (parsed.event === 'nudge_sent') {
           message.warning('你收到一条催办提醒');
           const nid = parsed.data.eventId || parsed.data.nudgeRecordId || Date.now().toString();
+          cacheNudgeCopy(parsed.data.eventId, parsed.data.content);
           const newWarning = {
             id: nid,
             eventId: parsed.data.eventId,
@@ -642,11 +672,12 @@
       const nudgeEvents = eventList.filter(
         (e) => (e.eventType === 'nudge_yellow' || e.eventType === 'nudge_red') && e.isActive
       );
+      const nudgeCopyCache = readNudgeCopyCache();
 
       const warningsFromApi = nudgeEvents.map((ev) => {
         const taskTitle = taskTitleById.get(ev.taskId) || '学习任务';
-        const ruleHint = formatRuleTypeLabel(ev.ruleType);
         const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
+        const nudgeContent = nudgeCopyCache[ev.eventId] || `【${taskTitle}】您有任务需要尽快处理。`;
         return {
           id: ev.eventId,
           eventId: ev.eventId,
@@ -654,9 +685,7 @@
           taskId: ev.taskId,
           readStatus: ev.readStatus,
           title: prefix,
-          content: ruleHint
-            ? `【${taskTitle}】${ruleHint}。请尽快完成学习进度。`
-            : `【${taskTitle}】您有一条催办提醒，请尽快完成学习进度。`,
+          content: nudgeContent,
           time: formatRelativeTime(ev.createdAt),
         };
       });

@@ -106,8 +106,7 @@
           return;
         }
         const role = userStore.getUserInfo?.role;
-        // 允许 executive 或 central (管理员/总部) 角色登入
-        if (role === 'executive' || role === 'central' || role === 'admin') {
+        if (role === 'executive') {
           const redirect = (route.query.redirect as string) || '/executive';
           router.replace(decodeURIComponent(redirect));
           return;

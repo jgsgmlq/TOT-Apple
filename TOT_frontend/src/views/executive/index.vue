@@ -3,33 +3,55 @@
     <n-layout has-sider style="height: 100vh;">
       <n-layout-sider
         v-show="!isMobile"
-        bordered
+        :collapsed="desktopSidebarCollapsed"
         collapse-mode="width"
         :collapsed-width="64"
         :width="260"
-        show-trigger
+        bordered
+        show-trigger="bar"
+        :native-scrollbar="false"
         class="executive-sider"
+        :class="{ 'executive-sider--narrow': desktopSidebarCollapsed }"
+        @collapse="desktopSidebarCollapsed = true"
+        @expand="desktopSidebarCollapsed = false"
       >
         <div class="sider-logo">
           <img :src="websiteConfig.logo" alt="logo" class="logo-img" />
-          <span class="logo-text">TOT</span>
+          <span v-show="!desktopSidebarCollapsed" class="logo-text">TOT</span>
         </div>
 
         <div class="sider-header">
-          <n-button block type="primary" class="new-chat-btn" @click="handleNewChat">
+          <n-button
+            v-if="!desktopSidebarCollapsed"
+            block
+            type="primary"
+            class="new-chat-btn"
+            @click="handleNewChat"
+          >
             <template #icon>
               <n-icon><PlusOutlined /></n-icon>
             </template>
             新对话
           </n-button>
+          <n-button
+            v-else
+            type="primary"
+            circle
+            class="new-chat-btn-icon"
+            @click="handleNewChat"
+          >
+            <template #icon>
+              <n-icon><PlusOutlined /></n-icon>
+            </template>
+          </n-button>
         </div>
-        
-        <div class="sider-content custom-scroll">
+
+        <div v-show="!desktopSidebarCollapsed" class="sider-content custom-scroll">
           <div class="history-title">历史记录</div>
           <div class="chat-list">
-            <div 
-              class="chat-item" 
-              v-for="item in historyList" 
+            <div
+              class="chat-item"
+              v-for="item in historyList"
               :key="item.id"
               :class="{ active: currentChatId === item.id }"
               @click="selectChat(item)"
@@ -78,7 +100,22 @@
       <n-layout-content content-style="display: flex; flex-direction: column; height: 100%; background-color: #f9fafb;">
         <div class="chat-header">
           <div class="header-left">
-            <n-icon v-if="isMobile" size="24" class="menu-icon" @click="showMobileSidebar = true"><MenuOutlined /></n-icon>
+            <div 
+              class="executive-header-trigger"
+              @click="toggleSidebar"
+            >
+              <n-icon size="18" v-if="isMobile" class="menu-icon">
+                <MenuOutlined />
+              </n-icon>
+              <template v-else>
+                <n-icon size="18" v-if="desktopSidebarCollapsed" class="menu-icon">
+                  <MenuUnfoldOutlined />
+                </n-icon>
+                <n-icon size="18" v-else class="menu-icon">
+                  <MenuFoldOutlined />
+                </n-icon>
+              </template>
+            </div>
             <h2 class="header-title">Executive Chat</h2>
           </div>
           <div class="header-actions">
@@ -98,11 +135,14 @@
 
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <div v-if="messages.length === 0" class="empty-chat">
-            <div class="empty-icon-wrap">
-              <n-icon size="48" color="#3b82f6"><RobotOutlined /></n-icon>
+            <h3>Hi! {{ displayName }} 👋✨</h3>
+            <p>作为你的智能助手，我可以为你答疑解惑～</p>
+            
+            <div class="preset-questions">
+              <div class="preset-bubble" @click="fillInput('Q1新品培训完成率？')">Q1新品培训完成率？</div>
+              <div class="preset-bubble" @click="fillInput('现在有什么问题需要关注？')">现在有什么问题需要关注？</div>
+              <div class="preset-bubble" @click="fillInput('最差的5家门店是哪些？')">最差的5家门店是哪些？</div>
             </div>
-            <h3>你好，主管</h3>
-            <p>我是您的专属 AI 助理，随时为您提供数据洞察与业务支持。</p>
           </div>
           
           <div 
@@ -118,7 +158,9 @@
                 </div>
               </template>
               <template v-else>
-                <n-avatar round size="medium" :src="executiveAIIcon" />
+                <div class="ai-bot-avatar">
+                  <n-icon size="20" color="#2563eb"><RobotOutlined /></n-icon>
+                </div>
               </template>
             </div>
             <div class="message-content">
@@ -152,11 +194,17 @@ import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useMessage, useDialog } from 'naive-ui';
 import { debounce } from 'lodash-es';
-import { PlusOutlined, MessageOutlined, RobotOutlined, LogoutOutlined, MenuOutlined } from '@vicons/antd';
-import executiveAIIcon from '@/assets/images/ExecutiveAI.png';
+import {
+  PlusOutlined,
+  MessageOutlined,
+  LogoutOutlined,
+  MenuOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  RobotOutlined,
+} from '@vicons/antd';
 import { websiteConfig } from '@/config/website.config';
 import { useUserStore } from '@/store/modules/user';
-import { PageEnum } from '@/enums/pageEnum';
 
 interface ChatHistory {
   id: string;
@@ -204,12 +252,13 @@ const historyList = ref<ChatHistory[]>([
   { id: '3', title: '关于 MyPal 的优化建议' }
 ]);
 
-const currentChatId = ref<string>('1');
+const currentChatId = ref<string>('');
 
-const messages = ref<ChatMessage[]>([
-  { role: 'user', content: '分析昨日门店数据' },
-  { role: 'ai', content: '您好！昨天的整体出勤率为98%，全国门店销售达成率为85%。其中华东区表现最为优异，华南区 Lifestyle 门店在新品陈列任务中进度稍显落后。' }
-]);
+const messages = ref<ChatMessage[]>([]);
+
+const fillInput = (text: string) => {
+  inputValue.value = text;
+};
 
 const inputValue = ref('');
 const chatBodyRef = ref<HTMLElement | null>(null);
@@ -217,6 +266,15 @@ const chatBodyRef = ref<HTMLElement | null>(null);
 
 const isMobile = ref(false);
 const showMobileSidebar = ref(false);
+const desktopSidebarCollapsed = ref(false);
+
+const toggleSidebar = () => {
+  if (isMobile.value) {
+    showMobileSidebar.value = true;
+  } else {
+    desktopSidebarCollapsed.value = !desktopSidebarCollapsed.value;
+  }
+};
 
 
 // 抑制常见的 ResizeObserver 报错 (UI 渲染重流警告，通常无害)
@@ -290,15 +348,17 @@ const handleSend = () => {
 .executive-container {
   height: 100vh;
   width: 100vw;
-  background-color: #f9fafb;
+  background-color: #ffffff;
   overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 .executive-sider {
-  background: #ffffff;
+  background: #f5f5f7;
+  border-right: 1px solid rgba(0,0,0,0.05);
   
   :deep(.n-layout-sider-scroll-container) {
-    background: #ffffff;
+    background: #f5f5f7;
   }
   
   .sider-logo {
@@ -307,7 +367,7 @@ const handleSend = () => {
     justify-content: center;
     height: 64px;
     gap: 12px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid transparent;
     
     .logo-img {
       width: 32px;
@@ -332,6 +392,23 @@ const handleSend = () => {
     font-weight: 600;
     height: 40px;
     box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
+  }
+
+  .new-chat-btn-icon {
+    box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
+  }
+
+  &.executive-sider--narrow {
+    .sider-logo {
+      gap: 0;
+      padding: 0 8px;
+    }
+
+    .sider-header {
+      padding: 16px 8px 12px;
+      display: flex;
+      justify-content: center;
+    }
   }
 
   .sider-content {
@@ -390,14 +467,19 @@ const handleSend = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  position: sticky;
+  top: 0;
+  z-index: 10;
   
   .header-title {
     margin: 0;
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 600;
-    color: #1f2937;
+    color: #1d1d1f;
+    letter-spacing: -0.374px;
   }
 }
 
@@ -461,65 +543,93 @@ const handleSend = () => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
-    
-    .empty-icon-wrap {
-      width: 80px;
-      height: 80px;
-      border-radius: 50%;
-      background: #eff6ff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 16px;
-    }
+    color: #1d1d1f;
+    text-align: center;
 
     h3 {
-      margin: 0 0 8px;
-      font-size: 24px;
+      margin: 0 0 12px;
+      font-size: 28px;
       font-weight: 600;
-      color: #1f2937;
+      color: #1d1d1f;
+      letter-spacing: -0.28px;
+      line-height: 1.1;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
-    
+
     p {
-      color: #6b7280;
+      color: rgba(0, 0, 0, 0.48);
       font-size: 15px;
+      line-height: 1.47;
+      letter-spacing: -0.374px;
+      margin: 0 0 40px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    .preset-questions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      width: fit-content;
+
+      .preset-bubble {
+        padding: 10px 20px;
+        background: #f5f5f7;
+        border: 1px solid transparent;
+        border-radius: 980px;
+        font-size: 14px;
+        font-weight: 400;
+        color: #1d1d1f;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        letter-spacing: -0.374px;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+        &:hover {
+          background: #ededf2;
+          color: #0071e3;
+        }
+
+        &:active {
+          background: #e5e5ea;
+        }
+      }
     }
   }
-  
+
   .message-row {
     display: flex;
     gap: 16px;
     max-width: 85%;
-    
+
     &.is-user {
       align-self: flex-end;
       flex-direction: row-reverse;
-      
+
       .message-content {
-        background: #2563eb;
+        background: #0071e3;
         color: #ffffff;
-        border-radius: 16px 4px 16px 16px;
-        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+        border-radius: 18px 4px 18px 18px;
       }
     }
-    
+
     &.is-ai {
       align-self: flex-start;
-      
+
       .message-content {
-        background: #ffffff;
-        color: #1f2937;
-        border-radius: 4px 16px 16px 16px;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        background: #f5f5f7;
+        color: #1d1d1f;
+        border-radius: 4px 18px 18px 18px;
+        border: none;
       }
     }
-    
+
     .message-content {
-      padding: 14px 18px;
+      padding: 12px 16px;
       font-size: 15px;
-      line-height: 1.6;
+      line-height: 1.47;
+      letter-spacing: -0.374px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
       word-wrap: break-word;
       white-space: pre-wrap;
     }
@@ -529,7 +639,7 @@ const handleSend = () => {
 .chat-footer {
   padding: 20px 32px;
   background: #ffffff;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
   
   .input-wrapper {
     position: relative;
@@ -542,27 +652,56 @@ const handleSend = () => {
     :deep(.n-input) {
       border-radius: 12px;
       padding: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+      background: #fafafc;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      font-size: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      box-shadow: none;
       
       &:hover, &.n-input--focus {
-        box-shadow: 0 2px 12px rgba(37, 99, 235, 0.1);
+        background: #ffffff;
+        border-color: #0071e3;
+        box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.2);
       }
     }
     
     .send-btn {
-      border-radius: 12px;
+      border-radius: 980px;
       height: 44px;
       padding: 0 24px;
       font-weight: 600;
-      box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
+      background-color: #0071e3;
+      color: #ffffff;
+      border: none;
+      font-size: 15px;
+      letter-spacing: -0.374px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      transition: background-color 0.2s ease;
+      
+      &:hover {
+        background-color: #0077ed;
+      }
+      
+      &:active {
+        background-color: #ededf2;
+        color: #0071e3;
+      }
+      
+      &.n-button--disabled {
+        background-color: #fafafc;
+        color: rgba(0, 0, 0, 0.48);
+        border: 1px solid rgba(0, 0, 0, 0.04);
+      }
     }
   }
   
   .footer-tip {
     text-align: center;
-    font-size: 13px;
-    color: #9ca3af;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.48);
     margin-top: 16px;
+    letter-spacing: -0.12px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   }
 }
 
@@ -585,9 +724,27 @@ const handleSend = () => {
   gap: 16px;
 }
 
-.menu-icon {
+.executive-header-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  margin-left: -12px;
+  height: 64px;
   cursor: pointer;
-  color: #4b5563;
+  transition: background 0.2s ease-in-out;
+  border-radius: 4px;
+
+  &:hover {
+    background: #f8f8f9;
+  }
+
+  .menu-icon {
+    color: #515a6e;
+  }
+}
+
+.menu-icon {
   display: flex;
   align-items: center;
 }
@@ -651,16 +808,28 @@ const handleSend = () => {
 .chat-avatar {
   width: 34px !important;
   height: 34px !important;
-  
+
   .avatar-text {
     font-size: 14px !important;
   }
-  
+
   &:hover, &:active {
     box-shadow: 0 2px 8px rgba(37,99,235,0.1) !important;
   }
 }
 
+/* AI 机器人图标头像 */
+.ai-bot-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border: 1px solid rgba(37, 99, 235, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 
 
 

@@ -194,11 +194,7 @@ export function createRouterGuards(router: Router) {
             return;
           }
         }
-        if (
-          userStore.info.role === 'executive' ||
-          userStore.info.role === 'central' ||
-          userStore.info.role === 'admin'
-        ) {
+        if (userStore.info.role === 'executive') {
           next('/executive');
           return;
         }
@@ -225,11 +221,7 @@ export function createRouterGuards(router: Router) {
           return;
         }
       }
-      if (
-        userStore.info.role !== 'executive' &&
-        userStore.info.role !== 'central' &&
-        userStore.info.role !== 'admin'
-      ) {
+      if (userStore.info.role !== 'executive') {
         storage.clear();
         userStore.setToken('');
         next({ path: '/executive/login', replace: true });
@@ -252,6 +244,11 @@ export function createRouterGuards(router: Router) {
       // 为了安全，应该引导至总部登录（当前项目总部入口即为 /hq 自动静默，所以跳 /hq 重新跑静默登录流程）
       if (to.path.startsWith('/central')) {
         next({ path: '/hq', replace: true });
+        return;
+      }
+
+      if (to.path.startsWith('/executive')) {
+        next({ path: '/executive/login', replace: true, query: to.fullPath ? { redirect: to.fullPath } : undefined });
         return;
       }
 
@@ -287,7 +284,10 @@ export function createRouterGuards(router: Router) {
       userInfo = await userStore.getInfo();
     } catch {
       storage.clear();
-      const targetPath = to.path.startsWith('/central') ? '/hq' : '/employee/login';
+      let targetPath = '/employee/login';
+      if (to.path.startsWith('/central')) targetPath = '/hq';
+      else if (to.path.startsWith('/executive')) targetPath = '/executive/login';
+      
       next({
         path: targetPath,
         replace: true,
