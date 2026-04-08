@@ -757,7 +757,7 @@
   // 1. 跳转到微信小程序
   const handleGoToMiniProgram = () => {
     const a = document.createElement('a');
-    a.href = 'weixin://dl/business/?t=eS0Bza6c7I8No5g';
+    a.href = 'weixin://dl/business/?appid=wx8490a792205aecda&path=pages/login/login&query=&env_version=release';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
