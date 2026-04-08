@@ -272,7 +272,6 @@
   import { ref, reactive, computed, watch, onActivated } from 'vue';
   import { useRouter, useRoute } from 'vue-router';
   import { useMessage } from 'naive-ui';
-  import { RobotOutlined } from '@vicons/antd';
   import {
     createTask,
     dispatchTask,
@@ -280,6 +279,7 @@
     updateTask,
     aiGenerateTaskDescription,
   } from '@/api/task';
+  import { formFromAutoNudgeRules, toApiAutoNudgeRules } from '@/utils/autoNudgeRules';
 
   const message = useMessage();
   const router = useRouter();
@@ -291,6 +291,9 @@
   const taskStatus = ref<string>('draft');
   const isEditMode = computed(() => !!editTaskId.value);
   const isDispatched = computed(() => taskStatus.value === 'dispatched');
+
+  /** 勾选 MyPal 时后端要求非空任务周；无表单项时用此默认值；编辑时优先用 loadTaskDetail 写入的 mypalTaskWeek */
+  const DEFAULT_MYPAL_TASK_WEEK = 'FY26Q2W1';
 
   // 初始默认模版
   const defaultDesc = `🎯【学习目标】
@@ -319,6 +322,8 @@
       deadlineCrisisHours: 24,
       deadlineCrisisHoursSecondary: 48,
     },
+    mypalTaskWeek: '',
+    mypalProductName: '',
   });
 
   const loadTaskDetail = async (id: string) => {
@@ -344,17 +349,24 @@
       if (res.hasAiDemo) formValue.platforms.push('AI Coach');
       if (res.hasLiveBroadcast) formValue.platforms.push('直播培训');
       if (res.autoNudgeRules) {
-        formValue.alertRules.laggingLifestyle = res.autoNudgeRules.laggingLifestyle ?? 3;
-        formValue.alertRules.laggingMono = res.autoNudgeRules.laggingMono ?? 1;
-        formValue.alertRules.startDelayPercent = res.autoNudgeRules.startDelayPercent ?? 50;
-        formValue.alertRules.deadlineCrisisHours = res.autoNudgeRules.deadlineCrisisHours ?? 24;
-        formValue.alertRules.deadlineCrisisHoursSecondary =
-          res.autoNudgeRules.deadlineCrisisHoursSecondary ?? 48;
+        Object.assign(formValue.alertRules, formFromAutoNudgeRules(res.autoNudgeRules));
       }
+      formValue.mypalTaskWeek = res.mypalTaskWeek?.trim() ?? '';
+      formValue.mypalProductName = res.mypalProductName?.trim() ?? '';
     } catch (e: any) {
       message.error('加载任务详情失败: ' + (e.message || '未知错误'));
     }
   };
+
+  watch(
+    () => [...formValue.platforms],
+    (ids) => {
+      if (!ids.includes('MyPal')) {
+        formValue.mypalTaskWeek = '';
+        formValue.mypalProductName = '';
+      }
+    }
+  );
 
   watch(
     () => route.query.id,
@@ -373,6 +385,8 @@
         formValue.endTime = null;
         formValue.platforms = ['MyPal'];
         formValue.coverage = '全员';
+        formValue.mypalTaskWeek = '';
+        formValue.mypalProductName = '';
       }
     },
     { immediate: true }
@@ -393,6 +407,8 @@
       formValue.endTime = null;
       formValue.platforms = ['MyPal'];
       formValue.coverage = '全员';
+      formValue.mypalTaskWeek = '';
+      formValue.mypalProductName = '';
     }
   });
 
@@ -537,22 +553,16 @@ ${userDesc}`;
       : new Date().toISOString();
 
     if (isDispatched.value) {
-      // 已下发：可改截止时间 + 预警规则（与后端 PATCH dispatched 分支一致）
+      // 已下发：可改截止时间 + 预警规则（与后端 autoNudge.js 结构一致）
       return {
         ddlAt,
-        autoNudgeRules: {
-          laggingLifestyle: formValue.alertRules.laggingLifestyle,
-          laggingMono: formValue.alertRules.laggingMono,
-          startDelayPercent: formValue.alertRules.startDelayPercent,
-          deadlineCrisisHours: formValue.alertRules.deadlineCrisisHours,
-          deadlineCrisisHoursSecondary: formValue.alertRules.deadlineCrisisHoursSecondary,
-        },
+        autoNudgeRules: toApiAutoNudgeRules(formValue.alertRules),
       };
     }
 
     const isAll = formValue.coverage === '全员';
 
-    return {
+    const draft: Record<string, unknown> = {
       title: formValue.taskName,
       description: formValue.description,
       hasMypal: formValue.platforms.includes('MyPal'),
@@ -564,14 +574,17 @@ ${userDesc}`;
       ddlAt,
       storeScope: isAll ? 'all' : [],
       rtmFilter: isAll ? null : [{ rtm: formValue.coverage }],
-      autoNudgeRules: {
-        laggingLifestyle: formValue.alertRules.laggingLifestyle,
-        laggingMono: formValue.alertRules.laggingMono,
-        startDelayPercent: formValue.alertRules.startDelayPercent,
-        deadlineCrisisHours: formValue.alertRules.deadlineCrisisHours,
-        deadlineCrisisHoursSecondary: formValue.alertRules.deadlineCrisisHoursSecondary,
-      },
+      autoNudgeRules: toApiAutoNudgeRules(formValue.alertRules),
     };
+
+    if (formValue.platforms.includes('MyPal')) {
+      const w = String(formValue.mypalTaskWeek ?? '').trim();
+      draft.mypalTaskWeek = w || DEFAULT_MYPAL_TASK_WEEK;
+      const prod = String(formValue.mypalProductName ?? '').trim();
+      draft.mypalProductName = prod || null;
+    }
+
+    return draft;
   };
 
   // --- 提交表单 (发布任务/更新并发布) ---

@@ -87,14 +87,29 @@
             :id="'msg-card-' + msg.id"
             v-for="msg in visibleMessages"
             :key="msg.id"
-            :class="[msg.type === 'warning' ? 'is-warning' : 'is-task']"
+            :class="[
+              msg.type === 'warning'
+                ? msg.severity === 'red'
+                  ? 'is-warning-red'
+                  : 'is-warning-yellow'
+                : 'is-task',
+            ]"
             @click="handleViewTask(msg)"
           >
-            <!-- 卡片头部标签和关闭按钮 -->
+            <!-- 卡片头部：预警用红/黄警示图标区分，文案统一 -->
             <div class="card-header">
-              <span class="card-tag" :class="msg.type">
-                {{ msg.type === 'warning' ? '预警通知' : '学习任务' }}
-              </span>
+              <div class="card-header-left">
+                <n-icon
+                  v-if="msg.type === 'warning'"
+                  class="card-warn-icon"
+                  :class="msg.severity === 'red' ? 'card-warn-icon--red' : 'card-warn-icon--yellow'"
+                >
+                  <WarningOutlined />
+                </n-icon>
+                <span class="card-tag" :class="msg.type">
+                  {{ msg.type === 'warning' ? '预警通知' : '学习任务' }}
+                </span>
+              </div>
               <!-- 仅预警信息允许被关闭 (叉掉) -->
               <n-button
                 v-if="msg.type === 'warning'"
@@ -147,6 +162,7 @@
     <n-modal
       v-model:show="showTaskModal"
       class="task-detail-modal"
+      @update:show="onTaskModalShowChange"
       :style="{
         width: '90%',
         maxWidth: '400px',
@@ -245,16 +261,22 @@
           </div>
         </div>
 
-        <!-- 固定底部按钮 -->
-        <div
-          v-if="currentTaskDetail"
-          style="
-            padding: 16px 20px;
-            border-top: 1px solid #f3f4f6;
-            flex-shrink: 0;
-            background: #fff;
-          "
-        >
+        <!-- 固定底部：确认已读（计入总部任务读取率）+ 去完成 -->
+        <div v-if="currentTaskDetail" class="td-footer-actions">
+          <n-button
+            secondary
+            block
+            size="large"
+            class="td-btn td-btn-confirm-read"
+            :loading="readConfirmSending"
+            :disabled="readConfirmDone || !currentTaskModalAssignmentId"
+            @click="handleConfirmTaskRead"
+          >
+            {{ readConfirmDone ? '已确认已读' : '确认已读' }}
+          </n-button>
+          <p v-if="currentTaskDetail && !currentTaskModalAssignmentId" class="td-read-hint">
+            无法获取分配信息，已读状态可能无法同步到总部看板
+          </p>
           <n-button
             type="primary"
             block
@@ -284,42 +306,29 @@
       size="huge"
     >
       <div v-if="currentWarnings.length > 0" class="wd-container" style="position: relative">
-        <!-- 顶部设计：柔和的红色插画风渐变 -->
-        <div
-          style="
-            background: linear-gradient(145deg, #fef2f2 0%, #fee2e2 100%);
-            padding: 32px 24px 40px;
-            text-align: center;
-            position: relative;
-          "
-        >
-          <div
-            style="
-              width: 64px;
-              height: 64px;
-              background: #ef4444;
-              border-radius: 20px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              margin: 0 auto 16px;
-              box-shadow: 0 8px 16px rgba(239, 68, 68, 0.25);
-              transform: rotate(-5deg);
-            "
-          >
+        <!-- 顶部：红色=紧急，黄色=催办（与 severity 一致） -->
+        <div class="wd-hero" :class="warningModalTone === 'red' ? 'wd-hero--red' : 'wd-hero--yellow'">
+          <div class="wd-icon-box" :class="warningModalTone === 'red' ? 'wd-icon-box--red' : 'wd-icon-box--yellow'">
             <n-icon size="36" color="#ffffff" style="transform: rotate(5deg)"
               ><WarningOutlined
             /></n-icon>
           </div>
-          <h2 style="margin: 0; font-size: 22px; font-weight: 800; color: #b91c1c">
+          <h2 class="wd-hero-title" :class="warningModalTone === 'red' ? 'wd-hero-title--red' : 'wd-hero-title--yellow'">
             {{
               currentWarnings.length > 1
                 ? `您有 ${currentWarnings.length} 条预警通知`
                 : currentWarnings[0].title
             }}
           </h2>
-          <p style="margin: 8px 0 0; font-size: 14px; color: #ef4444; font-weight: 500">
-            请尽快查阅并处理以下学习任务
+          <p
+            class="wd-hero-sub"
+            :class="warningModalTone === 'red' ? 'wd-hero-sub--red' : 'wd-hero-sub--yellow'"
+          >
+            {{
+              warningModalTone === 'red'
+                ? '请优先处理以下学习任务'
+                : '请关注并尽快完成以下学习任务'
+            }}
           </p>
         </div>
 
@@ -332,42 +341,22 @@
             <div
               v-for="(w, idx) in currentWarnings"
               :key="w.id"
-              style="
-                background: #ffffff;
-                border: 1px solid #f3f4f6;
-                border-radius: 16px;
-                padding: 18px;
-                margin-bottom: 12px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
-                position: relative;
-                overflow: hidden;
-              "
+              class="wd-item-card"
             >
-              <!-- 顶部的一丝丝红条装饰 -->
               <div
-                style="
-                  position: absolute;
-                  top: 0;
-                  left: 0;
-                  right: 0;
-                  height: 3px;
-                  background: #ef4444;
-                "
+                class="wd-item-stripe"
+                :class="w.severity === 'red' ? 'wd-item-stripe--red' : 'wd-item-stripe--yellow'"
               ></div>
 
-              <h3
-                style="
-                  margin: 0 0 8px;
-                  font-size: 16px;
-                  font-weight: 700;
-                  color: #1f2937;
-                  display: flex;
-                  align-items: center;
-                  gap: 8px;
-                "
-              >
+              <h3 class="wd-item-title">
+                <n-icon
+                  size="20"
+                  class="wd-item-warn-icon"
+                  :class="w.severity === 'red' ? 'wd-item-warn-icon--red' : 'wd-item-warn-icon--yellow'"
+                >
+                  <WarningOutlined />
+                </n-icon>
                 <n-tag
-                  type="error"
                   size="small"
                   :bordered="false"
                   style="font-weight: 800; font-size: 12px; height: 20px"
@@ -492,9 +481,20 @@
   const waterfallMessages = ref<any[]>([]);
   const showTaskModal = ref(false);
   const currentTaskDetail = ref<any>(null);
+  /** 当前弹窗对应 assignment，用于 POST /assignments/:id/viewed（task_detail_open） */
+  const currentTaskModalAssignmentId = ref<string | undefined>(undefined);
+  const readConfirmSending = ref(false);
+  const readConfirmDone = ref(false);
 
   const showWarningModal = ref(false);
   const currentWarnings = ref<any[]>([]);
+
+  /** 弹窗顶区主色调：含任一条红色预警则用红色，否则黄色 */
+  const warningModalTone = computed(() => {
+    const list = currentWarnings.value;
+    if (!list.length) return 'yellow';
+    return list.some((w: any) => w.severity === 'red') ? 'red' : 'yellow';
+  });
 
   let ws: WebSocket | null = null;
   const NUDGE_COPY_CACHE_KEY = 'tot_employee_nudge_copy_cache_v1';
@@ -549,10 +549,12 @@
           message.warning('你收到一条催办提醒');
           const nid = parsed.data.eventId || parsed.data.nudgeRecordId || Date.now().toString();
           cacheNudgeCopy(parsed.data.eventId, parsed.data.content);
+          const sev = parsed.data.severity === 'red' ? 'red' : 'yellow';
           const newWarning = {
             id: nid,
             eventId: parsed.data.eventId,
             type: 'warning',
+            severity: sev,
             readStatus: false,
             title: parsed.data.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒',
             content: parsed.data.content || '您有任务需要尽快处理。',
@@ -678,10 +680,12 @@
         const taskTitle = taskTitleById.get(ev.taskId) || '学习任务';
         const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
         const nudgeContent = nudgeCopyCache[ev.eventId] || `【${taskTitle}】您有任务需要尽快处理。`;
+        const severity = ev.severity === 'red' ? 'red' : 'yellow';
         return {
           id: ev.eventId,
           eventId: ev.eventId,
           type: 'warning' as const,
+          severity,
           taskId: ev.taskId,
           readStatus: ev.readStatus,
           title: prefix,
@@ -757,7 +761,7 @@
   // 1. 跳转到微信小程序
   const handleGoToMiniProgram = () => {
     const a = document.createElement('a');
-    a.href = 'weixin://dl/business/?t=eS0Bza6c7I8No5g';
+    a.href = 'weixin://dl/business/?appid=wx8490a792205aecda&path=pages/login/login&query=&env_version=release';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -769,7 +773,36 @@
     message.loading('正在尝试唤起微信小程序...', { duration: 1500 });
   };
 
-  // 2. 查阅真实任务详情，调用后端 GET /tasks/:id
+  const onTaskModalShowChange = (show: boolean) => {
+    if (!show) {
+      currentTaskDetail.value = null;
+      currentTaskModalAssignmentId.value = undefined;
+      readConfirmDone.value = false;
+      readConfirmSending.value = false;
+    }
+  };
+
+  /** 确认已读：写入 read_receipts（task_detail_open），计入总部看板「任务读取率」 */
+  const handleConfirmTaskRead = async () => {
+    const aid = currentTaskModalAssignmentId.value;
+    if (!aid) {
+      message.warning('无法获取任务分配信息，请刷新页面后重试');
+      return;
+    }
+    if (readConfirmDone.value) return;
+    readConfirmSending.value = true;
+    try {
+      await postAssignmentViewed(aid).send();
+      readConfirmDone.value = true;
+      message.success('已确认已读');
+    } catch (err: any) {
+      message.error(err?.message || '确认已读失败，请稍后重试');
+    } finally {
+      readConfirmSending.value = false;
+    }
+  };
+
+  // 2. 查阅真实任务详情，调用后端 GET /tasks/:id（已读由弹窗内「确认已读」触发）
   const handleViewTask = async (msg: any) => {
     if (msg.type === 'warning') {
       currentWarnings.value = [msg]; // 如果单独点击某个预警卡片，则只展示这一条
@@ -777,16 +810,14 @@
       return;
     }
 
+    readConfirmDone.value = false;
+    currentTaskModalAssignmentId.value = msg.assignmentId as string | undefined;
+
     const msgReactive = message.loading('加载任务详情中...', { duration: 0 });
     try {
       const res = await getTaskDetail(msg.id).send();
       currentTaskDetail.value = res;
       showTaskModal.value = true;
-
-      // 触发任务已读（task_detail_open）记录
-      if (msg.assignmentId) {
-        await postAssignmentViewed(msg.assignmentId).send();
-      }
     } catch (err: any) {
       message.error(err.message || '获取任务详情失败');
     } finally {
@@ -1119,10 +1150,15 @@
       transition: all 0.3s ease;
       cursor: pointer;
 
-      /* 针对不同类型的轻微强调 */
-      &.is-warning {
-        border-left: 4px solid #ef4444; /* 红色左边框强调预警 */
-        background: #fffcfc;
+      /* 预警：背景尽量浅，避免与灰色按钮（#f3f4f6）糊在一起 */
+      &.is-warning-red {
+        border-left: 4px solid #ef4444;
+        background: #fff8f8;
+      }
+
+      &.is-warning-yellow {
+        border-left: 4px solid #f59e0b;
+        background: #fffef9;
       }
 
       &.is-task {
@@ -1139,6 +1175,26 @@
         align-items: center;
         margin-bottom: 12px;
 
+        .card-header-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .card-warn-icon {
+          flex-shrink: 0;
+          font-size: 20px;
+        }
+
+        .card-warn-icon--red {
+          color: #ef4444;
+        }
+
+        .card-warn-icon--yellow {
+          color: #f59e0b;
+        }
+
         .card-tag {
           font-size: 12px;
           font-weight: 600;
@@ -1149,9 +1205,10 @@
             color: #2563eb;
             background: #eff6ff;
           }
+
           &.warning {
-            color: #dc2626;
-            background: #fef2f2;
+            color: #4b5563;
+            background: #f3f4f6;
           }
         }
 
@@ -1210,6 +1267,14 @@
           color: #ffffff;
           border: none;
           box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+        }
+      }
+
+      &.is-warning-red,
+      &.is-warning-yellow {
+        .card-actions .view-btn {
+          background: #e5e7eb;
+          color: #374151;
         }
       }
     }
@@ -1282,10 +1347,32 @@
     }
   }
 
+  .td-footer-actions {
+    padding: 16px 20px;
+    border-top: 1px solid #f3f4f6;
+    flex-shrink: 0;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .td-read-hint {
+    margin: -4px 0 0;
+    font-size: 12px;
+    color: #9ca3af;
+    text-align: center;
+    line-height: 1.45;
+  }
+
   .td-btn {
     margin-top: 8px;
     border-radius: 8px;
     font-weight: 600;
+  }
+
+  .td-footer-actions .td-btn {
+    margin-top: 0;
   }
 
   /* 高亮闪烁动画 */
@@ -1316,5 +1403,119 @@
   }
   .custom-scroll::-webkit-scrollbar-track {
     background: transparent;
+  }
+
+  /* 预警弹窗：红 / 黄两套顶区与条目装饰 */
+  .wd-hero {
+    padding: 32px 24px 40px;
+    text-align: center;
+    position: relative;
+  }
+
+  .wd-hero--red {
+    background: linear-gradient(145deg, #fef2f2 0%, #fee8e8 100%);
+  }
+
+  .wd-hero--yellow {
+    background: linear-gradient(145deg, #fffdf5 0%, #fff7e0 100%);
+  }
+
+  .wd-icon-box {
+    width: 64px;
+    height: 64px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+    transform: rotate(-5deg);
+  }
+
+  .wd-icon-box--red {
+    background: #ef4444;
+    box-shadow: 0 8px 16px rgba(239, 68, 68, 0.25);
+  }
+
+  .wd-icon-box--yellow {
+    background: #f59e0b;
+    box-shadow: 0 8px 16px rgba(245, 158, 11, 0.3);
+  }
+
+  .wd-hero-title {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 800;
+  }
+
+  .wd-hero-title--red {
+    color: #b91c1c;
+  }
+
+  .wd-hero-title--yellow {
+    color: #92400e;
+  }
+
+  .wd-hero-sub {
+    margin: 8px 0 0;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .wd-hero-sub--red {
+    color: #ef4444;
+  }
+
+  .wd-hero-sub--yellow {
+    color: #d97706;
+  }
+
+  .wd-item-card {
+    background: #ffffff;
+    border: 1px solid #f3f4f6;
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .wd-item-stripe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .wd-item-stripe--red {
+    background: #ef4444;
+  }
+
+  .wd-item-stripe--yellow {
+    background: #f59e0b;
+  }
+
+  .wd-item-title {
+    margin: 0 0 8px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #1f2937;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .wd-item-warn-icon {
+    flex-shrink: 0;
+  }
+
+  .wd-item-warn-icon--red {
+    color: #ef4444;
+  }
+
+  .wd-item-warn-icon--yellow {
+    color: #f59e0b;
   }
 </style>

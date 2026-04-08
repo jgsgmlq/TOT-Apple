@@ -308,23 +308,23 @@
                 class="hq-wf-expand hq-rules-expand"
                 @click.stop
               >
-                <div v-if="hasAutoNudgeRules(task)" class="hq-rules-body">
+                <div v-if="hasAutoNudgeRulesConfigured(task.autoNudgeRules)" class="hq-rules-body">
                   <div class="hq-rule-block">
                     <div class="hq-rule-block-title">进度掉队预警</div>
                     <p class="hq-rule-line">
                       Lifestyle：个人完成率处于门店最后
-                      <strong>{{ task.autoNudgeRules.laggingLifestyle ?? '—' }}</strong> 位
+                      <strong>{{ hqRulesDisplay(task).laggingLifestyle ?? '—' }}</strong> 位
                     </p>
                     <p class="hq-rule-line">
                       Mono：个人完成率处于门店最后
-                      <strong>{{ task.autoNudgeRules.laggingMono ?? '—' }}</strong> 位
+                      <strong>{{ hqRulesDisplay(task).laggingMono ?? '—' }}</strong> 位
                     </p>
                   </div>
                   <div class="hq-rule-block">
                     <div class="hq-rule-block-title">起步异常预警</div>
                     <p class="hq-rule-line">
                       任务期限已度过
-                      <strong>{{ task.autoNudgeRules.startDelayPercent ?? '—' }}</strong> %
+                      <strong>{{ hqRulesDisplay(task).startDelayPercent ?? '—' }}</strong> %
                       ，但个人进度仍为 0%
                     </p>
                   </div>
@@ -332,12 +332,12 @@
                     <div class="hq-rule-block-title">临期危机（Deadline）</div>
                     <p class="hq-rule-line">
                       距 Deadline 不足
-                      <strong>{{ task.autoNudgeRules.deadlineCrisisHours ?? '—' }}</strong>
+                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHours ?? '—' }}</strong>
                       小时（P0）
                     </p>
                     <p class="hq-rule-line">
                       距 Deadline 不足
-                      <strong>{{ task.autoNudgeRules.deadlineCrisisHoursSecondary ?? '—' }}</strong>
+                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHoursSecondary ?? '—' }}</strong>
                       小时（P1）
                     </p>
                   </div>
@@ -444,7 +444,7 @@
           <div class="ns-card">
             <div class="ns-label">整体完成率</div>
             <div class="ns-value highlight"
-              >{{ activeTask.northStar.overallRate }}<span class="unit">%</span></div
+              >{{ formatPct2(activeTask.northStar.overallRate) }}<span class="unit">%</span></div
             >
             <div class="ns-sub">已完成人数 / 应完成总人数</div>
           </div>
@@ -452,7 +452,7 @@
           <div class="ns-card">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
-              >{{ activeTask.northStar.onTimeRate }}<span class="unit">%</span></div
+              >{{ formatPct2(activeTask.northStar.onTimeRate) }}<span class="unit">%</span></div
             >
             <div class="ns-sub">在 Deadline 前完成的人数 / 应完成总人数</div>
           </div>
@@ -573,9 +573,10 @@
                 <span class="rtm-col-num">{{ item.assignmentCount ?? '—' }}</span>
                 <span class="rtm-col-num">{{ item.completedCount ?? '—' }}</span>
                 <span class="rtm-rate">
+                  <span class="rtm-pct-label">{{ formatPct2(item.rate) }}%</span>
                   <n-progress
                     type="line"
-                    :percentage="item.rate"
+                    :percentage="pctForBar(item.rate)"
                     :indicator-placement="'inside'"
                     processing
                   />
@@ -601,7 +602,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.linkData.reachRate }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.linkData.reachRate) }}%</div>
               </div>
 
               <div class="funnel-arrow">
@@ -616,7 +617,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.linkData.readRate }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.linkData.readRate) }}%</div>
               </div>
 
               <div class="funnel-arrow">
@@ -633,7 +634,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.linkData.nudgeRate }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.linkData.nudgeRate) }}%</div>
               </div>
             </div>
           </n-card>
@@ -653,7 +654,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.warningData.startAbnormal }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.warningData.startAbnormal) }}%</div>
               </div>
               <div class="metric-box danger-style">
                 <div class="m-label"
@@ -663,7 +664,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.warningData.p1Crisis }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.warningData.p1Crisis) }}%</div>
               </div>
               <div class="metric-box fatal-style">
                 <div class="m-label"
@@ -673,7 +674,7 @@
                     ><template #trigger
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
-                <div class="m-value">{{ activeTask.warningData.p0Crisis }}%</div>
+                <div class="m-value">{{ formatPct2(activeTask.warningData.p0Crisis) }}%</div>
               </div>
             </div>
           </n-card>
@@ -726,6 +727,10 @@
   import { useMessage, useDialog } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
   import { useGlobSetting } from '@/hooks/setting';
+  import {
+    displayAutoNudgeRules,
+    hasAutoNudgeRulesConfigured,
+  } from '@/utils/autoNudgeRules';
 
   const message = useMessage();
   const dialog = useDialog();
@@ -804,6 +809,8 @@
     const pending = t.overviewSummary?.pendingCount ?? 0;
     const reachRate = t.linkData?.reachRate ?? 100;
     const readRate = t.linkData?.readRate ?? 0;
+    const overallPct = parseFloat(String(overallRate));
+    const readPct = Number(readRate);
 
     // 找出落后的区域（mock 分析）
     let laggingAreas = '暂无';
@@ -811,24 +818,26 @@
       const sorted = [...t.rtmData].sort((a: any, b: any) => (a.rate || 0) - (b.rate || 0));
       const bottom3 = sorted.slice(0, 3).filter((x: any) => x.rate < 60);
       if (bottom3.length > 0) {
-        laggingAreas = bottom3.map((x: any) => `${x.name}(${x.rate}%)`).join('、');
+        laggingAreas = bottom3
+          .map((x: any) => `${x.name}(${formatPct2(x.rate)}%)`)
+          .join('、');
       }
     }
 
     // 风险评级
     let riskLevel = '正常';
     if (overdue > 0) riskLevel = '⚠️ 有风险';
-    if ((overallRate as number) < 50 && overdue > 5) riskLevel = '🔴 高风险';
+    if (!Number.isNaN(overallPct) && overallPct < 50 && overdue > 5) riskLevel = '🔴 高风险';
 
     return `【${name}】执行分析报告
 
 📊 整体进度
-• 完成率：${overallRate}%（按时完成率 ${onTimeRate}%）
+• 完成率：${formatPct2(overallRate)}%（按时完成率 ${formatPct2(onTimeRate)}%）
 • 人均耗时：${avgTime} 小时
 • 总人数：${total} 人｜已完成：${completed} 人｜逾期：${overdue} 人｜待开始：${pending} 人
 
 📡 链路触达
-• 推送覆盖率：${reachRate}%｜已读率：${readRate}%
+• 推送覆盖率：${formatPct2(reachRate)}%｜已读率：${formatPct2(readRate)}%
 
 📍 区域表现（需关注）
 • 落后区域：${laggingAreas}
@@ -837,7 +846,7 @@
 
 💡 建议行动
 1. ${overdue > 0 ? `重点关注 ${overdue} 位逾期学员，建议手动催办或调整截止时间` : '进度正常，继续保持'}
-2. ${readRate < 80 ? '读取率偏低，建议二次推送或短信提醒' : '读取率良好'}
+2. ${readPct < 80 ? '读取率偏低，建议二次推送或短信提醒' : '读取率良好'}
 3. ${laggingAreas !== '暂无' ? `针对 ${laggingAreas} 区域启动专项督导` : '各区域进度均衡'}
 
 如需更详细分析，可直接追问，如「哪些门店最落后？」或「导出逾期名单」等。`;
@@ -981,10 +990,15 @@
     return !!role && HQ_WS_ROLES.includes(role);
   }
 
+  /** 看板任务卡片上的预警规则展示（兼容后端嵌套结构与旧扁平 JSON） */
+  function hqRulesDisplay(task: any) {
+    return displayAutoNudgeRules(task?.autoNudgeRules);
+  }
+
   function applyTaskUpdatedFromWs(data: {
     taskId: string;
     ddlAt?: string;
-    autoNudgeRules?: Record<string, number> | null;
+    autoNudgeRules?: Record<string, unknown> | null;
   }) {
     const { taskId, ddlAt, autoNudgeRules } = data;
     const idx = taskList.value.findIndex((t) => t.id === taskId);
@@ -1146,12 +1160,6 @@
     }
   };
 
-  const hasAutoNudgeRules = (task: any) => {
-    const r = task?.autoNudgeRules;
-    if (!r || typeof r !== 'object') return false;
-    return Object.keys(r).length > 0;
-  };
-
   const goEditRulesTask = (taskId: string) => {
     showAlertRulesModal.value = false;
     router.push({ path: '/central/task/publish', query: { id: taskId } });
@@ -1180,9 +1188,23 @@
     ).padStart(2, '0')}`;
   }
 
+  /** 百分比展示统一保留 2 位小数 */
+  function formatPct2(value: unknown): string {
+    const n = typeof value === 'string' ? parseFloat(value) : Number(value);
+    if (Number.isNaN(n)) return '0.00';
+    return n.toFixed(2);
+  }
+
+  /** n-progress 的 percentage 需在 0–100 */
+  function pctForBar(value: unknown): number {
+    const n = typeof value === 'string' ? parseFloat(value) : Number(value);
+    if (Number.isNaN(n)) return 0;
+    return Math.min(100, Math.max(0, n));
+  }
+
   function emptyBoardStats() {
     return {
-      northStar: { overallRate: '0', onTimeRate: '0', avgTime: '0' },
+      northStar: { overallRate: 0, onTimeRate: 0, avgTime: '0' },
       overviewSummary: {
         totalAssignments: 0,
         completedCount: 0,
@@ -1232,7 +1254,7 @@
       const heatmapRows = heatmap?.heatmapData ?? [];
       const rtmData = heatmapRows.map((h) => ({
         name: h.rtmValue || '—',
-        rate: Math.min(100, Math.max(0, h.completionRate ?? 0)),
+        rate: h.completionRate ?? 0,
         time:
           h.avgCompletionTimeHours != null
             ? Number(Number(h.avgCompletionTimeHours).toFixed(1))
@@ -1256,8 +1278,8 @@
       taskList.value.splice(idx, 1, {
         ...row,
         northStar: {
-          overallRate: String(overview.completionRate ?? 0),
-          onTimeRate: String(overview.onTimeCompletionRate ?? 0),
+          overallRate: overview.completionRate ?? 0,
+          onTimeRate: overview.onTimeCompletionRate ?? 0,
           avgTime: String(
             overview.avgCompletionTimeHours != null
               ? Number(overview.avgCompletionTimeHours).toFixed(1)
@@ -1394,11 +1416,16 @@
     autoNudgeLoading.value = true;
     try {
       const data = await triggerTaskAutoNudge(activeTaskId.value).send();
-      const n = data?.nudgedCount ?? 0;
+      const n = data?.nudgedCount ?? data?.nudgedUsers ?? 0;
       const rules = data?.evaluatedRules?.length
         ? `（规则键：${data.evaluatedRules.join(', ')}）`
         : '';
-      message.success(`扫描完成，本次触发 ${n} 人次催办${rules}`);
+      const hint = data?.reason ? ` ${data.reason}` : '';
+      if (n > 0) {
+        message.success(`扫描完成，本次触发 ${n} 人次催办${rules}`);
+      } else {
+        message.warning(`本次触发 0 人次催办。${hint || '请检查任务截止时间与预警规则是否命中，或是否已被去重。'}${rules}`);
+      }
       if (activeTaskId.value) {
         await loadDashboardForTask(activeTaskId.value);
       }
@@ -2657,6 +2684,20 @@
           font-size: 14px;
           color: rgba(0, 0, 0, 0.48);
           text-align: right;
+        }
+
+        .rtm-rate {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 0;
+        }
+
+        .rtm-pct-label {
+          font-size: 12px;
+          font-weight: 600;
+          color: #1d1d1f;
+          letter-spacing: -0.2px;
         }
 
         /* 进度条恢复为主题蓝 */

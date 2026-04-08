@@ -3,7 +3,7 @@ import { Alova } from '@/utils/http/alova/index';
 /** GET /api/v1/dashboard/overview — 概览 KPI（人均完成时间、按时完成率、预警率、触达/读取/催办转化等） */
 export interface DashboardOverview {
   totalAssignments: number;
-  /** 整体完成人数占比（已完成/总人数） */
+  /** 整体完成人数占比（已完成/总人数），0–100，保留两位小数 */
   completionRate: number;
   completedCount: number;
   /** 在 ddl 前完成的人数占比 */

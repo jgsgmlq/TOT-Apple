@@ -87,11 +87,13 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const completedCnt = base.completed_count    || 0;
     const inProgCnt    = base.in_progress_count  || 0;
     const pendingCnt   = base.pending_count      || 0;
-    const completionRate = total > 0 ? Math.round(100 * completedCnt / total) : 0;
-    
+    const completionRate =
+      total > 0 ? parseFloat(((100 * completedCnt) / total).toFixed(2)) : 0;
+
     // 新增: 整体任务按时完成率 & 人均完成时间 (小时)
     const completedOnTimeCnt = base.completed_on_time_count || 0;
-    const onTimeCompletionRate = total > 0 ? Math.round(100 * completedOnTimeCnt / total) : 0;
+    const onTimeCompletionRate =
+      total > 0 ? parseFloat(((100 * completedOnTimeCnt) / total).toFixed(2)) : 0;
     const avgCompletionTimeHours = base.avg_completion_time_hours ? parseFloat(base.avg_completion_time_hours.toFixed(1)) : 0;
 
     // ─ 逾期数（未完成 AND 当前时间 > ddl_at）──
@@ -141,7 +143,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     );
     const managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
     const totalReadCount   = employeeReadCount + managerReadCount;
-    const realDeliveryRate = total > 0 ? parseFloat((totalReadCount / total * 100).toFixed(1)) : 0;
+    const realDeliveryRate = total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0;
 
     // ─ 预警数（门店维度实时聚合）──
     const storeStats = db.all(
@@ -149,7 +151,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          ta.store_id,
          t.ddl_at,
          COUNT(ta.id) AS total,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate
+         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate
        FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
@@ -181,9 +183,10 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
        WHERE ${taConditions.join(' AND ')} ${storeWhere} AND ta.nudge_count > 0`,
       allParams
     );
-    const nudgeConversionRate = nudgeRow.total_nudged > 0 
-      ? Math.round(100 * nudgeRow.converted_nudged / nudgeRow.total_nudged) 
-      : 0;
+    const nudgeConversionRate =
+      nudgeRow.total_nudged > 0
+        ? parseFloat(((100 * nudgeRow.converted_nudged) / nudgeRow.total_nudged).toFixed(2))
+        : 0;
 
     // 起步异常/P0/P1预警统计 (基于 notification_events dedupe_key 包含的 ruleType 或事件类型)
     const warnStatsRow = db.get(
@@ -198,9 +201,14 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       allParams
     );
     // 这里使用 total(即当次范围内的分配总数)作为分母计算占比
-    const startDelayRate = total > 0 ? parseFloat((100 * (warnStatsRow.start_delay_cnt || 0) / total).toFixed(1)) : 0;
-    const crisisP0Rate = total > 0 ? parseFloat((100 * (warnStatsRow.p0_cnt || 0) / total).toFixed(1)) : 0;
-    const crisisP1Rate = total > 0 ? parseFloat((100 * (warnStatsRow.p1_cnt || 0) / total).toFixed(1)) : 0;
+    const startDelayRate =
+      total > 0
+        ? parseFloat(((100 * (warnStatsRow.start_delay_cnt || 0)) / total).toFixed(2))
+        : 0;
+    const crisisP0Rate =
+      total > 0 ? parseFloat(((100 * (warnStatsRow.p0_cnt || 0)) / total).toFixed(2)) : 0;
+    const crisisP1Rate =
+      total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
 
     res.json({
       code: 200,
@@ -219,8 +227,8 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         avgCompletionTimeHours,
 
         // 链路数据
-        taskReachRate: total > 0 ? 100 : 0, // 系统目前创建即触达
-        taskReadRate: total > 0 ? parseFloat((totalReadCount / total * 100).toFixed(1)) : 0,
+        taskReachRate: total > 0 ? 100 : 0, // 系统目前创建即触达；展示为 100.00%
+        taskReadRate: total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0,
         nudgeConversionRate,
         
         // 预警数据
@@ -260,7 +268,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
          ${groupCol} AS rtm_value,
          COUNT(ta.id) AS assignment_count,
          SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
+         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
          AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
        FROM task_assignments ta
@@ -326,7 +334,7 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
          s.name AS store_name,
          COUNT(ta.id) AS assignment_count,
          SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
+         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
          ROUND(AVG(ta.progress), 0) AS avg_progress
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
@@ -397,7 +405,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         COUNT(ta.id) AS total_count,
         SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
         SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
-        ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
+        ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
         MAX(ta.updated_at) AS last_updated
       FROM task_assignments ta
       JOIN stores s ON s.id = ta.store_id
@@ -495,7 +503,8 @@ router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (re
 
     const total     = rows.length;
     const completed = rows.filter(r => r.status === 'completed').length;
-    const completionRate = total > 0 ? Math.round(100 * completed / total) : 0;
+    const completionRate =
+      total > 0 ? parseFloat(((100 * completed) / total).toFixed(2)) : 0;
 
     res.json({
       code: 200,
