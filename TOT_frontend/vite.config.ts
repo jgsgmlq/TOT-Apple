@@ -38,6 +38,8 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
   const env = loadEnv(mode, root);
   const viteEnv = wrapperEnv(env);
   const { VITE_PUBLIC_PATH, VITE_PORT, VITE_PROXY } = viteEnv;
+  const funnelDev =
+    env.VITE_FUNNEL_MODE === 'true' || env.VITE_FUNNEL_MODE === '1';
   const isBuild = command === 'build';
   const plugins = [...createVitePlugins(viteEnv, isBuild), ...(isBuild ? [] : [devLanAccessHint()])];
   return {
@@ -65,7 +67,20 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
     server: {
       host: true,
       port: VITE_PORT,
-      proxy: createProxy(VITE_PROXY),
+      // 经 Tailscale Funnel（HTTPS 公网 → 本机 8001）时，Vite HMR 的 WebSocket 常无法对齐端口/协议，首屏会长时间卡在 loading；关闭 HMR 只影响热更新
+      hmr: funnelDev ? false : undefined,
+      proxy: {
+        ...createProxy(VITE_PROXY),
+        // 保留完整路径 /api/v1/* 转发到本机后端（createProxy 会 strip 前缀，故单独配置）
+        // 手机经 Tailscale Funnel 访问时，API 须与页面同源，不能写死 http://100.x.x.x:3000
+        '/api/v1': {
+          target: 'http://127.0.0.1:3000',
+          changeOrigin: true,
+          ws: true,
+        },
+      },
+      // 开发环境允许任意 Host（localhost、127.0.0.1、局域网 IP、*.ts.net Funnel、*.local 机器名等），避免误拦
+      allowedHosts: true,
     },
     optimizeDeps: {
       include: [],

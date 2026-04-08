@@ -17,6 +17,15 @@ echo "=============================="
 echo ""
 echo "[ 1/3 ] git pull origin $BRANCH..."
 cd "$PROJECT_ROOT"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "❌ 工作区有未提交变更，请先提交或暂存后再部署。"
+  exit 1
+fi
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+  echo "切换分支: $CURRENT_BRANCH -> $BRANCH"
+  git checkout "$BRANCH"
+fi
 git pull origin "$BRANCH"
 
 # ── 2. 安装/更新依赖（仅当 package-lock.json 有变更时才慢）────────

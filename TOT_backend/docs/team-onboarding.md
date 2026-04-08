@@ -19,6 +19,20 @@
 
 ---
 
+## Mac Studio 管理员基线检查
+
+在 **Mac Studio** 上定期执行（重大演示前、或成员反馈「连不上」时），确认共享环境可用：
+
+```bash
+tailscale status          # 预期：已连接，无异常
+tailscale ip -4           # 与上表「Tailscale IP」一致；若不一致，更新上表、根目录 README、本文中所有示例 IP
+pm2 status tot-api        # 预期：online（共享后端）
+```
+
+可选：从管理员本机再执行 `ping <Tailscale IP>` 与 `curl` 登录测试（见 Step 1-B）。
+
+---
+
 ## Step 1：Tailscale 配置
 
 Tailscale 是一个 P2P VPN 工具，安装后无论你在哪个网络（家里、公司、移动数据），都能像在同一局域网里一样访问 Mac Studio。
@@ -94,6 +108,18 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 | ping 不通 | Tailscale 未启动 | 点开 App，确认图标是绿色 |
 | ping 不通 | 未加入同一 Network | 确认用接受邀请时的账号登录，不是新注册账号 |
 | API 返回 `Connection refused` | Mac Studio 后端未运行 | 通知管理员执行 `pm2 status` 检查 |
+
+---
+
+### 路径 A：Tailscale 内网 (100.x) 验证清单
+
+成员完成 Step 1-B 后，建议按下面确认 **路径 A**（不经过公网 Funnel）可用：
+
+| 检查项 | 操作 | 预期 |
+|--------|------|------|
+| API | `curl` 见上文「第四步」登录接口 | 返回含 `token` 的 JSON |
+| 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000` | 与后端联调正常 |
+| 完整前端（可选） | Mac Studio 上已执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
 
 ---
 
@@ -175,11 +201,11 @@ ssh mac-studio
 ### 选项 B：本地开发（适合只改 UI、不依赖后端实时数据时）
 
 - 本机 `pnpm run dev`
-- 修改 `TOT_frontend/.env.development` 的 API 地址：
+- 在 `TOT_frontend` 下新建（或修改）`.env.development.local`，覆盖 API 地址（该文件已被忽略，不会提交）：
   ```
   VITE_GLOB_API_URL = http://100.65.95.128:3000
   ```
-  > ⚠️ 这个文件不要 commit，每人本地维护自己的 IP
+  > ⚠️ 不要改动已跟踪的 `.env.development`，每人仅维护本地 `.env.development.local`
 
 ---
 
@@ -203,6 +229,77 @@ ssh mac-studio
    ```bash
    bash /Users/skylerwang/Desktop/MVP/scripts/deploy.sh
    ```
+
+---
+
+## 路径 B：Tailscale Funnel 公网 HTTPS
+
+用于 **未安装 Tailscale** 的设备（例如手机蜂窝网）通过 **HTTPS 公网 URL** 访问本机上的开发前端与 API。流量经 Tailscale Funnel 中继到 Mac Studio；与 **路径 A（100.x）** 可同时存在，按需开关 Funnel。
+
+**前置条件（tailnet 侧）**：
+
+- Tailscale 客户端版本满足 [官方要求](https://tailscale.com/kb/1223/funnel)（如 v1.38.3+）。
+- Admin Console 中启用 [MagicDNS](https://tailscale.com/docs/features/magicdns)、HTTPS 证书；在 [Access controls](https://login.tailscale.com/admin/acls) 中为 tailnet 配置 **Funnel**（`nodeAttrs` /「Add Funnel to policy」），且仅允许需要发布服务的机器（如 Mac Studio）具备 `funnel` 能力（最小权限）。
+- Funnel 为 beta 功能，且对套餐有要求，见 [定价与说明](https://tailscale.com/pricing)。
+
+**在 Mac Studio 上操作（管理员）**：
+
+1. 完成上文「管理员基线检查」，确认 `tot-api` 在 `3000` 正常。
+2. 进入前端目录并启动 Vite（需与 Funnel 指向的端口一致，默认 **8001**）：
+   ```bash
+   cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+   # 若首屏长时间卡在 loading，使用本地覆盖配置（勿提交）：
+   cp .env.development.local.example .env.development.local   # 已存在则可跳过；确保含 VITE_FUNNEL_MODE=1
+   pnpm run dev
+   ```
+3. **另开终端**，在同一台 Mac Studio 上开启 Funnel，将公网 HTTPS 转发到本机 Vite（示例为官方用法，等价于代理到 `http://127.0.0.1:8001`）：
+   ```bash
+   tailscale funnel 8001
+   ```
+   终端会打印 **Available on the internet:** 下的 `https://<机器名>.<tailnet>.ts.net` —— 将该 URL 发给测试设备。更多参数与排错见 [tailscale funnel CLI](https://tailscale.com/docs/reference/tailscale-cli/funnel) 与 [Funnel 文档](https://tailscale.com/kb/1223/funnel)。
+4. **环境变量**：路径 B 下请保持 `VITE_GLOB_API_URL` **为空**（与 `.env.development` 默认一致），使 API 经 **当前页面同源** 走 Vite 的 `/api/v1` 代理到 `127.0.0.1:3000`；不要写死 `http://100.x.x.x:3000`，否则蜂窝网设备无法访问 100 段地址。
+5. **验证**：用 **未连接 Tailscale** 的网络（如手机关闭 VPN、仅用蜂窝数据）在浏览器打开 Funnel URL，登录并走通主流程。公网 DNS 生效可能需要数分钟（见官方文档 Troubleshooting）。
+
+### 演示稳定模式（MVP 推荐）：build + preview + Funnel
+
+如果目标是「演示期间手机端和电脑端都尽量稳定访问」，建议使用下列流程替代 `pnpm run dev + funnel 8001`：
+
+```bash
+# Terminal A（Mac Studio）- 运行前端演示服务
+pm2 status tot-api
+cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+pnpm install
+pnpm run build
+pnpm run preview:dist --host 0.0.0.0 --port 4173
+
+# Terminal B（Mac Studio）- 开启 Funnel 到演示端口
+tailscale funnel reset
+tailscale funnel 4173
+tailscale funnel status
+```
+
+说明：
+
+- 该模式使用构建后的静态产物，减少开发模式下 HMR/开发客户端带来的移动端不稳定因素。
+- 将 `tailscale funnel status` 输出的公网地址发给演示设备，建议直接访问：
+  - `https://<...>/hq`
+  - `https://<...>/employee/login`
+- 演示结束执行 `tailscale funnel reset` 关闭公网入口。
+
+**关闭 Funnel**（演示结束后建议执行，减少暴露面）：
+
+- 在运行 `tailscale funnel` 的终端按 `Ctrl+C`，或按官方文档使用 `tailscale funnel reset` / 对应 `off` 子命令（以本机 `tailscale funnel --help` 为准）。
+
+---
+
+## 安全与运维（双路径）
+
+| 主题 | 建议 |
+|------|------|
+| **路径 A** | 仅 tailnet 内成员可达；仍应保护好 SSH 密钥与测试账号，勿在公开场合张贴 `100.x` 与密码。 |
+| **路径 B（Funnel）** | 任意知道 URL 的人可尝试访问；**仅用于联调/短时演示**，不要长期对公网暴露含真实业务数据的 SQLite；演示结束关闭 Funnel。 |
+| **ACL** | 在 [Access controls](https://login.tailscale.com/admin/acls) 中收紧 `funnel` 的 `nodeAttrs`，仅允许 Mac Studio 等指定节点；按需限制可使用 Funnel 的 tailnet 成员。 |
+| **文档同步** | `tailscale ip -4` 变化时，同步更新 README 与本文「前置信息」表。 |
 
 ---
 
@@ -278,5 +375,5 @@ ssh mac-studio
 # 测试后端是否可访问
 curl http://100.65.95.128:3000/api/v1/auth/login \
   -X POST -H "Content-Type: application/json" \
-  -d '{"email":"test1@tot.com","password":"test123"}'
+  -d '{"username":"central","password":"Train2026!"}'
 ```

@@ -2,7 +2,7 @@
 
 本文档记录本仓库（主线分支 **`dev_joint`**，TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。更完整的后端/前端说明见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
-> 更新日期：2026年4月4日
+> 更新日期：2026年4月7日
 
 ---
 
@@ -30,7 +30,16 @@
 | 主开发分支 | `dev_joint` |
 | 远程开发 | Cursor Remote SSH → `mac-studio` |
 
-**新成员接入**：见 `TOT_backend/docs/team-onboarding.md`
+**新成员接入**：见 [`TOT_backend/docs/team-onboarding.md`](TOT_backend/docs/team-onboarding.md)
+
+**网络双路径（内网 + 可选公网）**：
+
+| 路径 | 适用场景 | 说明 |
+|------|----------|------|
+| Tailscale 内网 `100.x` | 团队成员已安装 Tailscale | 访问 `http://<Tailscale IP>:3000`（API）或 `:8001`（Mac Studio 上已跑 Vite 时） |
+| [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) 公网 HTTPS | 未装 Tailscale 的设备（如蜂窝网演示） | 仅在 Mac Studio 上按需开启，详见 onboarding 文档「路径 B」 |
+
+管理员在 Mac Studio 上应定期执行基线检查（Tailscale 在线、`pm2 status tot-api`、`tailscale ip -4`）；若 `tailscale ip -4` 与上表 IP 不一致，请更新本 README 与 onboarding 中的示例地址。
 
 **日常部署**（合并到 dev_joint 后在 Mac Studio 执行）：
 ```bash
@@ -120,7 +129,7 @@ bash scripts/deploy.sh
 
 后端已由 PM2 守护，**平时不必手起 `npm run dev`**；若你改了后端并要 Mac Studio 上的接口用上新代码，见上文 **「后端代码更新与 PM2 重载」**。前端仍需本机执行 `pnpm run dev`。
 
-`TOT_frontend/.env.development` 中 **`VITE_GLOB_API_URL`** 默认指向 Mac Studio 的 Tailscale 地址（与上表一致时可直接联调）；若**只连本机后端**，请改为 `http://localhost:3000` 后再启动前端（勿把个人本机地址提交进 Git）。
+`TOT_frontend/.env.development` 中 **`VITE_GLOB_API_URL`** 默认留空（同源 + Vite 代理到本机 `:3000`）；若你要临时直连某台后端，请在 `.env.development.local` 覆盖，避免改动已跟踪文件并误提交个人地址。
 
 ```bash
 # 确认后端正在运行（在 Mac Studio 上执行）
@@ -128,6 +137,35 @@ pm2 status tot-api
 
 # 前端本地开发（Vite 已 `host: true`，局域网/Tailscale 可访问）
 cd TOT_frontend && pnpm run dev
+```
+
+### 演示模式（推荐给手机/公网）：build + preview + Funnel
+
+当需要保证演示稳定性（尤其 iPhone）时，建议不要直接把 `pnpm run dev` 暴露到公网，而使用「先构建、再预览、最后开启 Funnel」的固定流程：
+
+```bash
+# Terminal A（Mac Studio）
+pm2 status tot-api
+cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+pnpm install
+pnpm run build
+pnpm run preview:dist --host 0.0.0.0 --port 4173
+
+# Terminal B（Mac Studio）
+tailscale funnel reset
+tailscale funnel 4173
+tailscale funnel status
+```
+
+将 `tailscale funnel status` 输出的 `https://<machine>.<tailnet>.ts.net` 发给演示设备访问：
+
+- 总部入口：`https://<...>/hq`
+- 店员入口：`https://<...>/employee/login`
+
+演示结束后关闭公网暴露：
+
+```bash
+tailscale funnel reset
 ```
 
 ### 本地独立开发（仅本机调试时）
