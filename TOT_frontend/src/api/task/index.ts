@@ -14,10 +14,21 @@ export interface TaskItem {
   status: 'draft' | 'dispatched';
   rtmFilter: object[] | null;
   storeScope: 'all' | string[];
+  startAt: string;
+  passScore: number;
   ddlAt: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  autoNudgeRules?: Record<string, number> | null;
+  assignment?: {
+    id: string;
+    status: string;
+    progress: number;
+    receivedAt?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+  };
 }
 
 /**
@@ -30,9 +41,12 @@ export const createTask = (data: {
   hasSmartSell?: boolean;
   hasAiDemo?: boolean;
   hasLiveBroadcast?: boolean;
+  startAt: string;
+  passScore: number;
   ddlAt: string;
   rtmFilter?: any;
   storeScope?: string | string[];
+  autoNudgeRules?: Record<string, number>;
 }) => {
   return Alova.Post<TaskItem>('/tasks', data);
 };
@@ -77,6 +91,16 @@ export const getTaskList = () => {
  */
 export const deleteTask = (id: string) => {
   return Alova.Delete(`/tasks/${id}`);
+};
+
+/** 对已下发任务执行自动预警扫描（读库内 autoNudgeRules，写通知 + WebSocket） */
+export const triggerTaskAutoNudge = (id: string) => {
+  return Alova.Post<{
+    success: boolean;
+    nudgedCount?: number;
+    evaluatedRules?: string[];
+    reason?: string;
+  }>(`/tasks/${id}/auto-nudge`);
 };
 
 /**

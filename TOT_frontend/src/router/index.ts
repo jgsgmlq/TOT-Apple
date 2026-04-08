@@ -69,6 +69,25 @@ export const EmployeeLoginRoute: RouteRecordRaw = {
   },
 };
 
+export const ExecutiveHomeRoute: RouteRecordRaw = {
+  path: '/executive',
+  name: 'ExecutiveHome',
+  component: () => import('@/views/executive/index.vue'),
+  meta: {
+    title: 'Executive Chat',
+  },
+};
+
+export const ExecutiveLoginRoute: RouteRecordRaw = {
+  path: '/executive/login',
+  name: 'ExecutiveLogin',
+  component: () => import('@/views/executive/login.vue'),
+  meta: {
+    title: 'Executive Chat',
+    ignoreAuth: true,
+  },
+};
+
 export const EmployeeHomeRoute: RouteRecordRaw = {
   path: '/employee',
   name: 'EmployeeHome',
@@ -92,6 +111,8 @@ export const constantRouter: RouteRecordRaw[] = [
   HqEntryRoute,
   HqEntrySlashRedirect,
   EmployeeLoginRoute,
+  ExecutiveLoginRoute,
+  ExecutiveHomeRoute,
   EmployeeHomeRoute,
   LoginRedirectRoute,
   RootRoute,

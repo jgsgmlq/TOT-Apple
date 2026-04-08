@@ -75,7 +75,6 @@ function applyMypalRowToAssignment(assignmentRow, task, mypalRow, nowIso) {
 
     const updated = db.get('SELECT * FROM task_assignments WHERE id = ?', [assignmentRow.id]);
     const computed = computeAssignmentProgressStatus(updated, task, nowIso);
-    nextStatus = computed.nextStatus;
 
     db.run(
       `UPDATE task_assignments SET progress = ?, status = ?, completed_at = ?, updated_at = ? WHERE id = ?`,
@@ -98,7 +97,7 @@ function applyMypalRowToAssignment(assignmentRow, task, mypalRow, nowIso) {
         completedAt: computed.completedAt,
       };
     }
-  })();
+  });
 
   if (broadcast) {
     const wsPayload = { event: 'assignment_completed', data: broadcast };

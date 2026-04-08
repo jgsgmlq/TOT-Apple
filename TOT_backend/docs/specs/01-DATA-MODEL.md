@@ -1,6 +1,6 @@
 # 数据模型规格
 
-**版本:** 2.6.8 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-02
+**版本:** 2.6.9 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-07
 
 ---
 
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 | status | Y | draft \| dispatched | draft=草稿可编辑；dispatched=已下发终态，仅 ddl_at 可修改 |
 | rtm_filter | N | JSON 数组或 null | 按渠道属性动态筛选目标门店，优先级高于 store_scope；条件内 AND，条件间 OR（见 07-RTM-FILTER.md）|
 | store_scope | Y（有默认） | "all" 或 JSON 数组 | **NOT NULL，默认 `'all'`**；rtm_filter 为空时使用；"all"=全部门店，JSON 数组=指定门店列表；DB 约束保证值为 all 或合法 JSON 数组 |
-| auto_nudge_rules | N | JSON 对象或 null | **自动催办规则**，支持配置 `progressLag`, `startDelay`, `deadlineCrisis` 等自动扫描规则 |
+| auto_nudge_rules | N | JSON 对象或 null | **自动催办规则**，支持配置 `progressLag`, `startDelay`, `deadlineCrisis` 等；服务端定时调度与 `POST /tasks/{id}/auto-nudge` 均读取该字段执行扫描（见 `04-API-SPEC.md` §2.9） |
 | ddl_at | Y | ISO 8601 | 任务截止时间；dispatched 后仍可修改 |
 | created_by | Y | — | 创建者 username（软引用，不设外键），用于审计 |
 | CHECK（平台）| — | 至少 1 个平台为 1 | 任务必须包含至少一个学习平台 |

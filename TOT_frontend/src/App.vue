@@ -11,7 +11,10 @@
     </AppProvider>
   </NConfigProvider>
 
-  <transition v-if="isLock && $route.name !== 'EmployeeLogin' && $route.name !== 'login'" name="slide-up">
+  <transition
+    v-if="isLock && $route.name !== 'EmployeeLogin' && $route.name !== 'login'"
+    name="slide-up"
+  >
     <LockScreen />
   </transition>
 </template>

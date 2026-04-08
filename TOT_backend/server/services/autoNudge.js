@@ -88,9 +88,18 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   }
 
   // 6. 判定临期危机预警 (Deadline Crisis)
-  if (rules.deadlineCrisis && hoursLeft > 0 && hoursLeft <= rules.deadlineCrisis) {
-    for (const a of assignments) {
-      triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisis' });
+  if (rules.deadlineCrisis && hoursLeft > 0) {
+    const p0Hours = rules.deadlineCrisis.p0 || 24;
+    const p1Hours = rules.deadlineCrisis.p1 || 48;
+    
+    if (hoursLeft <= p0Hours) {
+      for (const a of assignments) {
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0' });
+      }
+    } else if (hoursLeft <= p1Hours) {
+      for (const a of assignments) {
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP1' });
+      }
     }
   }
 

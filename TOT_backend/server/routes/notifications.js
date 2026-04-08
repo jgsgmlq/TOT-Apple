@@ -25,6 +25,16 @@ function computeResolvedAt(eventType, assignmentCompletedAt) {
 function formatEvent(row) {
   const isActive = computeIsActive(row.event_type, row.assignment_status);
   const resolvedAt = computeResolvedAt(row.event_type, row.assignment_completed_at);
+  
+  let ruleType = null;
+  if (row.dedupe_key && row.dedupe_key.startsWith('autonudge:')) {
+    // dedupe_key is like "autonudge:ruleType:assignmentId"
+    const parts = row.dedupe_key.split(':');
+    if (parts.length >= 2) {
+      ruleType = parts[1];
+    }
+  }
+
   return {
     eventId:       row.id,
     eventType:     row.event_type,
@@ -34,6 +44,7 @@ function formatEvent(row) {
     storeId:       row.store_id,
     targetRole:    row.target_role,
     severity:      row.severity       || null,
+    ruleType:      ruleType,
     isActive,
     resolvedAt,
     readStatus:    row.receipt_id != null,
