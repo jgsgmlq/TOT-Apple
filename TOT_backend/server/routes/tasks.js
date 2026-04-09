@@ -9,6 +9,7 @@ const { createError } = require('../middleware/errorHandler');
 const { broadcastToUsers } = require('../ws/manager');
 const mainAgent = require('../agent');
 const { evaluateAndTriggerAutoNudges } = require('../services/autoNudge'); // 保留
+const { parseDdlAtToSqliteUtc } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -205,6 +206,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     const rtmFilterStr = rtmFilter ? JSON.stringify(rtmFilter) : null;
     const storeScopeStr = (!storeScope || storeScope === 'all') ? 'all' : JSON.stringify(storeScope);
     const autoNudgeRulesStr = autoNudgeRules ? JSON.stringify(autoNudgeRules) : null; // 保留
+    const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
 
     db.run(
       `INSERT INTO tasks
@@ -214,7 +216,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
        rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAt, passScore,
-       mypalWeekStr, mypalProductStr, ddlAt, req.user.username, now, now]
+       mypalWeekStr, mypalProductStr, ddlAtNorm, req.user.username, now, now]
     );
 
     const row = db.get('SELECT * FROM tasks WHERE id = ?', [id]);
@@ -277,9 +279,10 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         : task.auto_nudge_rules;
 
       if (!ddlAt) throw createError(400, 'ddlAt 不能为空', 'TASK_005');
+      const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
       db.run(
         'UPDATE tasks SET ddl_at = ?, auto_nudge_rules = ?, updated_at = ? WHERE id = ?',
-        [ddlAt, autoNudgeRulesStr, new Date().toISOString(), task.id]
+        [ddlAtNorm, autoNudgeRulesStr, new Date().toISOString(), task.id]
       );
     } else {
       // draft 状态，允许修改所有字段
@@ -319,6 +322,9 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         if (!w) throw createError(400, '启用 MyPal 时必须填写 mypalTaskWeek', 'TASK_007');
       }
 
+      const ddlAtResolved =
+        ddlAt !== undefined ? parseDdlAtToSqliteUtc(ddlAt) : task.ddl_at;
+
       db.run(
         `UPDATE tasks
          SET title = ?, description = ?,
@@ -338,7 +344,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           passScore  !== undefined ? passScore : task.pass_score,
           platforms[0] === 1 ? mypalWeekResolved : null,
           platforms[0] === 1 ? mypalProductResolved : null,
-          ddlAt      ?? task.ddl_at,
+          ddlAtResolved,
           new Date().toISOString(),
           task.id,
         ]
