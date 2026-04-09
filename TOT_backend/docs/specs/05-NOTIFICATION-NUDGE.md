@@ -1,99 +1,113 @@
 # 通知与催办系统规格
 
-**版本:** 1.2.0 | **PRD §5.5, §6.4** | **更新日期:** 2026-03-27
+**版本:** 1.3.0 | **PRD §5.5、§6.4、附录 F** | **更新日期:** 2026-04-09
+
+---
+
+## 产品与工程边界（PRD vs 代码）
+
+- **产品主路径（P0 验收）：** PRD **§5.5 / §6.4** 强调**规则自动触发**预警与提醒，同一任务可在不同命中时点重复触发，且任务完成后消息中心中相关通知与预警**自动消失**；**§6.1** 等与附录 **F.3** 明确 MVP **不做人工催办**为范围口径——**总部主动触达类能力不作为 P0 必选验收项**，以规则预警与链路闭环为准。
+- **工程现状：** 服务端仍实现 **`POST /api/v1/nudges`**、**`GET /api/v1/nudges`**、**`POST /api/v1/nudges/ai-generate`** 等（命名沿用历史「催办」），与 **`autoNudgeScheduler` + `services/autoNudge.js`** 写入的 **`notification_events`（`nudge_yellow` / `nudge_red`）** 共用同一套事件与 WS 形态；规格上区分为下文的 **规则自动预警** 与 **总部主动催办（可选）**。
 
 ---
 
 ## 系统概览
 
-通知与催办系统由三张表构成（与 `01-DATA-MODEL.md` 对齐）：
+通知与催办由三张表构成（与 `01-DATA-MODEL.md`、`server/db/schema.sql` 对齐）：
 
 | 表 | 职责 |
 |----|------|
-| `notification_events` | 每条通知记录（1条 = 1个用户的1次通知） |
-| `read_receipts` | 已读回执（记录用户何时、以何种方式读取通知）|
-| `nudge_records` | 催办事实记录（完整审计用，不可删除）|
+| `notification_events` | 每条通知一行（1 行 = 某员工 1 次触达）；含任务下发、任务更新、黄/红提醒等 |
+| `read_receipts` | 已读回执（`notification_click` / `task_detail_open`） |
+| `nudge_records` | 与「催办/触达」相关的审计行（总部主动路径与自动预警路径均可能写入，见下文） |
+
+**接口与字段细节以 `04-API-SPEC.md` 为准。**
 
 ---
 
-## Day2 当前状态（联调边界）
+## 实现状态与路由清单
 
-- **Dev1 已完成：**
-  - 数据表与索引已就绪（`notification_events` / `read_receipts` / `nudge_records`）
-  - Assignment 基础 CRUD 已完成（`nudge_count` 可基础更新）
-- **Dev2 待实现：**
-  - `POST /events`、`GET /events`、`POST /events/{eventId}/read`、`POST /events/{eventId}/task-detail-read`
-  - `GET /events/unread-count`、`POST /nudges`、`GET /nudges`
-  - WebSocket 广播与重连补拉联动
-
-> 本文档是 Dev2 的实现约束，接口最终以 `04-API-SPEC.md` 为准。
+| 能力 | 路径 / 位置 | 说明 |
+|------|----------------|------|
+| 创建系统事件（内部） | `POST /api/v1/events` | `routes/notifications.js`；仅 `task_assigned` / `task_updated`，**禁止**经此创建 `nudge_*`（须走 nudges 或自动预警逻辑） |
+| 通知列表 | `GET /api/v1/events` | 含 `isActive`、`readStatus`、`ruleType`（自动预警且 `dedupe_key` 形如 `autonudge:…` 时解析） |
+| 未读数 | `GET /api/v1/events/unread-count` | 店员 `employeeId`；无则返回 0 |
+| 标记已读（铃铛） | `POST /api/v1/events/:eventId/read` | `source=notification_click` |
+| 任务详情已读 | `POST /api/v1/assignments/:assignmentId/viewed` | `task_detail_open` + `received_at` |
+| 总部主动催办 | `POST /api/v1/nudges` | `routes/nudge.js`；**仅 `central`** |
+| 催办记录列表 | `GET /api/v1/nudges` | **仅 `central`**；`taskId` 必填 |
+| AI 辅助催办文案 | `POST /api/v1/nudges/ai-generate` | **`central` / `admin`** |
+| 手动触发自动扫描 | `POST /api/v1/tasks/:id/auto-nudge` | `routes/tasks.js`；`central` / `admin`；调用 `evaluateAndTriggerAutoNudges` |
+| 定时自动预警 | `jobs/autoNudgeScheduler.js` | 进程启动后按间隔扫描已下发且配置了 `auto_nudge_rules` 的任务 |
+| WebSocket | `ws://[host]/ws?token=<JWT>` | `ws/manager.js`；需 JWT 含 **`employeeId`** |
 
 ---
 
-## Day4 实现状态（已完成）
+## 两类触达路径
 
-| 接口 | 文件 | 状态 |
-|------|------|------|
-| `POST /api/v1/events` | `routes/notifications.js` | ✅ 已实现 |
-| `GET /api/v1/events` | `routes/notifications.js` | ✅ 已实现（含 isActive/resolvedAt/readStatus 计算）|
-| `POST /api/v1/events/:id/read` | `routes/notifications.js` | ✅ 已实现（source=notification_click，幂等）|
-| `GET /api/v1/events/unread-count` | `routes/notifications.js` | ✅ 已实现 |
-| `POST /api/v1/assignments/:id/viewed` | `routes/assignments.js` | ✅ 已实现（source=task_detail_open，原子写 received_at）|
-| `POST /api/v1/nudges` | `routes/nudge.js` | ✅ 已实现（事务原子写 nudge_records + events + nudge_count）|
-| `GET /api/v1/nudges` | `routes/nudge.js` | ✅ 已实现 |
-| WebSocket 广播 | `ws/manager.js` | ✅ 已实现（task_assigned / nudge_sent / assignment_completed / task_updated）|
+### 1. 规则自动预警（P0 主路径，与 PRD §5.5 / §6.4 一致）
 
-> 接口细节以 `04-API-SPEC.md` 为准。
+- **配置：** 任务 `auto_nudge_rules`（进度掉队、起步异常、deadline 危机等，口径见 PRD **§6.4**）。
+- **执行：** `autoNudgeScheduler` 周期性调用 `evaluateAndTriggerAutoNudges(taskId)`（`services/autoNudge.js`）。
+- **落库：** 向 `notification_events` 写入 **`nudge_yellow` / `nudge_red`**，`dedupe_key` 形如 **`autonudge:{ruleType}:{assignmentId}`**，用于**同规则同 assignment 幂等**；`GET /events` 通过 `dedupe_key` 前缀解析 **`ruleType`**（如 `progressLag`、`startDelay`、`deadlineCrisisP0`）。
+- **审计：** 自动路径为每个目标用户写入 **`nudge_records`**（`target_type='employee'`，`target_id` 为员工 id，`initiator_id` 为服务内约定的系统用户，见实现代码）。
+- **WS：** 推送 **`nudge_sent`**，负载含 `taskId`、`severity`、`eventType`、`content`（AI 生成或兜底）、`ruleType` 等（与实现一致）。
+
+### 2. 总部主动催办（代码存在，PRD 附录 F：**非 P0 必选验收**）
+
+- **入口：** `POST /api/v1/nudges`（仅 `central`），按 `targetType`（`employee` / `store` / `region`）解析目标 `assignments`，跳过已完成，全完成则 **409 `NUDGE_001`**。
+- **落库：** 事务内写 **`nudge_records`** + 对应 **`notification_events`** + `task_assignments.nudge_count += 1`。
+- **WS：** **`nudge_sent`**，负载含 `nudgeRecordId`、`taskId`、`severity`、`eventType`、`initiatorRole` 等（与 `routes/nudge.js` 一致）。
 
 ---
 
 ## 通知类型
 
-| event_type | 触发时机 | severity | 展示文案 |
-|-----------|---------|---------|--------|
-| `task_assigned` | 任务下发，为每个 Assignment 创建一条 | — | "你有新的培训任务：{title}" |
-| `nudge_yellow` | 黄色催办 | yellow | "{发起人}提醒你完成培训任务：{title}" |
-| `nudge_red` | 红色催办 | red | "【紧急】{发起人}要求你立即完成：{title}" |
-| `task_updated` | 任务截止时间等信息更新 | — | "培训任务 {title} 已更新" |
+| event_type | 触发时机 | severity | 说明 |
+|-----------|---------|---------|------|
+| `task_assigned` | 任务下发，每 assignment 一条（`dedupe_key` 幂等） | — | 文案示例见前端 |
+| `task_updated` | 已下发任务 `PATCH` 变更（如 ddl）后批量写入 | — | `assignment_id` 可为空（实现侧按用户维度插入） |
+| `nudge_yellow` | 规则自动预警或总部主动催办 | yellow | 同类型，靠 `dedupe_key` / `nudge_records` 区分来源 |
+| `nudge_red` | 同上 | red | 同上 |
 
 ---
 
-## 通知生命周期
+## 通知生命周期（端到端）
 
 ```
 任务下发（POST /api/v1/tasks/:id/dispatch）
-  └─▶ 批量创建 notification_events（event_type=task_assigned，dedupeKey 保证幂等）
-       └─▶ WS 推送目标用户：{ event:"task_assigned", data:{taskId,taskTitle,ddlAt} }
-            └─▶ 用户点击铃铛通知项
-                 └─▶ POST /api/v1/events/:eventId/read（source=notification_click）
-                      └─▶ 用户进入任务详情
-                           └─▶ POST /api/v1/assignments/:assignmentId/viewed（source=task_detail_open）
-                                └─▶ 原子写 task_assignments.received_at + read_receipts
+  └─▶ notification_events（task_assigned）+ WS task_assigned
+       └─▶ POST /events/:eventId/read（notification_click）
+            └─▶ POST /assignments/:id/viewed（task_detail_open）
 
-任务信息更新（PATCH /api/v1/tasks/:id，仅 dispatched 状态）
-  └─▶ 批量创建 notification_events（event_type=task_updated）
-       └─▶ WS 推送相关用户：{ event:"task_updated", data:{taskId,ddlAt} }
+任务更新（PATCH /api/v1/tasks/:id，dispatched）
+  └─▶ notification_events（task_updated）+ WS task_updated
 
-总部发起催办（POST /api/v1/nudges）
-  └─▶ INSERT nudge_records（完整事实，含 notification_event_ids JSON 数组）
-       └─▶ 为每个未完成目标用户 INSERT notification_events（nudge_yellow / nudge_red）
-       └─▶ task_assignments.nudge_count += 1（每个目标 assignment）
-            └─▶ WS 推送目标用户：{ event:"nudge_sent", data:{nudgeRecordId,taskId,severity,...} }
-                 └─▶ 前端铃铛未读数 +1
-                      └─▶ 任务完成（assignment.status = completed）
-                           └─▶ 催办类通知从未读统计中剔除（isActive 计算值变 false）
+规则自动预警（autoNudgeScheduler → evaluateAndTriggerAutoNudges）
+  └─▶ notification_events（nudge_*，dedupe_key=autonudge:…）+ nudge_records + nudge_count
+       └─▶ WS nudge_sent（含 content、ruleType）
+
+总部主动催办（POST /api/v1/nudges，可选）
+  └─▶ nudge_records + notification_events（nudge_*）+ nudge_count
+       └─▶ WS nudge_sent（含 nudgeRecordId、initiatorRole 等）
+
+任务完成（assignment → completed）
+  └─▶ WS assignment_completed；铃铛未读/列表 isActive 随 assignment 状态变化
 ```
 
 ---
 
-## 催办权限规则
+## 催办权限规则（总部主动 API）
 
-| 发起角色 | 可催对象 | targetType | 限制 |
-|---------|---------|-----------|------|
-| central | 单个员工 | `employee` | 无限制 |
-| central | 整个门店 | `store` | 无限制 |
-| central | 整个区域 | `region` | 无限制 |
+| 接口 | 角色 |
+|------|------|
+| `POST /api/v1/nudges` | **仅 `central`** |
+| `GET /api/v1/nudges` | **仅 `central`** |
+| `POST /api/v1/nudges/ai-generate` | **`central` / `admin`** |
 
+| 发起角色 | 可催对象 | targetType |
+|---------|---------|-----------|
+| `central`（POST /nudges） | 员工 / 门店 / 区域 | `employee` / `store` / `region` |
 
 ---
 
@@ -101,106 +115,82 @@
 
 | 规则 | 口径 |
 |------|------|
-| 重复催办 | 允许，每次创建独立的 nudge_record 和 notification_event |
-| 已完成任务催办 | 目标范围内**所有** assignment 均已完成时返回 HTTP **409**（`NUDGE_001`）；部分完成则跳过已完成者，仍催办未完成者 |
-| 频控策略 | MVP 不设（无频率限制）|
-| 催办记录 | 每次必须写入完整的 nudge_records（不可跳过）|
+| 重复催办 | 允许；每次独立 `nudge_record` 与 `notification_events`（自动路径用 `dedupe_key` 防重复刷屏） |
+| 已完成任务 | 目标范围内**全部** assignment 已完成 → **409**（`NUDGE_001`）；部分完成则跳过已完成 |
+| 频控 | MVP 不设人工频控；自动路径以规则 + `dedupe_key` 为准 |
+| 审计 | `nudge_records` 与 `notification_event_ids` 的对应关系见实现 |
 
 ---
 
 ## 催办通知的前端展示逻辑
 
-**持续显示规则:** 催办通知在任务未完成前持续显示，完成后自动隐藏。
+**持续显示：** 任务未完成前，催办类通知可参与展示；完成后随 `assignment` 状态在 **`GET /events`** 的 `isActive` / 未读统计中体现为不活跃（`task_updated` 行在实现中始终视为 active，见 `notifications.js`）。
 
-**前端实现逻辑:**
-
-```javascript
-function getVisibleNotifications(notifications) {
-  return notifications.filter(n => {
-    // task_assigned：未读即显示
-    if (n.eventType === 'task_assigned') return !n.isRead;
-
-    // 催办通知：任务完成后不显示
-    if (n.eventType.startsWith('nudge_')) {
-      return n.assignmentStatus !== 'completed';
-    }
-
-    return true;
-  });
-}
-
-function getUnreadCount(notifications) {
-  return getVisibleNotifications(notifications).filter(n => !n.isRead).length;
-}
-```
-
-**铃铛展示规则:**
-- 有未读通知 → 铃铛显示红色数字角标
-- 无未读通知 → 铃铛无角标
-- 点击铃铛 → 展开通知列表（不自动标记已读）
-- 点击列表中的通知 → 调 `POST /events/{eventId}/read`，再跳转任务详情
+**铃铛未读：** `GET /events/unread-count` 对 `task_assigned` / `nudge_*` 在未读且 assignment 未完成时计入；`task_updated` 单独计入未读逻辑（见代码）。
 
 ---
 
-## 已读统计规则
+## 已读统计规则（KPI / 看板）
 
-**KPI 口径（用于总部看板）:**
-
-| KPI | 计算方式 |
-|-----|---------|
-| 店员已读人数 | `SELECT COUNT(DISTINCT rr.user_id) FROM read_receipts rr JOIN notification_events ne ON rr.event_id = ne.id WHERE ne.task_id = ? AND rr.source='task_detail_open'` |
-| 任务真实发放率 | 已读人数（去重）/ 目标应发人数（total assignment 数）|
+| KPI | 计算方式（与 PRD §5.6 / 看板一致时） |
+|-----|--------------------------------------|
+| 店员已读（任务详情打开） | `read_receipts` 中 `source='task_detail_open'` 等与 `notification_events.task_id` 关联去重 |
 
 **已读条件：**
-- 店员已读：店员打开任务详情页（source: task_detail_open）
+
+- 消息中心铃铛点击：`POST /events/:eventId/read` → `notification_click`
+- 打开任务详情：`POST /assignments/:id/viewed` → `task_detail_open`（并写 `received_at`）
 
 ---
 
-## nudge_records 完整字段说明
+## nudge_records 字段说明（与 `01-DATA-MODEL.md` 一致）
 
-每次催办必须写入以下字段（不可省略）：
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| id | 唯一 ID | nudge_xyz123 |
-| task_id | 关联任务 | task_abc123 |
-| target_type | 催办对象类型 | employee / store / region |
-| target_id | 对象 ID 或名称 | E001 / S001 / 华东 |
-| initiator_id | 发起人 user.id | 2 |
-| severity | 催办级别 | yellow / red |
-| notification_event_ids | 本次创建的 notification event IDs | ["evt_001","evt_002"] |
-| created_at | 催办时间 | 2026-03-24T12:00:00Z |
+| 字段 | 说明 |
+|------|------|
+| id | nanoid |
+| task_id | 任务 id |
+| target_type | `employee` / `store` / `region` |
+| target_id | `employees.id` / `stores.id` / 区域名 |
+| initiator_id | `users.id`（INTEGER） |
+| severity | `yellow` / `red` |
+| notification_event_ids | JSON 数组，本次产生的 `notification_events.id` |
+| created_at | ISO 8601 |
 
 ---
 
-## WebSocket 推送时机（已实现）
+## WebSocket
 
-连接端点：`ws://[host]/ws?token=<JWT>`，仅 `employee`（有 employeeId）可建立连接；`central` / `executive` 无 employeeId，不支持 WS 推送，需轮询 REST 接口。
+连接端点：`ws://[host]/ws?token=<JWT>`，仅当 Token 含 **`employeeId`** 时可建立连接；`central` / `admin` / `executive` 无 `employeeId` 时须轮询 REST（如 `GET /events`、`GET /dashboard/...`）。
 
-| 操作 | WS 事件名 | 接收方 | 触发文件 |
-|------|----------|--------|---------|
-| 任务下发 | `task_assigned` | 所有目标用户 | `routes/tasks.js` dispatch |
-| 任务信息更新（dispatched 后） | `task_updated` | 有 assignment 的所有用户 | `routes/tasks.js` PATCH |
-| 催办发出 | `nudge_sent` | 被催的未完成用户 | `routes/nudge.js` POST /nudges |
-| 任务 auto-complete | `assignment_completed` | 完成者本人 | `routes/assignments.js` PUT /:id/status |
+| 操作 | WS 事件 | 接收方 |
+|------|----------|--------|
+| 任务下发 | `task_assigned` | 目标用户 |
+| 任务更新 | `task_updated` | 有 assignment 的用户 |
+| 自动/人工催办 | `nudge_sent` | 被触达用户 |
+| 任务完成 | `assignment_completed` | 完成者本人 |
 
-> **central 不可达：** `assignment_completed` 规格要求同时通知 central，但 central 账号无 `employeeId`，无法建立 WS 连接；central 端看板数据通过轮询 `GET /dashboard/overview` 获取。
+> **central 无 WS：** 总部看板依赖轮询；与附录 F 一致。
 
 ---
 
-## 断线场景处理
+## 断线重连
 
-用户断线重连后，需补拉未读通知与任务状态：
+重连后建议补拉：
 
 ```javascript
-// 前端断线重连逻辑
 async function onReconnect() {
-  // 1. 补拉通知事件（按当前用户范围）
-  const { data } = await GET('/events?pageNum=1&pageSize=50');
+  const { data } = await GET('/api/v1/events?pageNum=1&pageSize=50');
   updateNotificationBell(data);
-
-  // 2. 补拉 assignment 状态
-  const { data: assignments } = await GET('/assignments');
+  const { data: assignments } = await GET('/api/v1/assignments');
   updateTaskList(assignments);
 }
 ```
+
+---
+
+## 文档维护
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 1.2.0 | 2026-03-27 | 初版联调边界 |
+| 1.3.0 | 2026-04-09 | 与 PRD §5.5/§6.4/附录 F 及 `notifications.js`、`nudge.js`、`autoNudge.js` 对齐；区分规则自动预警与总部主动催办；更新权限与路由清单 |

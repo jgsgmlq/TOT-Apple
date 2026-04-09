@@ -1,244 +1,186 @@
 # RTM 下发筛选规则规格
 
-**版本:** 2.4.0 | **PRD §6.10** | **更新日期:** 2026-03-27
+**版本:** 2.5.0 | **PRD §6.8、术语表 RTM L3/L4** | **更新日期:** 2026-04-09
 
 ---
 
-## 筛选路径层级
+## 术语与分层（产品 vs 数据列）
 
-```
-RTM（一级）→ 业态值 format（二级，叶子节点）
-```
+| 概念 | 含义 | 与库表关系 |
+|------|------|------------|
+| **RTM L3** | P0 下发范围的一级渠道口径；PRD 固定枚举 **`Multibrand`、`Monobrand`、`Education`**（多条件间 OR） | 对应门店列 **`stores.rtm`** 的常见取值；**服务端不对 rtm 字符串做强枚举校验**，以库内实际值 + `LOWER()` 匹配为准 |
+| **RTM L4 / 业态** | 看板下钻渠道口径：`Education`、`Lifestyle`、`Mass Merchant`、`Mono`、`OTC` 等 | 对应 **`stores.format`**；下发筛选可选二级条件，与看板维度同源字段 |
+| **筛选路径** | 产品表述为「一级 → 二级叶子」 | 实现：**`rtm` 必填（路径内）**，**`format` 可选**；无 `format` 时仅按 `rtm` 命中该 RTM 下全部门店 |
 
-> 说明：`sub_rtm` 已在 `stores` 表中删除（见 `01-DATA-MODEL.md` v2.1.0 变更），RTM 筛选只使用 `stores.rtm` + `stores.format`。
+> **`sub_rtm` 已删除**（`01-DATA-MODEL.md` v2.1.0）：筛选仅使用 **`stores.rtm` + `stores.format`**。
 
 ---
 
-## 支持的筛选值
+## 实现位置（与代码对齐）
 
-| RTM | 业态值 format | stores.format 匹配值（大小写不敏感） |
-|-----|---------------|--------------------------------------|
-| Monobrand | MONO | Mono |
-| Monobrand | Lifestyle | Lifestyle |
-| Multibrand | Mass Merchant | Mass Merchant |
-| Multibrand | OTC | OTC |
-| Multibrand | Township | Township |
-| Multibrand | Duty Free | Duty Free |
-| Carrier | （可空） | 暂无匹配数据 |
-| Education | Education | Education |
-| Enterprise | （可空） | 暂无匹配数据 |
+- **门店集合：** `server/routes/tasks.js` 内 **`getMatchedStoreIds(task)`**（读取 `tasks.rtm_filter` / `tasks.store_scope`）。
+- **目标用户：** **`getTargetUsers(storeIds)`** — `employees.store_id IN (...)`，返回该门店下**全部员工行**（与 `employees` 表一一对应账号）。
+- **下发：** **`POST /api/v1/tasks/:id/dispatch`**：`matchedStoreIds.length === 0` → **400 `RTM_001`**；有门店但无员工 → **400 `TASK_006`**；含 MyPAL 任务时另需 **`mypal_task_week`** → **400 `TASK_007`**（见 `04-API-SPEC` / `01-DATA-MODEL`）。
 
-> 规则：
-> - `rtm` 必填，对应 `stores.rtm`
-> - `format` 选填，对应 `stores.format`
-> - 若某 RTM 下暂无 format 叶子节点（如 Carrier / Enterprise），可只按 `rtm` 过滤
+---
+
+## 与 PRD §6.8 的差异说明
+
+| PRD 要求 | 当前工程 |
+|---------|----------|
+| 下发范围可选「仅店长」或与 RTM 组合 | **未单独建模**：dispatch 仅为命中门店下 **所有 `employees`** 建 assignment；**店长学习对象若需单独圈选，需在员工主数据或后续接口中扩展** |
+| 多个 RTM L3 条件 OR | **已实现**：`rtmFilter` 数组元素之间 **`OR`**，元素内 **`rtm`（+ 可选 `format`）`AND`** |
+| 筛选 0 门店阻止下发并提示 | **已实现**：`RTM_001`，文案与代码一致 |
+| 大小写不敏感 | **已实现**：`LOWER(s.rtm)` / `LOWER(s.format)` |
+
+---
+
+## 支持的筛选值（参考）
+
+**一级 `rtm`（与 PRD L3 及种子数据对齐）：** 至少应能覆盖 **`Multibrand`、`Monobrand`、`Education`**；种子脚本 `db/seed.js` 另含 **`Carrier`、`Enterprise`** 等，便于联调多样性。
+
+**二级 `format`（示例；以导入数据为准，匹配时大小写不敏感）：**
+
+| 常见 rtm（示例） | format 示例（库内可能值） | 说明 |
+|------------------|---------------------------|------|
+| Monobrand | `MONO`、`Lifestyle`（或 `Mono` 等） | PRD 看板 L4 写作 `Mono` / `Lifestyle` |
+| Multibrand | `Mass Merchant`、`OTC` 等 | 种子环境曾用 `Operator`、`Campus` 等占位，**生产应以主数据清洗结果为准** |
+| Education | `Education` 等 | 可与 rtm 同名或单独细分 |
+| Carrier / Enterprise | 可空或任意 | 仅 rtm、不传 format 时命中该 rtm 下全部门店 |
 
 ---
 
 ## 筛选逻辑
 
-### 层次一：条件内 AND（路径内同时满足）
+### 层次一：条件内 AND
 
-每个叶子节点代表一条完整路径，门店必须**同时满足**该路径上所有层级的值才算命中此条件。
+每条 `{ rtm, format? }` 表示一条路径：门店须 **`LOWER(rtm)` 一致**，若提供 **`format`** 则还须 **`LOWER(format)` 一致**。
 
-示例：条件 `{ rtm: "Monobrand", format: "MONO" }` 要求：
-```
-stores.rtm = 'Monobrand' AND stores.format = 'MONO'
-```
+### 层次二：条件间 OR
 
-### 层次二：条件间 OR（多条件取并集）
-
-总部勾选多个叶子节点时，满足**任意一个**条件的门店均命中。
-
-示例：同时勾选 MONO 和 Education：
-```
-(stores.rtm = 'Monobrand' AND stores.format = 'MONO')
-OR
-(stores.rtm = 'Education' AND stores.format = 'Education')
-```
-
----
-
-## 大小写不敏感匹配
-
-所有 format 字段匹配使用 `LOWER()` 兜底，防止数据清洗不一致：
+数组中**任意一条**路径命中即纳入门店集合。
 
 ```sql
-LOWER(stores.format) = LOWER(:format)
+-- 语义等价（参数化）
+(LOWER(s.rtm) = LOWER(?) AND LOWER(s.format) = LOWER(?))
+OR
+(LOWER(s.rtm) = LOWER(?))
 ```
-
-特别注意：PRD 中 MONO 的展示值是大写，但门店表原值可能是 `Mono`，必须用 `LOWER()` 比较。
 
 ---
 
-## rtm_filter / rtmFilter 数据结构
+## `rtmFilter` / `rtm_filter` 与 `storeScope` / `store_scope` 优先级
+
+与 **`getMatchedStoreIds`** 一致：
+
+1. **`rtm_filter` 解析为非空数组** → 仅用 RTM 路径 SQL，**不再读取 `store_scope`**。
+2. 否则若 **`store_scope === 'all'`**（字符串）→ 全部门店 `SELECT id FROM stores`。
+3. 否则将 **`store_scope` 解析为门店 ID 数组** → `WHERE id IN (...)`；**空数组 → 无门店**。
+
+创建/更新任务时，若传入 **`rtmFilter`**，元素必须含 **`rtm`**；**`format` 可选**。非法 JSON 或非数组 → **400 `TASK_005`**（见任务路由校验）。
+
+---
+
+## 应用层构建逻辑（与实现等价）
+
+```javascript
+function getMatchedStoreIdsFromTaskRow(task) {
+  const rtmFilter = parseTaskArray(task.rtm_filter, 'rtmFilter');
+  if (rtmFilter.length > 0) {
+    const conditions = [];
+    const params = [];
+    for (const item of rtmFilter) {
+      if (!item || !item.rtm) throw new Error('TASK_005 rtm required');
+      conditions.push(
+        item.format
+          ? '(LOWER(s.rtm) = LOWER(?) AND LOWER(s.format) = LOWER(?))'
+          : '(LOWER(s.rtm) = LOWER(?))'
+      );
+      params.push(item.rtm);
+      if (item.format) params.push(item.format);
+    }
+    // SELECT DISTINCT s.id FROM stores s WHERE ( ... OR ... )
+    return { where: conditions.join(' OR '), params };
+  }
+  // ... store_scope all 或 IN 列表
+}
+```
+
+---
+
+## API / DB 命名
+
+| 语义 | DB（snake_case） | HTTP JSON（camelCase） |
+|------|------------------|-------------------------|
+| RTM 筛选 | `rtm_filter` | `rtmFilter` |
+| 门店范围 | `store_scope` | `storeScope` |
+
+JSON 示例（请求体）：
 
 ```json
 {
-  "rtm_filter": [
-    { "rtm": "Monobrand", "format": "MONO" },
+  "rtmFilter": [
+    { "rtm": "Monobrand", "format": "Mono" },
     { "rtm": "Education", "format": "Education" },
     { "rtm": "Carrier" }
   ]
 }
 ```
 
-与 `tasks` 表字段一致（见 `01-DATA-MODEL.md`）：
-- `tasks.rtm_filter`: JSON 数组或 `null`
-- `tasks.store_scope`: `"all"` 或 JSON 数组（仅当 `rtm_filter` 为空时生效）
+---
 
-字段约束口径（与 `01-DATA-MODEL.md v2.4.0` 一致）：
-- `rtm_filter`: `NULL` 或合法 JSON 数组（`json_valid` + `json_type='array'`）
-- `store_scope`: `'all'` 或合法 JSON 数组（`json_valid` + `json_type='array'`）
+## 空结果与错误码
 
-API/UI 命名对照（本规格同时支持两种写法说明）：
+| 场景 | HTTP | 错误码 | 说明 |
+|------|------|--------|------|
+| 筛选门店数为 0 | 400 | `RTM_001` | 文案：`当前筛选无门店命中，请调整筛选条件` |
+| 有门店但无任何员工 | 400 | `TASK_006` | `筛选结果无目标员工` |
+| `rtmFilter` 条目缺 `rtm` 等 | 400 | `TASK_005` | 创建/更新任务时校验 |
 
-| 语义 | DB 字段（snake_case） | API/UI 字段（camelCase） |
-|------|------------------------|---------------------------|
-| RTM 筛选 | `rtm_filter` | `rtmFilter` |
-| 门店范围 | `store_scope` | `storeScope` |
+错误响应体格式以 **`04-API-SPEC.md`「通用错误体」** 为准（非旧版 `{ "error": ... }` 示例）。
 
 ---
 
-## SQL 实现
-
-```javascript
-/**
- * 根据 rtm_filter 构建门店筛选 SQL 条件
- * @param {Array} rtmFilter - [{rtm, format?}, ...]
- * @returns {string} SQL WHERE 子句（不含 WHERE 关键字）
- */
-function buildRtmFilterSQL(rtmFilter) {
-  if (!rtmFilter || rtmFilter.length === 0) {
-    return '1=1'; // 无筛选条件，命中所有
-  }
-
-  const conditions = rtmFilter.map(f => {
-    const parts = [`LOWER(s.rtm) = LOWER(?)`]; // rtm 必填
-    if (f.format) {
-      parts.push(`LOWER(s.format) = LOWER(?)`); // format 选填
-    }
-    return `(${parts.join(' AND ')})`;
-  });
-
-  return conditions.join(' OR ');
-}
-
-/**
- * 构建对应的参数数组
- */
-function buildRtmFilterParams(rtmFilter) {
-  const params = [];
-  for (const f of rtmFilter) {
-    params.push(f.rtm);
-    if (f.format) {
-      params.push(f.format);
-    }
-  }
-  return params;
-}
-
-// 完整查询示例
-const sql = `
-  SELECT DISTINCT s.id AS store_id
-  FROM stores s
-  WHERE ${buildRtmFilterSQL(rtmFilter)}
-`;
-const params = buildRtmFilterParams(rtmFilter);
-const matchedStores = db.prepare(sql).all(...params);
-```
-
----
-
-## rtm_filter / rtmFilter 与 store_scope / storeScope 优先级
-
-```
-const hasRtmFilter = (rtmFilter && rtmFilter.length > 0) || (rtm_filter && rtm_filter.length > 0);
-if (hasRtmFilter) {
-  // 使用 RTM 筛选逻辑（上方 SQL）
-} else if (storeScope === 'all' || store_scope === 'all') {
-  // 全部门店：SELECT id FROM stores
-} else {
-  // storeScope/store_scope 是 JSON 数组：SELECT id FROM stores WHERE id IN (...)
-}
-```
-
-> 服务端建议：在进入筛选逻辑前先做字段合法性校验（JSON 结构），与 DB 约束保持同一口径，尽早失败（fail-fast）。
-
----
-
-## 空结果处理
-
-当 `rtm_filter`（或 `rtmFilter`）筛选结果为 0 家门店时：
-
-**服务端:**
-```json
-HTTP 400
-{
-  "error": "当前筛选无门店命中，请调整筛选条件",
-  "errorCode": "RTM_001"
-}
-```
-
-**前端展示:**
-- 创建任务时，提供"下发预览"功能：用户选择 rtmFilter 后，立即显示"将命中 X 家门店，Y 人"
-- 命中数为 0 时，禁用"下发"按钮，展示提示文案
-
----
-
-## 请求校验（建议）
-
-在创建/下发任务接口，建议按以下顺序校验：
-
-2. `rtmFilter/rtm_filter` 若传入，必须是数组；数组元素必须包含 `rtm`，`format` 可选
-3. `storeScope/store_scope` 仅允许 `'all'` 或门店 ID 数组
-4. 若 `rtmFilter/rtm_filter` 非空，优先使用 RTM 结果，忽略 `storeScope/store_scope` 内容
-5. 若筛选命中门店数为 0，返回 `RTM_001`
-
----
-
-## 下发目标用户计算
-
-确定目标门店后，拉取该门店所有员工：
+## 下发目标用户
 
 ```sql
-SELECT e.id AS user_id, e.store_id
-FROM employees e
-WHERE e.store_id IN (:matchedStoreIds);
+SELECT id AS user_id, store_id
+FROM employees
+WHERE store_id IN (:matchedStoreIds);
 ```
 
 ---
 
-## 幂等下发保证
-
-批量 INSERT task_assignments 时使用 `INSERT OR IGNORE`：
+## 幂等下发
 
 ```sql
 INSERT OR IGNORE INTO task_assignments
-  (id, task_id, user_id, user_role, store_id, status, created_at, updated_at)
-VALUES
-  (?, ?, ?, ?, ?, 'pending', ?, ?);
--- UNIQUE(task_id, user_id) 约束确保重复下发不重复生成
+  (id, task_id, user_id, store_id, status, progress, nudge_count, created_at, updated_at)
+VALUES (?, ?, ?, ?, 'pending', 0, 0, ?, ?);
+-- UNIQUE(task_id, user_id)
 ```
 
----
-
-## 数据质量要求
-
-MVP 部署前，需对门店数据进行清洗：
-
-1. `stores.format` 字段值统一为标准格式（参考上方支持值表）
-2. `stores.rtm` 字段值与筛选值枚举一致
-3. 系统层已做 `LOWER()` 兜底，但仍建议数据层保持一致
-4. `stores.dealer_name` 字段需填充（用于经销商维度看板）
+（列以 `server/db/schema.sql` 为准。）
 
 ---
 
-## 与数据模型一致性（v2.4.0）
+## 数据质量与种子数据
 
-本规格已与 `01-DATA-MODEL.md` 对齐，关键点如下：
+1. 生产导入前建议统一 **`stores.rtm` / `stores.format`** 与产品 L3/L4 口径。
+2. 实现层已用 **`LOWER()`** 兜底，仍建议主数据一致。
+3. **`db/seed.js`** 中 `FORMATS` 含 `MONO`、`Lifestyle`、`Mass Merchant`、`Operator`、`Campus` 等，**与 PRD 看板 L4 列表不必逐字相同**，联调时以实际 seed 行为为准。
 
-1. 移除 `sub_rtm`，筛选仅依赖 `stores.rtm` + `stores.format`
-2. 文档保留双命名对照：DB 用 `rtm_filter/store_scope`，API/UI 可用 `rtmFilter/storeScope`
-3. 保持筛选语义不变：条件内 AND、条件间 OR、format 大小写不敏感
-4. 字段约束与数据模型一致：`rtm_filter/store_scope` 的 JSON 有效性与数组约束
+---
+
+## 与数据模型一致性
+
+以 **`01-DATA-MODEL.md`**（`tasks.rtm_filter` / `tasks.store_scope` 的 `json_valid` + `array` 约束）及本节为下发筛选的单一事实来源；**HTTP 契约**以 **`04-API-SPEC.md`** 任务与下发章节为准。
+
+---
+
+## 文档维护
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 2.4.0 | 2026-03-27 | sub_rtm 移除、双命名、SQL 模板 |
+| 2.5.0 | 2026-04-09 | 对齐 PRD §6.8 / L3·L4 术语；`routes/tasks.js` 实现路径；店长范围缺口；错误码与 schema；种子 format 说明；修正 task_assignments 插入示例 |

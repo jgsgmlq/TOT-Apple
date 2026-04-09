@@ -1,348 +1,192 @@
 # 看板指标规格
 
-**版本:** 1.2.1 | **PRD §5.2, §6.7, §6.11, §6.12** | **更新日期:** 2026-03-28
+**版本:** 1.3.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-09
 
 ---
 
-## Day2 当前状态（联调边界）
+## 产品与工程对齐
 
-- **Dev1 已完成：**
-  - `tasks / assignments / stores / employees` 基础查询数据可用于看板聚合
-  - Assignment 进度字段（`status`、`progress`、`updated_at`）可直接聚合
-- **Dev2 待实现：**
-  - 看板接口：`GET /dashboard/summary`、`GET /dashboard/heatmap`、`GET /dashboard/top-bottom`、`GET /dashboard/alerts`
-  - 预警列表与建议文案输出
-  - 与通知已读链路联动的 KPI（push/read/真实发放率）
-
-> 接口路径与响应字段以 `04-API-SPEC.md` 第 5 章为主（P0 下钻见 **§5.6**）。
+- **PRD：** 总部看板北极星指标（整体完成率、人均完成时间）、按时完成率、RTM L4 差异、链路（触达/读取/转化）、预警（起步异常、deadline 危机等）见 **§5.3、§6.6**；工程形态见 **附录 F**。
+- **实现：** `server/routes/dashboard.js` 实时从 `task_assignments` / `tasks` / `stores` / `notification_events` / `read_receipts` 聚合，**无独立 KPI 缓存表**；`completionRate` / `avgProgress` 等与 API 一致为 **整数 0–100（百分比点数）**。
+- **接口契约（请求/响应字段）：** 以 **`04-API-SPEC.md` 第 5 章**（`/dashboard/*`）为准；本节描述**口径与计算逻辑**，便于评审与对账。
 
 ---
 
-## Day5 实现状态（已完成）
+## 路由与角色（与 `dashboard.js` 一致）
 
-| 接口 | 文件 | 说明 |
+| 方法 | 路径 | 角色 |
 |------|------|------|
-| `GET /api/v1/dashboard/overview` | `routes/dashboard.js` | ✅ 总完成率、在途/逾期数、KPI（push/read/发放率）、warningCount |
-| `GET /api/v1/dashboard/heatmap` | `routes/dashboard.js` | ✅ 按门店/区域聚合，含 heatColor（red/yellow/green/gray）|
-| `GET /api/v1/dashboard/store-rank` | `routes/dashboard.js` | ✅ Top5 + Bottom5 门店，支持 orderBy 参数 |
-| `GET /api/v1/dashboard/warnings` | `routes/dashboard.js` | ✅ P1/P2 预警列表，含 aiSuggestion mock 文案 |
-| `GET /api/v1/dashboard/store-detail` | `routes/dashboard.js` | ✅ 单门店下钻，含员工列表 + 落队等级 |
+| GET | `/api/v1/dashboard/overview` | `central` · `executive` · `admin` |
+| GET | `/api/v1/dashboard/heatmap` | `central` · `executive` · `admin` |
+| GET | `/api/v1/dashboard/store-rank` | `central` · `executive` · `admin` |
+| GET | `/api/v1/dashboard/trend` | `central` · `executive` · `admin` |
+| GET | `/api/v1/dashboard/warnings` | **`central` · `admin` 仅**（不含 `executive`） |
+| GET | `/api/v1/dashboard/store-detail` | **`central` · `admin` 仅** |
 
-> 接口路径与响应字段以 `04-API-SPEC.md` 第 5 章为主。**单门店下钻的 HTTP 契约（查询参数、响应体、`lagLevel`）以 §5.6 为准。**
-
----
-
-## 落队等级定义
-
-基于 Assignment 维度（个人进度）：
-
-| 等级 | 条件 | 颜色 |
-|------|------|------|
-| 快完成 | `progress >= 80` | 绿色 |
-| 中等 | `50 <= progress < 80` | 黄色 |
-| 严重落队 | `progress < 50` | 红色 |
-
-基于门店维度（completionRate）：
-
-| 预警级别 | 条件 | 说明 |
-|---------|------|------|
-| `normal` | completionRate >= 80% | 正常 |
-| `yellow` | 50% ≤ completionRate < 80% | 黄色预警 |
-| `red` | completionRate < 50% | 红色预警（覆盖黄色）|
-
-**区域预警:** 按区域聚合门店预警，展示黄警区域数与红警区域数（红覆盖黄）
+统一响应包装：`{ code, message, data, requestId }`。
 
 ---
 
-## KPI 定义与计算口径
+## 筛选维度（overview / 部分聚合）
 
-### 推送人数
-
-```sql
-SELECT COUNT(DISTINCT target_user_id) AS push_count
-FROM notification_events
-WHERE task_id = :taskId
-  AND event_type = 'task_assigned';
-```
-
-说明：系统成功写入并触发通知事件的用户数（去重到用户）
-
-### 店员已读人数
-
-```sql
-SELECT COUNT(DISTINCT rr.user_id) AS employee_read_count
-FROM read_receipts rr
-JOIN notification_events ne ON rr.event_id = ne.id
-WHERE ne.task_id = :taskId;
-```
-
-推荐口径（与通知规格一致）：仅统计 `rr.source='task_detail_open'` 的用户，避免“仅点铃铛未进入任务详情”带来的虚高。
-
-
-
-### 任务真实发放率
-
-```
-任务真实发放率 = 打开任务详情人数（去重）/ 目标应发人数
-
-打开任务详情人数 =
-  SELECT COUNT(DISTINCT rr.user_id)
-  FROM read_receipts rr
-  JOIN notification_events ne ON rr.event_id = ne.id
-  WHERE ne.task_id = :taskId
-    AND rr.source = 'task_detail_open';
-
-目标应发人数 =
-  SELECT COUNT(*) FROM task_assignments WHERE task_id = :taskId;
-```
-
-**注意:** MVP 不做"送达"指标（无送达率 KPI）
+`GET /dashboard/overview` 支持查询参数 **`taskId`**、**`rtm`**、**`format`**（均可选，组合为对 `task_assignments` + `JOIN stores` 的过滤）。未传 `taskId` 时，推送/已读等依赖 `notification_events.task_id` 的统计在实现中会按「全任务或 1=1」条件聚合（与 `04-API-SPEC` 说明一致）。
 
 ---
 
-## 整体完成率
+## 落队等级（个人 / 门店下钻）
 
-> **口径说明:** `completion_rate` / `completionRate` 全系统统一为**整数百分比（0–100）**，SQL 使用 `ROUND(100.0 * completed / total, 0)`，API 响应字段同单位（如 `32` 表示 32%）。
+**Assignment 个人进度（与 `store-detail` 中 `lagLevel` 一致）：**
+
+| 等级 | 条件 | API 值 |
+|------|------|--------|
+| 快完成 | `progress >= 80` | `fast` |
+| 中等 | `50 <= progress < 80` | `medium` |
+| 严重落队 | `progress < 50` | `behind` |
+
+**门店完成率（概览 `warningCount`、预警列表分级）：**
+
+实现侧对「门店维度」完成率 `completion_rate`（0–100 整数）：
+
+- **P1 计数：** `completion_rate < 50`，**或**（`completion_rate < 80` **且** 距该任务 `ddl_at` 不足 24 小时）。
+- **P2 计数：** 不满足 P1，且 `completion_rate < 80`。
+
+（用于 `overview.data.warningCount.p1` / `p2`。）
+
+**热力图色值：** `GET /heatmap` 返回 **`color` 为十六进制**（如 `#4CAF50` / `#FF9900` / `#F44336`），非 `red/yellow/green` 枚举字符串。
+
+---
+
+## KPI 与概览字段（`GET /dashboard/overview`）
+
+### 规模与进度
+
+- **totalAssignments：** 范围内 assignment 总数。
+- **completedCount / completionRate：** 完成数；`completionRate = ROUND(100 * completed / total)`，total=0 时为 0。
+- **onTimeCompletionRate：** `completed_at <= ddl_at` 的完成数 / total（整数百分比）。
+- **avgCompletionTimeHours：** 已完成 assignment 的 `(completed_at - task.created_at)` 小时均值（实现为 SQLite `julianday` 差 ×24，保留一位小数）。
+- **inProgressCount / pendingCount / overdueCount：** 状态中人数；**逾期** = 未完成且当前时间晚于 `tasks.ddl_at`。
+
+### 链路（通知与已读）
+
+- **pushUserCount：** `notification_events` 中 `event_type = 'task_assigned'` 的 **去重 `target_user_id`**（带 `taskId` 时按任务过滤）。
+- **employeeReadCount / managerReadCount：** 实现上对 **`read_receipts.source = 'task_detail_open'`** 去重统计；当前两条 SQL 结构相同，一般 **`totalReadCount = employeeReadCount + managerReadCount`**（若产品需区分店长/店员，应后续在数据模型中区分用户类型后再拆口径）。
+- **taskReachRate：** 实现中「创建即触达」占位为 total>0 时 **100**。
+- **taskReadRate：** `totalReadCount / totalAssignments * 100`（一位小数）。
+- **nudgeConversionRate：** 在 **`nudge_count > 0`** 的 assignment 中，已 **`started_at` 非空或状态为 `completed`** 的比例（整数百分比）；与 PRD「提醒转化率」命名可能不完全一致，以 **`04-API-SPEC`** 字段名为准。
+
+### 预警率（基于自动预警事件 `dedupe_key`）
+
+对范围内 `notification_events` 与 assignment 关联行，按 **`dedupe_key` 子串** 粗计 **`startDelay` / `deadlineCrisisP0` / `deadlineCrisisP1`** 命中次数，再除以 **totalAssignments** 得到 **startDelayRate、crisisP0Rate、crisisP1Rate**（百分比点数，一位小数）。规则与 `services/autoNudge.js` 写入的 `autonudge:…` 前缀一致。
+
+### 其他
+
+- **warningCount：** `{ p1, p2 }`，见上文「门店完成率」规则按店聚合后计数。
+- **updatedAt：** 范围内 **`MAX(task_assignments.updated_at)`**，无数据时为当前时间。
+
+---
+
+## 整体完成率（SQL 参考）
+
+与实现一致的核心聚合：
 
 ```sql
 SELECT
   COUNT(*) AS total,
   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
-  ROUND(100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / COUNT(*), 0) AS completion_rate,
-  ROUND(AVG(progress), 0) AS avg_progress
+  ROUND(100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / COUNT(*), 0) AS completion_rate
 FROM task_assignments
 WHERE task_id = :taskId;
 ```
 
-若 `COUNT(*) = 0`，应用层返回：
-- `completionRate = 0`
-- `avgProgress = 0`
-- `total = 0`
-- `completed = 0`
+`total = 0` 时 API 侧返回 completionRate=0。
 
 ---
 
-## 门店维度聚合
+## 门店维度聚合（参考 SQL）
+
+下钻、热力图、排行等均基于 `task_assignments` JOIN `stores` JOIN `tasks` 按 `store_id` 或 RTM/区域/业态分组；**经销商维度**（`dealer_name`）当前 **无独立 HTTP 端点**，若产品需要可在此 SQL 上增加报表或后续接口。
+
+---
+
+## `GET /dashboard/heatmap`
+
+- **必填：** `taskId`。
+- **rtmLevel：** `rtm` | `region` | `format` | `subRtm`（映射到 `stores` 对应列分组）。
+- 每组返回：`rtmValue`、`completionRate`、`color`（hex）、`assignmentCount`、`completedCount`、`avgCompletionTimeHours` 等（见 `04-API-SPEC`）。
+
+---
+
+## `GET /dashboard/store-rank`
+
+- **必填：** `taskId`、`type`（`top` | `bottom`）。
+- **limit：** 默认 5，最大 50。
+- **format：** 可选，按门店业态过滤。
+- **Bottom：** SQL `HAVING completion_rate < 100`；排序 `completion_rate ASC`，并列时 `avg_progress`、`store_id` 稳定排序。
+
+---
+
+## `GET /dashboard/warnings`
+
+- **角色：** 仅 `central` / `admin`。
+- **分页：** `pageNum` / `pageSize`。
+- **taskId：** 可选；**warningLevel：** `p1` | `p2`，按门店+任务聚合后的完成率区间过滤（与 overview 的 p1/p2 **分级口径不完全相同**：列表侧重「完成率区间」，见实现 `HAVING`）。
+- 列表项含：`taskId`、`storeId`、`warningLevel`（`p1`/`p2`）、`completionRate`、`triggerDesc`、`aiSuggestion`（按完成率分段 Mock 文案）等。
+
+---
+
+## `GET /dashboard/store-detail`
+
+- **角色：** 仅 `central` / `admin`。
+- **必填查询参数：** `taskId`、`storeId`。
+- **员工行：** `lagLevel`（`fast`/`medium`/`behind`）、`platformStatus`（四平台布尔）、`nudgeCount` 等（见 `04-API-SPEC` §5.6）。
+
+---
+
+## `GET /dashboard/trend`
+
+- **必填：** `taskId`。
+- **type：** `daily`（按 `date(completed_at)` 汇总新增完成）| `hourly`（需 **`date`**，默认当天 UTC 日期切片）。
+- 返回 `trendData`：`timeKey`、`newCompleted`、`cumulativeCompleted`。
+
+---
+
+## 完成趋势 SQL（参考）
+
+与 `type=hourly` 类似：
 
 ```sql
-SELECT
-  s.id AS store_id,
-  s.name AS store_name,
-  s.region,
-  s.dealer_name,
-  COUNT(ta.id) AS total,
-  SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-  ROUND(100.0 * SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
-  ROUND(AVG(ta.progress), 0) AS avg_progress
-FROM task_assignments ta
-JOIN stores s ON ta.store_id = s.id
-WHERE ta.task_id = :taskId
-GROUP BY ta.store_id
-ORDER BY completion_rate DESC;
-```
-
-**alertLevel 计算（应用层）:**
-
-```javascript
-function getAlertLevel(completionRate) {
-  if (completionRate < 50) return 'red';
-  if (completionRate < 80) return 'yellow';
-  return 'normal';
-}
-```
-
----
-
-## 经销商维度聚合
-
-```sql
-SELECT
-  s.dealer_name,
-  COUNT(ta.id) AS total,
-  SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-  ROUND(100.0 * SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
-  SUM(
-    CASE WHEN ta.status != 'completed'
-          AND datetime('now') > t.ddl_at
-    THEN 1 ELSE 0 END
-  ) AS overdue_count
-FROM task_assignments ta
-JOIN stores s ON ta.store_id = s.id
-JOIN tasks t ON ta.task_id = t.id
-WHERE ta.task_id = :taskId
-  AND s.dealer_name IS NOT NULL
-GROUP BY s.dealer_name
-ORDER BY completion_rate DESC;
-```
-
-注意：`dealer_name IS NULL` 的门店不参与经销商榜单（避免“未知经销商”污染对比）。
-
----
-
-## 地区维度聚合
-
-```sql
-SELECT
-  s.region,
-  COUNT(ta.id) AS total,
-  SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-  ROUND(100.0 * SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate,
-  ROUND(AVG(ta.progress), 0) AS avg_progress
-FROM task_assignments ta
-JOIN stores s ON ta.store_id = s.id
-WHERE ta.task_id = :taskId
-GROUP BY s.region
-ORDER BY completion_rate DESC;
-```
-
----
-
-## Top / Bottom 5 门店
-
-```sql
--- 使用 CTE 避免 store_summary 未定义的引用
-WITH store_summary AS (
-  SELECT
-    s.id AS store_id,
-    s.name AS store_name,
-    COUNT(ta.id) AS total,
-    SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-    ROUND(100.0 * SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate
-  FROM task_assignments ta
-  JOIN stores s ON ta.store_id = s.id
-  WHERE ta.task_id = :taskId
-  GROUP BY ta.store_id
-)
--- Top 5（完成率最高）
-SELECT store_id, store_name, completion_rate, completed, total
-FROM store_summary
-ORDER BY completion_rate DESC
-LIMIT 5;
-
--- Bottom 5（完成率最低，排除已全部完成的门店）
-WITH store_summary AS (
-  SELECT
-    s.id AS store_id,
-    s.name AS store_name,
-    COUNT(ta.id) AS total,
-    SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed,
-    ROUND(100.0 * SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 0) AS completion_rate
-  FROM task_assignments ta
-  JOIN stores s ON ta.store_id = s.id
-  WHERE ta.task_id = :taskId
-  GROUP BY ta.store_id
-)
-SELECT store_id, store_name, completion_rate, completed, total
-FROM store_summary
-WHERE completion_rate < 100
-ORDER BY completion_rate ASC
-LIMIT 5;
-```
-
-Tie-break（并列排序）建议：
-1) `completion_rate`  
-2) `avg_progress`  
-3) `store_id`（稳定排序）
-
----
-
-## 预警列表（P0：仅展示，无操作界面）
-
-**预警触发规则:**
-
-| 预警级别 | 触发条件 |
-|---------|---------|
-| P1（红）| 门店 completionRate < 50%，**或** completionRate < 80% 且距 ddlAt 不足 24 小时 |
-| P2（黄）| 50% ≤ 门店 completionRate < 80%（且不满足 P1 时间条件）|
-
-> P1 时间条件：实现中以 `datetime('now') > datetime(t.ddl_at, '-24 hours')` 判断，P1 优先级高于 P2。
-
-**预警列表响应结构:**
-
-```json
-[
-  {
-    "level": "P1",
-    "storeId": "S005",
-    "storeName": "北京中关村店",
-    "region": "华北",
-    "completionRate": 30,
-    "avgProgress": 35,
-    "triggerReason": "完成率低于 50%，距截止时间不足 48 小时",
-    "aiSuggestion": "建议发起红色催办"
-  }
-]
-```
-
-**aiSuggestion:** MVP 使用 Mock 静态文案，按 completionRate 分段：
-- < 30%: "情况紧急，建议立即电话跟进并发起红色催办"
-- 30-49%: "建议发起红色催办"
-- 50-79%: "建议通过系统发送黄色催办提醒"
-
----
-
-## API 对齐（P0）
-
-看板查询统一使用以下端点（详见 `04-API-SPEC.md` 第 5 章：**§5.1** 概览、**§5.2** 热力图、**§5.3** 门店排行、**§5.5** 预警、**§5.6** 门店员工下钻；**§5.4** 为导出 **P1**，P0 可忽略）。
-
-| 规格路径（旧） | 实现路径（当前） | 说明 |
-|--------------|----------------|------|
-| `GET /dashboard/summary` | `GET /api/v1/dashboard/overview` | §5.1 总部看板概览（含 KPI + warningCount）|
-| `GET /dashboard/heatmap` | `GET /api/v1/dashboard/heatmap` | §5.2 RTM/区域热力图 |
-| `GET /dashboard/top-bottom` | `GET /api/v1/dashboard/store-rank` | §5.3 Top/Bottom 5 门店 |
-| `GET /dashboard/alerts` | `GET /api/v1/dashboard/warnings` | §5.5 P1/P2 预警列表 |
-| _(新增)_ | `GET /api/v1/dashboard/store-detail` | **§5.6** 单门店下钻（员工维度）|
-
-统一要求：
-- 响应 `completionRate` / `avgProgress` 为整数（0-100）
-- 全部接口返回 `{ code, message, data, requestId }`
-- central 可全量查询
-
----
-
-## 完成趋势数据（看板折线图）
-
-```sql
--- 按小时统计完成数量（用于趋势折线图）
-SELECT
-  strftime('%Y-%m-%dT%H:00:00Z', completed_at) AS hour_bucket,
-  COUNT(*) AS completed_count
+SELECT strftime('%H', completed_at) AS time_key, COUNT(*) AS new_completed
 FROM task_assignments
-WHERE task_id = :taskId
-  AND status = 'completed'
-  AND completed_at IS NOT NULL
-GROUP BY hour_bucket
-ORDER BY hour_bucket ASC;
+WHERE task_id = :taskId AND status = 'completed' AND completed_at IS NOT NULL
+  AND date(completed_at) = :date
+GROUP BY strftime('%H', completed_at)
+ORDER BY strftime('%H', completed_at) ASC;
 ```
 
 ---
 
-## 看板更新时间显示
+## 看板「数据更新时间」
 
-**要求:** 看板顶部显示最近更新时间，避免误判数据延迟。
-
-```javascript
-// 前端：每次获取 summary 数据后更新显示时间
-function renderLastUpdated(updatedAt) {
-  const time = new Date(updatedAt).toLocaleTimeString('zh-CN');
-  document.getElementById('last-updated').textContent = `数据截至 ${time}`;
-}
-```
-
-响应中的 `updatedAt` 字段 = 该任务最近一次 assignment 更新时间（`MAX(task_assignments.updated_at)`），由 `GET /api/v1/dashboard/overview` 的响应体携带。
+`overview` / `heatmap` / `store-rank` / `store-detail` 等响应中的 **`updatedAt`**（或各接口约定字段）用于顶部「数据截至 …」展示；语义以 **`04-API-SPEC`** 为准（多为 `MAX(updated_at)` 或请求时时间）。
 
 ---
 
-## 个人维度（总部下钻）
+## API 路径对照（规格命名 → 实现）
 
-按员工展示完整进度，见 `04-API-SPEC.md` **§5.6** `GET /api/v1/dashboard/store-detail`（总部下钻）。
+| 历史/口头路径 | 当前实现 |
+|--------------|----------|
+| `GET /dashboard/summary` | `GET /api/v1/dashboard/overview` |
+| `GET /dashboard/top-bottom` | `GET /api/v1/dashboard/store-rank` |
+| `GET /dashboard/alerts` | `GET /api/v1/dashboard/warnings` |
+| — | `GET /api/v1/dashboard/trend`（新增） |
 
-个人落队等级显示：
+导出类接口若为 **P1**，见 `04-API-SPEC` 中 **`/dashboard/reports/export`** 说明。
 
-```javascript
-function getPersonalLagLevel(progress) {
-  if (progress >= 80) return { level: 'fast', label: '快完成', color: 'green' };
-  if (progress >= 50) return { level: 'medium', label: '进行中', color: 'yellow' };
-  return { level: 'behind', label: '严重落队', color: 'red' };
-}
-```
+---
+
+## 文档维护
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 1.2.1 | 2026-03-28 | Day5 初版对齐 |
+| 1.3.0 | 2026-04-09 | 与 `routes/dashboard.js`、PRD §5.3/§6.6 对齐：角色矩阵、`overview` 扩展 KPI、`/trend`、预警/热力图口径、移除过时 Day2 待办表述 |

@@ -1,8 +1,14 @@
 # Specs Overview — MVP 培训管理系统
 
-**PRD 来源:** `docs/product/PRODUCT_REQUIREMENTS.md` v3.2.9（2026-03-23）
-**Spec 版本:** 1.2.0（2026-03-31）
+**PRD 来源:** `docs/product/PRODUCT_REQUIREMENTS.md`（产品口径以仓库内该文件为准，此处不锁版本号）  
+**Spec 版本:** 1.2.1（2026-04-09）  
 **状态:** Spec-ready，可直接驱动前后端开发
+
+### 与 PRD 的用语说明（必读）
+
+- **提醒转化率** 等产品用语见 PRD；若 **`04-API-SPEC.md`** 等仍出现「催办转化率」等**历史字段/中文标签**，以 PRD 定义为准，实现层命名可保留。  
+- **P0 不做人工催办**（PRD §3.4）；下表「MVP 功能范围」及 **`05-NOTIFICATION-NUDGE.md`** 中的「催办」多指**实现层**（如 `nudge_*`、`POST /nudges`）。与 PRD 冲突时以 **`PRODUCT_REQUIREMENTS.md`** 为准。  
+- **前端技术栈**：本页下方「技术栈」表格描述的是早期 Vanilla H5 方案；**当前仓库前端为 Vue 3 + Vite**（见 `TOT_frontend`），以实际代码为准。
 
 ---
 
@@ -26,12 +32,12 @@
 
 | 层 | 技术 | 说明 |
 |----|------|------|
-| 前端 | HTML5 + CSS3 + Vanilla JS | 无框架，无构建工具，3 个独立 H5 页面 |
+| 前端 | Vue 3 + Vite（`TOT_frontend`） | 历史文档曾记 Vanilla H5，以当前仓库为准 |
 | 后端 | Node.js + Express 4.x | REST API + WebSocket |
-| 数据库 | SQLite 3 + WAL 模式 | 文件路径：`server/database.db` |
+| 数据库 | SQLite 3 + WAL 模式 | 路径见 `TOT_backend/server` 下实际配置 |
 | 认证 | JWT，HS256，7 天有效 | Header: `Authorization: Bearer <token>` |
-| 实时 | WebSocket（主）+ REST 轮询（降级）| ws://host:8080/ws |
-| 部署 | 局域网，HTTP，端口 8080 | 无需安装，浏览器直接访问 |
+| 实时 | WebSocket（主）+ REST 轮询（降级）| 端口以运行环境为准（如 `3000`） |
+| 部署 | 局域网 HTTP | 无需安装 App，浏览器访问 |
 
 ---
 
