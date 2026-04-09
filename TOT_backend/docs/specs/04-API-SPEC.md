@@ -232,7 +232,7 @@
 >   passScore: number,         // 达标分数，整数，必填
 >   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
 >   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
->   ddlAt: string,             // 截止时间，ISO 8601，必填
+>   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 UTC 的 `YYYY-MM-DD HH:MM:SS`（与 SQLite `datetime('now')` 同形）
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
 >   updatedAt: string,         // ISO 8601
@@ -279,7 +279,7 @@
     // 四平台至少一个为 true，否则 400（TASK_001）
     "startAt": "2026-04-01T00:00:00Z", // 开始时间，ISO 8601，必填
     "passScore": 100,            // 达标分数，整数，必填
-    "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，ISO 8601，必填
+    "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，必填（常用 ISO 8601；服务端落库规范为 UTC `YYYY-MM-DD HH:MM:SS`）
     "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
     "autoNudgeRules": {          // 自动预警规则，可选
@@ -307,7 +307,7 @@
       "status": "draft",
       "rtmFilter": null,
       "storeScope": "all",
-      "ddlAt": "2026-04-30T00:00:00.000Z",
+      "ddlAt": "2026-04-30 00:00:00",
       "createdBy": "central",
       "createdAt": "2026-03-27T09:44:53.000Z",
       "updatedAt": "2026-03-27T09:44:53.000Z"
@@ -468,7 +468,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `instruction` | string | 是 | 核心指令，如："下周一前完成iPhone新款卖点学习" |
-| `ddlAt` | string | 否 | ISO 8601 时间格式的截止时间 |
+| `ddlAt` | string | 否 | 截止时间，任意可解析时间串（与任务 `ddlAt` 写入规则一致） |
 | `platforms` | string[] | 否 | 涉及的平台，如 `["MyPAL", "SmartSell"]` |
 
 - **返回参数**：

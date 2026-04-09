@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate / 任务周，如 FY26Q2W1
   mypal_product_name TEXT,                          -- 与 MyPal productName 精确匹配（可空）
-  ddl_at             TEXT NOT NULL,
+  ddl_at             TEXT NOT NULL,                 -- 与 SQLite datetime('now') 同形：UTC 的 YYYY-MM-DD HH:MM:SS（写入由 API 规范化）
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
@@ -205,7 +205,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 | pass_score | Y | 默认 100 | 达标分数（PRD `passingScore`）；整数 |
 | mypal_task_week | N | 文本 | MyPal 查询用任务周 / `queryDate`，如 `FY26Q2W1`；**has_mypal=1 时建议必填**；见 `mypalSyncService` |
 | mypal_product_name | N | 文本 | 与 MyPal 响应 `productName` **精确匹配**时用于筛选学习行；可空 |
-| ddl_at | Y | ISO 8601 | 任务截止时间 |
+| ddl_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务截止时间；请求体可为任意可被解析的时间串，**落库前**由服务端 `parseDdlAtToSqliteUtc` 规范化 |
 | created_by | Y | — | 创建者 username（软引用，不设外键），用于审计 |
 | created_at / updated_at | Y | DEFAULT | 创建/更新时间 |
 | CHECK（平台）| — | 至少 1 个平台为 1 | 任务必须包含至少一个学习平台 |
