@@ -1,5 +1,23 @@
 # ToT API 接口定义文档
 
+### v1.4.9（2026-04-09）
+
+- **§2 Task API（`routes/tasks.js`）**：
+  - **GET `/tasks/{id}`**：经 `requireTaskAccess`，**仅 `central` / `admin` / `employee`**；**`executive` 无 assignment 关联时 403**（`AUTH_003`）。与「所有已认证角色」表述不一致处已改正。
+  - **Task 对象**：补充 **`mypalTaskWeek`、`mypalProductName`**（与 `formatTask` / DB 一致）。
+  - **POST 创建**：`hasMypal=true` 时 **`mypalTaskWeek` 必填**，否则 **400 `TASK_007`**（与代码一致）。
+  - **PATCH 已下发任务**：除 **`ddlAt`** 外，允许更新 **`autoNudgeRules`**（与 `UPDATE … ddl_at, auto_nudge_rules` 一致）；改其他字段仍为 **400 `TASK_004`**；**仅改规则时仍须带 `ddlAt`**（见 §2.3）。
+- **§2 文档勘误**：修正 Task 类型块中 **「平台」** 乱码。
+- **§6 / §7**：标明 **`/chat/*`、`/ai/deepseek/*`、`/permissions/check`** 当前 **未挂载于 `app.js`**（P1 / 预留）；权限以各路由中间件为准。
+
+### v1.4.8（2026-04-09）
+
+- **与代码对齐（`server/app.js`）**：HTTP 路由以仓库挂载为准——`/api/v1/{auth,tasks,stores,employees,assignments,events,nudges,dashboard,mypal}`；**`/api/v1/mypal/mock/*`** 仅当环境变量 **`MYPAL_MOCK=1`** 时注册（否则无此路由）。
+- **通用请求头**：实现仅校验 **`Authorization: Bearer`**（JWT）；`User-Role` / `User-Id` / `Employee-Id` / `Store-Id` **非服务端强制**，角色与身份以 Token 解析为准（见下文「实现说明」）。
+- **`POST /nudges`、`GET /nudges`**：`requireRole(['central'])` — **仅 `central`**，**`admin` 无权限**（403 `AUTH_003`）。
+- **`POST /nudges/ai-generate`**：`central` + `admin`（与 `routes/nudge.js` 一致）；实现为 Agent 技能 `generate_nudge_message`（`agent/skills/generateNudge.js`，默认 `utils/ai.generateText`，上游以环境变量为准）；**非**固定「仅 Gemini 2.5 Pro」文案。
+- **看板 KPI 字段**：响应中若仍出现「催办转化率」等**历史字段名**，产品口径见 PRD「**提醒转化率**」；本节不强制改 JSON 字段名以免破坏前端。
+
 ### v1.4.7（2026-04-07）
 
 - **§2.9 自动催办扫描**：补充**服务端定时调度**说明（`server/jobs/autoNudgeScheduler.js`，默认 1 小时）；环境变量 `AUTO_NUDGE_SCHEDULER`、`AUTO_NUDGE_INTERVAL_MS`；与手动 `POST /tasks/{id}/auto-nudge` 的关系。
@@ -43,14 +61,14 @@
 
 ## 文档信息
 
-| 项⽬ | 内容 |
+| 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.3 |
-| 更新时间 | 2026-04-02 |
-| 适用版本 | API v1 |
+| 文档版本 | 1.4.9 |
+| 更新时间 | 2026-04-09 |
+| 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
-| 响应格式 | 统一JSON格式，包含链路追踪ID |
+| 响应格式 | 统一 JSON，含 `requestId` |
 | 优先级标注规则 | **P0**：本期必须实现；**P1**：可选/后续实现；**P2**：后续版本 |
 
 ## 通用规范
@@ -84,11 +102,13 @@
 
 | 字段名 | 必选 | 类型 | 说明 |
 |--------|------|------|------|
-| Authorization | 是 | string | Bearer Token |
-| User-Role | 是 | string | 用户系统角色（对应 `users.role`）：`central`/`admin`/`employee`/`executive` |
-| User-Id | 是 | string | 登录用户唯一标识（`users.id`，INTEGER 序列化为 string） |
-| Employee-Id | 否 | string | 对应的员工业务ID（`employees.id`），店员必须携带 |
-| Store-Id | 否 | string | 所属门店ID（`stores.id`），店员必须携带 |
+| Authorization | 是 | string | Bearer Token（JWT）；**服务端仅据此解析身份**（`middleware/auth.js`） |
+| User-Role | 否 | string | **非服务端校验**：若存在，仅作客户端/网关约定；角色以 JWT `payload.role` 为准 |
+| User-Id | 否 | string | **非服务端校验**：用户 ID 以 JWT `payload.id` 为准 |
+| Employee-Id | 否 | string | **非服务端校验**：店员业务 ID 以 JWT `payload.employeeId` 为准 |
+| Store-Id | 否 | string | **非服务端校验**：门店 ID 以 JWT `payload.storeId` 为准 |
+
+> **实现说明：** 当前 Express 路由**仅**使用 `Authorization: Bearer`；未在中间件中读取 `User-Role` / `User-Id` 等。文档中若仍写「从请求头 User-Id 获取」，实现上对应为 **`req.user.id`（JWT）**。
 
 ## 1. 认证授权 API
 
@@ -202,15 +222,17 @@
 >   description: string | null,
 >   hasMypal: boolean,         // 是否包含 MyPAL 平台（DB: has_mypal 0/1）
 >   hasSmartSell: boolean,     // 是否包含 SmartSell 平台
->   hasAiDemo: boolean,        // 是否包含 AI Demo 平���
+>   hasAiDemo: boolean,        // 是否包含 AI Demo 平台
 >   hasLiveBroadcast: boolean, // 是否包含 Live Broadcast 平台
 >   status: "draft" | "dispatched",
-> >   rtmFilter: object[] | null,   // RTM 筛选规则数组；null = 不启用筛选
+>   rtmFilter: object[] | null,   // RTM 筛选规则数组；null = 不启用筛选
 >   storeScope: "all" | string[], // "all" 或门店 ID 数组（如 ["S001","S002"]）
->   autoNudgeRules: object | null, // 自动预警与催办规则配置
->   startAt: string,           // 开始时间，ISO 8601（如 "2026-04-01T00:00:00.000Z"），必填
->   passScore: number,         // 达标分数，整数（默认 100），必填
->   ddlAt: string,             // 截止时间，ISO 8601（如 "2026-04-30T00:00:00.000Z"），必填
+>   autoNudgeRules: object | null, // 自动预警规则（实现层字段名含 nudge）
+>   startAt: string,           // 开始时间，ISO 8601，必填
+>   passScore: number,         // 达标分数，整数，必填
+>   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
+>   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
+>   ddlAt: string,             // 截止时间，ISO 8601，必填
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
 >   updatedAt: string,         // ISO 8601
@@ -260,11 +282,13 @@
     "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，ISO 8601，必填
     "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
-    "autoNudgeRules": {          // 自动预警与催办规则，可选
+    "autoNudgeRules": {          // 自动预警规则，可选
       "progressLag": { "lifestyle": 3, "mono": 1 },
       "startDelay": 50,
       "deadlineCrisis": { "p0": 24, "p1": 48 }
-    }
+    },
+    "mypalTaskWeek": "FY26Q2W1",  // hasMypal=true 时必填，否则 400（TASK_007）
+    "mypalProductName": "string" // 可选；与 MyPal 产品名匹配
   }
   ```
 - **响应体（成功，HTTP 201）**：返回完整 Task 对象
@@ -292,17 +316,18 @@
   }
   ```
 - **异常场景**：
-  - 400：title / ddlAt 为空（`TASK_005`）
+  - 400：`title` / `ddlAt` / `startAt` 为空，或 **`passScore` 未传**（`TASK_005`）
   - 400：四平台全为 false（`TASK_001`）
+  - 400：**`hasMypal=true` 但未填 `mypalTaskWeek`**（`TASK_007`）
   - 401：未认证（`AUTH_001` / `AUTH_002`）
-  - 403：非 central 角色（`AUTH_003`）
+  - 403：非 `central`（`AUTH_003`）
 
 ### 2.2 获取任务详情 **P0**
 
 - **接口名称**：获取任务详情
 - **接口路径**：`/tasks/{id}`
 - **请求方法**：GET
-- **权限要求**：所有已认证角色（店员的访问范围由列表接口控制，此接口不做二次过滤）
+- **权限要求**：**`central` / `admin` / `employee`**（中间件 `requireTaskAccess`）。**`executive`** 无 assignment 关联时 **403**（`AUTH_003`）。店员仅可访问本人有 `task_assignments` 的任务。
 - **路径参数**：`id`（任务 nanoid，必填）
 - **响应体（成功）**：返回完整 Task 对象
   ```json
@@ -315,6 +340,7 @@
   ```
 - **异常场景**：
   - 401：未认证
+  - 403：无权限（如 `executive`，或店员访问非本人任务）（`AUTH_003`）
   - 404：任务不存在（`TASK_002`）
 
 ### 2.3 编辑任务 **P0**
@@ -337,12 +363,16 @@
     "storeScope": "all",
     "startAt": "2026-04-01T00:00:00Z",
     "passScore": 100,
+    "mypalTaskWeek": "FY26Q2W1",
+    "mypalProductName": "string",
+    "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "startDelay": 50, "deadlineCrisis": { "p0": 24, "p1": 48 } },
     "ddlAt": "2026-05-01T00:00:00Z"
   }
   ```
 - **业务规则**：
-  - `draft` 状态：所有字段均可修改
-  - `dispatched` 状态：**仅允许修改 `ddlAt`**，传入其他任何字段返回 400（`TASK_004`）
+  - `draft` 状态：可修改任务字段（含平台、筛选、`startAt`、`passScore`、MyPal 字段等）；**`hasMypal=true` 时 `mypalTaskWeek` 不可为空**（`TASK_007`）。
+  - `dispatched` 状态：**仅允许修改 `ddlAt` 与 `autoNudgeRules`**（与 `routes/tasks.js` 中 `UPDATE … ddl_at, auto_nudge_rules` 一致）；尝试改标题/平台/RTM 等返回 **400（`TASK_004`）**
+  - **实现细节**：`dispatched` 分支在校验前要求请求体 **`ddlAt` 非空**；若仅调整 `autoNudgeRules`，仍须传入 **`ddlAt`**（可与当前值相同），否则 **400（`TASK_005`）**。
 - **响应体（成功）**：返回更新后的完整 Task 对象
   ```json
   {
@@ -353,8 +383,8 @@
   }
   ```
 - **异常场景**：
-  - 400：dispatched 后传入 ddlAt 以外的字段（`TASK_004`）
-  - 400：dispatched 后 ddlAt 为空（`TASK_005`）
+  - 400：`dispatched` 后尝试变更 **除 `ddlAt` / `autoNudgeRules` 外**的任一字段（含与现值不同的标题、平台、RTM 等）（`TASK_004`）
+  - 400：`dispatched` 后 **`ddlAt` 解析结果为空**（`TASK_005`）
   - 400：draft 状态下四平台全为 false（`TASK_001`）
   - 401：未认证
   - 403：非 central 角色（`AUTH_003`）
@@ -1180,7 +1210,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
                                   //   targetType=store    → stores.id（如 S001）
                                   //   targetType=region   → 区域名称（如"华东"，仅 central 可用）
     "severity": "yellow/red"      // 必填，nudge_records.severity（DB CHECK 约束）
-    // operatorId 从请求头 User-Id 获取（写入 nudge_records.initiator_id）
+    // initiator_id 来自 JWT `req.user.id`（写入 nudge_records.initiator_id）
     // notification 内容由服务端根据 event_type+task 信息模板生成，不需前端传入
     // auto 模式属于 P2 AI Agent 能力，本接口仅支持人工触发
   }
@@ -1205,19 +1235,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```
 - **接口说明**：发起人工催办。服务端**事务内**同步完成审计与通知行占位：
   1. 写 `nudge_records` 一条（`task_id / target_type / target_id / severity / initiator_id`）
-  2. 按目标范围找到所有状态未为 `completed` 的 `task_assignments`，为每个 `user_id` 创建一条 `notification_events`（`event_type=nudge_yellow/nudge_red`，`severity` 同请求，`assignment_id` 必填，`initiator_id` = 请求头 User-Id，**`content` 先为 NULL**）
+  2. 按目标范围找到所有状态未为 `completed` 的 `task_assignments`，为每个 `user_id` 创建一条 `notification_events`（`event_type=nudge_yellow/nudge_red`，`severity` 同请求，`assignment_id` 必填，`initiator_id` = JWT `req.user.id`）
   3. 累加对应 `task_assignments.nudge_count += 1`
   4. 将本次生成的所有 event ID 列表写入 `nudge_records.notification_event_ids`（JSON 数组，`NOT NULL`，PRD §5.5 完整审计）
 
   事务提交后，在 **`setImmediate` 异步路径**中按人调用 `generate_nudge_message`，**`UPDATE notification_events SET content`**，并向对应用户推送 WebSocket（§15.2）。已完成的 assignment 自动跳过（计入 `skippedCount`）。
 - **权限要求**：
-  - central：可催办任意 Assignment；`targetType` 允许 `employee / store / region`
+  - **仅 `central`**（`requireRole(['central'])`）；可针对任意 Assignment；`targetType` 允许 `employee` / `store` / `region`
+  - **`admin` / 其他角色：403**（`AUTH_003`）
 - **异常场景**：
   - 400：taskId/targetType/targetId/severity 任一缺失 / targetType非法 / severity非法
   - 404：taskId不存在 / targetId对应员工/门店不存在
   - 409：目标范围内所有 assignment 均已完成（无可催对象）
 
-> **WS 推送：** 每条通知的 **`content` 异步生成完成后**，向该用户推送 `{ event: "nudge_sent", data: { nudgeRecordId, taskId, severity, eventType, content, eventId } }`（见 §15.2）；非广播为「全员一条」，而是**每人一条**（与文案一一对应）。
+> **WS 推送：** 写入成功后，向所有被触达用户（未完成的 assignment 对应 `user_id`）推送 `{ event: "nudge_sent", data: { nudgeRecordId, taskId, severity, eventType, } }`（见 §15.2）。
 
 ### 4.6 获取催办记录列表**P1**
 
@@ -1266,15 +1297,15 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```
 - **接口说明**：查询指定任务的催办审计记录。`nudge_records` 是每次催办动作的事实日志（一次催办一条），`notificationEventIds` 是本次催办生成的所有通知 event ID 列表，供溯源。服务端可通过 JOIN `users` 表补充发起人姓名（扩展字段）。
 - **权限要求**：
-  - central：可查询任意任务的催办记录
-  - employee：无权限
+  - **仅 `central`**（与 `routes/nudge.js` 中 `requireRole(['central'])` 一致）
+  - **`admin` / `employee` 等其他角色：403**（`AUTH_003`）
 
 ### 4.7 AI 辅助生成催办文案
 
 - **接口路径**：`/nudges/ai-generate`
 - **请求方式**：`POST`
 - **权限要求**：`central`, `admin`
-- **接口说明**：基于 Gemini 2.5 Pro，自动组装任务名称、进度百分比、历史催办次数、剩余时间等系统事实数据，生成紧迫感强的催办文案。系统会自动将严重程度（yellow/red）转化为相应的 Prompt 语气。
+- **接口说明**：调用 Agent 技能 **`generate_nudge_message`**（`server/agent/skills/generateNudge.js`），内部使用 `utils/ai` 的 `generateText` 组装 Prompt；**上游模型与密钥以环境变量为准**，**非**固定为某一厂商文案。入参为任务与店员上下文、严重度 `yellow`/`red`。
 - **请求参数 (Body)**：
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -1637,6 +1668,8 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
+> **与实现对齐**：当前仓库 **`server/app.js` 未挂载** `/api/v1/chat/*`、**`/api/v1/ai/*`**；本节（含 §6.5.2 代理路径）为 **产品/集成约定**，实现状态 **P1（未接入 HTTP 路由）**。已实现的能力见 **`POST /api/v1/tasks/ai-generate-description`**、**`POST /api/v1/nudges/ai-generate`**（各路由文件）。
+
 ### 6.1 创建聊天会话**P1**
 
 - **接口名称**：创建Executive Chat会话
@@ -1925,7 +1958,9 @@ main();
 
 ## 7. 权限校验 API
 
-### 7.1 校验用户资源访问权限**P0**
+> **与实现对齐**：当前 **`server/app.js` 无** `/api/v1/permissions` 路由；权限由 **`authenticate` + `requireRole` / `requireTaskAccess`** 在各业务路由内完成。本节为 **预留/产品约定**。
+
+### 7.1 校验用户资源访问权限**P1（未实现）**
 
 - **接口名称**：校验资源访问权限
 - **接口路径**：`/permissions/check`

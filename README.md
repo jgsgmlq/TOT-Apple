@@ -1,6 +1,8 @@
 # TOT 培训任务管理系统 - 前后端联调进度文档
 
-本文档记录本仓库（主线分支 **`dev_joint`**，TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。更完整的后端/前端说明见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
+**产品需求口径：** 见 [`TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md)（以该文件为准）。
+
+本文档记录本仓库（主线分支 **`dev_joint`**，TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。更完整的文档索引见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
 > 更新日期：2026年4月7日
 
