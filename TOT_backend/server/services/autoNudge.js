@@ -5,13 +5,14 @@ const { nanoid } = require('nanoid');
 const mainAgent = require('../agent');
 const { broadcastToUsers } = require('../ws/manager');
 
+const systemUserId = 1; // 系统执行账号（写入 initiator_id）
+
 /**
- * 扫描并执行任务的自动预警与催办规则
+ * 扫描并排队自动预警：同步阶段只做规则命中与去重，AI 与落库在 setImmediate 异步中执行。
  * @param {string} taskId 任务ID
- * @returns {Promise<Object>} 统计结果
+ * @returns {Promise<Object>}
  */
 async function evaluateAndTriggerAutoNudges(taskId) {
-  // 1. 拿任务和规则
   const task = db.get('SELECT * FROM tasks WHERE id = ?', [taskId]);
   if (!task || task.status !== 'dispatched') {
     return { success: false, reason: 'Task not found or not dispatched' };
@@ -22,17 +23,15 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     try { rules = JSON.parse(task.auto_nudge_rules); } catch (e) { /* ignore */ }
   }
 
-  // 2. 时间计算
   const now = Date.now();
   const createdAt = new Date(task.created_at).getTime();
   const ddlAt = new Date(task.ddl_at).getTime();
-  
+
   const totalDuration = ddlAt - createdAt;
   const passedDuration = now - createdAt;
   const passedPercent = totalDuration > 0 ? (passedDuration / totalDuration) * 100 : 100;
   const hoursLeft = (ddlAt - now) / (1000 * 60 * 60);
 
-  // 3. 取出所有 Assignment 及其对应 Store 的信息
   const assignments = db.all(`
     SELECT ta.*, s.rtm, s.format
     FROM task_assignments ta
@@ -41,18 +40,15 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   `, [taskId]);
 
   if (assignments.length === 0) {
-    return { success: true, nudgedUsers: 0, reason: 'All completed or no assignments' };
+    return { success: true, nudgedCount: 0, queued: 0, evaluatedRules: Object.keys(rules), reason: 'All completed or no assignments' };
   }
 
-  const triggeredUsers = []; // { userId, severity, ruleType }
-  const systemUserId = 1; // 假设 1 为系统执行账号(如需写入 record)
+  const triggeredUsers = [];
 
-  // 4. 判定掉队规则 (Progress Lag) - Monobrand Lifestyle/Mono
   if (rules.progressLag) {
     const lifestyleBottomN = rules.progressLag.lifestyle || 3;
     const monoBottomN = rules.progressLag.mono || 1;
 
-    // 按店分组
     const storeMap = {};
     for (const a of assignments) {
       if (a.rtm && a.rtm.toLowerCase() === 'monobrand') {
@@ -66,9 +62,8 @@ async function evaluateAndTriggerAutoNudges(taskId) {
 
     for (const storeId in storeMap) {
       const storeData = storeMap[storeId];
-      // 升序排列，排前面的是倒数
       storeData.users.sort((a, b) => a.progress - b.progress);
-      
+
       const limit = storeData.format === 'lifestyle' ? lifestyleBottomN : monoBottomN;
       const targetUsers = storeData.users.slice(0, limit);
 
@@ -78,7 +73,6 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     }
   }
 
-  // 5. 判定起步异常预警 (Start Delay)
   if (rules.startDelay && passedPercent >= rules.startDelay) {
     for (const a of assignments) {
       if (a.progress === 0) {
@@ -87,11 +81,10 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     }
   }
 
-  // 6. 判定临期危机预警 (Deadline Crisis)
   if (rules.deadlineCrisis && hoursLeft > 0) {
     const p0Hours = rules.deadlineCrisis.p0 || 24;
     const p1Hours = rules.deadlineCrisis.p1 || 48;
-    
+
     if (hoursLeft <= p0Hours) {
       for (const a of assignments) {
         triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0' });
@@ -103,85 +96,109 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     }
   }
 
-  // 7. 去重过滤 (同一个用户这次扫描只发一种最高优先级的)
   const uniqueTargets = {};
   for (const t of triggeredUsers) {
     if (!uniqueTargets[t.userId]) {
       uniqueTargets[t.userId] = t;
-    } else {
-      // red 优先
-      if (t.severity === 'red') uniqueTargets[t.userId] = t;
+    } else if (t.severity === 'red') {
+      uniqueTargets[t.userId] = t;
     }
   }
 
   const finalTargets = Object.values(uniqueTargets);
-  let nudgedCount = 0;
-
-  // 8. 调用 AI Skill 生成话术并派发
-  const nowStr = new Date().toISOString();
+  const toProcess = [];
   for (const target of finalTargets) {
-    // Check Dedupe to prevent spamming the exact same rule to the same user
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
     const exists = db.get('SELECT id FROM notification_events WHERE dedupe_key = ?', [dedupeKey]);
-    
-    if (exists) continue; // 已经发过了
+    if (!exists) toProcess.push(target);
+  }
 
-    // 调用 Skill
-    let content = '你有未完成的培训任务，请抓紧时间！'; // Fallback
+  if (toProcess.length === 0) {
+    return {
+      success: true,
+      nudgedCount: 0,
+      queued: 0,
+      evaluatedRules: Object.keys(rules),
+      reason: 'No targets or all deduped',
+    };
+  }
+
+  setImmediate(() => {
+    processAutoNudgeTargetsAsync(taskId, toProcess).catch((err) => {
+      console.error('[auto-nudge async]', taskId, err);
+    });
+  });
+
+  const n = toProcess.length;
+  return {
+    success: true,
+    /** 与改造前一致：本次将催办的目标人数（异步落库，HTTP 不等待 AI） */
+    nudgedCount: n,
+    queued: n,
+    evaluatedRules: Object.keys(rules),
+    async: true,
+  };
+}
+
+/**
+ * 异步：逐人调用 generate_nudge_message，写入 notification_events.content 并广播。
+ */
+async function processAutoNudgeTargetsAsync(taskId, targets) {
+  for (const target of targets) {
+    const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
+    const exists = db.get('SELECT id FROM notification_events WHERE dedupe_key = ?', [dedupeKey]);
+    if (exists) continue;
+
+    let content = '你有未完成的培训任务，请抓紧时间！';
     try {
       const aiResult = await mainAgent.execute('generate_nudge_message', {
-        taskId: taskId,
+        taskId,
         userId: target.userId,
-        severity: target.severity
+        severity: target.severity,
       });
-      if (aiResult && aiResult.content) {
-        content = aiResult.content;
-      }
+      if (aiResult && aiResult.content) content = aiResult.content;
     } catch (err) {
       console.error(`Auto-nudge AI generation failed for user ${target.userId}:`, err.message);
     }
 
-    // 记录发送
     const eventId = nanoid();
     const eventType = target.severity === 'red' ? 'nudge_red' : 'nudge_yellow';
+    const now = new Date().toISOString();
+    let nudgeRecordId;
 
     db.transaction(() => {
-      // 这里不写 nudge_records 或者单独写一条系统级 record
-      // 为了与现有的兼容，写一条单人的 nudge_records
-      const nudgeRecordId = nanoid();
+      nudgeRecordId = nanoid();
       db.run(
         `INSERT INTO nudge_records (id, task_id, target_type, target_id, initiator_id, severity, notification_event_ids, created_at)
          VALUES (?, ?, 'employee', ?, ?, ?, ?, ?)`,
-        [nudgeRecordId, taskId, target.userId, systemUserId, target.severity, JSON.stringify([eventId]), nowStr]
+        [nudgeRecordId, taskId, target.userId, systemUserId, target.severity, JSON.stringify([eventId]), now]
       );
 
       db.run(
-        `INSERT INTO notification_events (id, task_id, assignment_id, target_user_id, store_id, event_type, severity, initiator_id, dedupe_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [eventId, taskId, target.assignmentId, target.userId, target.storeId, eventType, target.severity, systemUserId, dedupeKey, nowStr]
+        `INSERT INTO notification_events (id, task_id, assignment_id, target_user_id, store_id, event_type, severity, initiator_id, dedupe_key, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [eventId, taskId, target.assignmentId, target.userId, target.storeId, eventType, target.severity, systemUserId, dedupeKey, content, now]
       );
 
-      db.run('UPDATE task_assignments SET nudge_count = nudge_count + 1, updated_at = ? WHERE id = ?', [nowStr, target.assignmentId]);
+      db.run('UPDATE task_assignments SET nudge_count = nudge_count + 1, updated_at = ? WHERE id = ?', [now, target.assignmentId]);
     });
 
-    // 广播 WS
     broadcastToUsers([target.userId], {
       event: 'nudge_sent',
       data: {
+        nudgeRecordId,
         taskId,
         severity: target.severity,
         eventType,
-        content: content, // 把生成的文案发下去
-        ruleType: target.ruleType
-      }
+        content,
+        ruleType: target.ruleType,
+        eventId,
+      },
     });
-
-    nudgedCount++;
   }
-
-  return { success: true, nudgedCount, evaluatedRules: Object.keys(rules) };
 }
 
 module.exports = {
-  evaluateAndTriggerAutoNudges
+  evaluateAndTriggerAutoNudges,
+  processAutoNudgeTargetsAsync,
 };

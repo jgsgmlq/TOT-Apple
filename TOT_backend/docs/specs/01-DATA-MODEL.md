@@ -689,6 +689,7 @@ nudge_records (TEXT PK: nanoid)
 | task_assignments | 索引从单列改为复合索引 (task_id, store_id, status) | 覆盖看板门店聚合查询，避免回表 |
 | notification_events | `initiator_id` 从 TEXT 改为 INTEGER REFERENCES users(id) | central 无 employee.id；与 nudge_records 对齐 |
 | notification_events | 新增 PARTIAL UNIQUE INDEX on dedupe_key | DB 层真正保证 task_assigned 幂等 |
+| notification_events | 新增 `content TEXT` | 存储催办展示文案（每人可不同），与任务说明 `tasks.description` 区分 |
 | nudge_records | `notification_event_ids` 改为 NOT NULL | PRD §5.5 要求完整催办审计记录 |
 
 ---

@@ -75,6 +75,35 @@ function resolveTargetAssignments(taskId, targetType, targetId, callerStoreId) {
   return [];
 }
 
+async function enrichManualNudgeContent({ taskId, eventEntries, severity, nudgeRecordId }) {
+  const eventType = severity === 'red' ? 'nudge_red' : 'nudge_yellow';
+  for (const entry of eventEntries) {
+    let content = '你有未完成的培训任务，请抓紧时间！';
+    try {
+      const aiResult = await mainAgent.execute('generate_nudge_message', {
+        taskId,
+        userId: entry.userId,
+        severity,
+      });
+      if (aiResult && aiResult.content) content = aiResult.content;
+    } catch (err) {
+      console.error(`[manual-nudge AI] user ${entry.userId}:`, err.message);
+    }
+    db.run('UPDATE notification_events SET content = ? WHERE id = ?', [content, entry.eventId]);
+    broadcastToUsers([entry.userId], {
+      event: 'nudge_sent',
+      data: {
+        nudgeRecordId,
+        taskId,
+        severity,
+        eventType,
+        content,
+        eventId: entry.eventId,
+      },
+    });
+  }
+}
+
 // ─── POST /api/v1/nudges ──────────────────────────────────────────────────────
 
 router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
@@ -119,9 +148,7 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
     const now = new Date().toISOString();
     const nudgeRecordId = nanoid();
     const eventType = severity === 'red' ? 'nudge_red' : 'nudge_yellow';
-    const initiatorRole = role;
 
-    // 预生成所有 event ID
     const eventEntries = pendingAssignments.map(a => ({
       assignmentId: a.id,
       userId: a.user_id,
@@ -131,25 +158,21 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
     const notificationEventIds = eventEntries.map(e => e.eventId);
 
     db.transaction(() => {
-      // 1. 写 nudge_records
       db.run(
         `INSERT INTO nudge_records
           (id, task_id, target_type, target_id, initiator_id, severity, notification_event_ids, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [nudgeRecordId, taskId, targetType, targetId, callerId, initiatorRole, severity,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [nudgeRecordId, taskId, targetType, targetId, callerId, severity,
          JSON.stringify(notificationEventIds), now]
       );
 
-      // 2. 写 notification_events + nudge_count+1
       for (const entry of eventEntries) {
         db.run(
           `INSERT INTO notification_events
-            (id, task_id, assignment_id, target_user_id, store_id, event_type, severity, initiator_id, created_at)
-           VALUES (?, ?, ?, ?, ?,
-             ?, ?, ?, ?, ?)`,
+            (id, task_id, assignment_id, target_user_id, store_id, event_type, severity, initiator_id, content, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [entry.eventId, taskId, entry.assignmentId, entry.userId, entry.storeId,
-           entry.assignmentId,
-           eventType, severity, callerId, initiatorRole, now]
+            eventType, severity, callerId, null, now]
         );
         db.run(
           'UPDATE task_assignments SET nudge_count = nudge_count + 1, updated_at = ? WHERE id = ?',
@@ -158,29 +181,28 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
       }
     });
 
-    // WS 广播 nudge_sent 给目标用户
-    const targetEmployeeIds = eventEntries.map(e => e.userId);
-    broadcastToUsers(targetEmployeeIds, {
-      event: 'nudge_sent',
-      data: {
-        nudgeRecordId,
+    setImmediate(() => {
+      enrichManualNudgeContent({
         taskId,
+        eventEntries,
         severity,
-        eventType,
-        initiatorRole,
-      },
+        nudgeRecordId,
+      }).catch((err) => console.error('[manual-nudge async]', err));
     });
 
+    const n = pendingAssignments.length;
     res.json({
       code: 200,
-      message: '催办执行成功',
+      message: '催办已受理，文案生成异步写入中',
       data: {
         nudgeRecordId,
-        nudgedCount: pendingAssignments.length,
+        nudgedCount: n,
+        queued: n,
         skippedCount,
         failedCount: 0,
         failedReasons: [],
         notificationEventIds,
+        async: true,
       },
       requestId: req.requestId,
     });

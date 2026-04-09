@@ -19,8 +19,10 @@ async function runScheduledAutoNudges() {
   for (const row of rows) {
     try {
       const result = await evaluateAndTriggerAutoNudges(row.id);
-      if (result.success && result.nudgedCount > 0) {
-        console.log(`[auto-nudge scheduler] task=${row.id} nudgedCount=${result.nudgedCount}`);
+      if (result.success && (result.queued > 0 || result.nudgedCount > 0)) {
+        console.log(
+          `[auto-nudge scheduler] task=${row.id} queued=${result.queued ?? 0} nudgedCount=${result.nudgedCount ?? 0}`
+        );
       }
     } catch (err) {
       console.error(`[auto-nudge scheduler] task=${row.id}`, err.message || err);

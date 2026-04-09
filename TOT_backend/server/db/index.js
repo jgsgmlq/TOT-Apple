@@ -23,6 +23,7 @@ function getDb() {
     ensureMypalLearningMockIndexes(_db);
     migrateTasksMypalColumns(_db);
     migrateNudgeRecordsConstraints(_db);
+    migrateNotificationEventsContent(_db);
   }
   return _db;
 }
@@ -57,6 +58,13 @@ function migrateTasksMypalColumns(database) {
   if (!names.has('mypal_product_name')) {
     database.exec('ALTER TABLE tasks ADD COLUMN mypal_product_name TEXT');
   }
+}
+
+/** 已有库补列：notification_events.content（催办文案等） */
+function migrateNotificationEventsContent(database) {
+  const cols = database.prepare('PRAGMA table_info(notification_events)').all();
+  if (cols.some((c) => c.name === 'content')) return;
+  database.exec('ALTER TABLE notification_events ADD COLUMN content TEXT');
 }
 
 function ensureMypalLearningMockIndexes(database) {
