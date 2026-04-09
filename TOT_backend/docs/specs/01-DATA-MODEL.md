@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS notification_events (
   event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red', 'task_updated')),
   severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'red')),  -- yellow | red（仅催办事件必填）
   dedupe_key     TEXT,             -- 幂等键（task_assigned 类型必填）
+  content        TEXT,             -- 催办类展示文案（nudge_*）；与 tasks.description 不同源；任务类可为 NULL
   initiator_id   INTEGER REFERENCES users(id),  -- ★ 改为 INTEGER REFERENCES users(id)（催办发起人；系统触发时 null）
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (
@@ -342,6 +343,7 @@ CREATE UNIQUE INDEX idx_ne_dedupe ON notification_events(dedupe_key)
 | event_type | Y | 事件类型，决定通知的展示样式和行为（见 event_type 枚举表）|
 | severity | N | 催办紧急程度：yellow=提醒，red=紧急；仅催办事件填写 |
 | dedupe_key | N | 幂等键；task_assigned 必填（格式 `task:{id}:user:{id}`），PARTIAL UNIQUE INDEX 在 DB 层防重 |
+| content | N | 催办类（`nudge_yellow` / `nudge_red`）每人一条展示文案，由 `generate_nudge_message` 异步写入；非催办事件一般为 NULL |
 | initiator_id | N | 催办发起人的 users.id；系统自动触发（如 task_assigned）时为 NULL |
 
 | 值 | 触发时机 | severity | assignment_id |
@@ -667,6 +669,7 @@ nudge_records (TEXT PK: nanoid)
 | task_assignments | 索引从单列改为复合索引 (task_id, store_id, status) | 覆盖看板门店聚合查询，避免回表 |
 | notification_events | `initiator_id` 从 TEXT 改为 INTEGER REFERENCES users(id) | central 无 employee.id；与 nudge_records 对齐 |
 | notification_events | 新增 PARTIAL UNIQUE INDEX on dedupe_key | DB 层真正保证 task_assigned 幂等 |
+| notification_events | 新增 `content TEXT` | 存储催办展示文案（每人可不同），与任务说明 `tasks.description` 区分 |
 | nudge_records | `notification_event_ids` 改为 NOT NULL | PRD §5.5 要求完整催办审计记录 |
 
 ---

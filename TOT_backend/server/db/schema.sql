@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS notification_events (
   event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red', 'task_updated')),
   severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'red')),
   dedupe_key     TEXT,
+  content        TEXT,                          -- 催办类展示文案（nudge_*）；任务类可为空，由前端关联 task 或后续扩展
   initiator_id   INTEGER REFERENCES users(id),
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (

@@ -473,7 +473,7 @@
 - **接口路径**：`/tasks/{id}/auto-nudge`
 - **请求方式**：`POST`
 - **权限要求**：`central`, `admin`
-- **接口说明**：对**指定任务 ID** 立即执行一轮与定时任务**相同**的扫描（无需等待下一个调度周期）。读取该任务配置的 `auto_nudge_rules`（掉队预警、起步异常预警、临期危机预警），扫描所有进行中的员工进度。对命中规则的员工，自动调用 `generate_nudge_message` Skill 生成话术，并产生通知与 `nudge_records` 记录。
+- **接口说明**：对**指定任务 ID** 立即执行一轮与定时任务**相同**的扫描（无需等待下一个调度周期）。读取该任务配置的 `auto_nudge_rules`（掉队预警、起步异常预警、临期危机预警），扫描所有进行中的员工进度。对命中且未去重的目标，**同步阶段仅入队**；在 `setImmediate` 异步路径中逐人调用 `generate_nudge_message`、写入 `notification_events`（含 `content`）、`nudge_records` 并推送 WebSocket（见 §15.2）。**HTTP 响应立即返回**，不等待 AI 完成。
 - **请求参数**：无 Body
 - **返回参数**：
 
@@ -484,11 +484,15 @@
   "data": {
     "success": true,
     "nudgedCount": 5,
-    "evaluatedRules": ["progressLag", "startDelay", "deadlineCrisis"]
+    "queued": 5,
+    "evaluatedRules": ["progressLag", "startDelay", "deadlineCrisis"],
+    "async": true
   },
   "requestId": "req-123..."
 }
 ```
+
+> **`nudgedCount` / `queued`**：数值相同，均为**本轮将异步处理的目标人数**（与改造前「人次」含义一致，便于旧客户端只读 `nudgedCount`）；**HTTP 仍不等待**逐人 AI 落库。无目标或全部去重时二者均为 `0`。
 
 ## 3. 任务分配 API（Assignment）
 
@@ -962,7 +966,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     //   task_updated  → 可空，不强制去重
     "dedupeKey": "string"     // task_assigned 必填；task_updated 可空
     // severity / operatorId / operatorRole 本接口均为 null（系统自动触发）
-    // storeId/title/content 不在 notification_events 表中，不支持传入
+    // 表内有 content 列（催办展示文案），但仅由 §4.5 / 自动预警异步写入；本接口不支持传入 title/content
   }
   ```
 - **响应体（成功）**：
@@ -1024,6 +1028,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "targetUserId": "string", // notification_events.target_user_id（= employees.id）
           "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
           "severity": "string",    // notification_events.severity（yellow/red），非催办事件时为 null
+          "content": "string",     // notification_events.content；催办类为展示文案，异步写入完成后非 null；其它事件多为 null
           "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, startDelay），非预警时为 null
           // isActive 计算规则（不存储于 DB）：
           //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
@@ -1184,32 +1189,27 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```json
   {
     "code": 200,
-    "message": "催办执行成功",
+    "message": "催办已受理，文案生成异步写入中",
     "data": {
-      // 每次催办写入一条 nudge_records（一个 target），记录发起人、目标、严重程度
       "nudgeRecordId": "string",  // nudge_records.id（nanoid）
-      "nudgedCount": 5,           // 成功写入的 notification_events 条数（同时 nudge_count+1）
-      "skippedCount": 1,          // 跳过数：已完成的 assignment 不催办
+      "nudgedCount": 5,          // 与 queued 相同：本次催办涉及的未完成 assignment 条数（事务内已建 event 行）
+      "queued": 5,                // 同上，可选冗余字段
+      "skippedCount": 1,
       "failedCount": 0,
-      "failedReasons": [
-        {
-          "userId": "string",     // employees.id（对应被跳过的用户）
-          "reason": "Assignment 已完成，不允许催办"
-        }
-      ],
-      // notification_event_ids：本次催办创建的所有 event ID 列表，写入 nudge_records.notification_event_ids
-      "notificationEventIds": ["string"]
+      "failedReasons": [],
+      "notificationEventIds": ["string"],
+      "async": true
     },
     "requestId": "string"
   }
   ```
-- **接口说明**：发起人工催办。服务端**事务内**原子写入流程：
+- **接口说明**：发起人工催办。服务端**事务内**同步完成审计与通知行占位：
   1. 写 `nudge_records` 一条（`task_id / target_type / target_id / severity / initiator_id`）
-  2. 按目标范围找到所有状态未为 `completed` 的 `task_assignments`，为每个 `user_id` 创建一条 `notification_events`（`event_type=nudge_yellow/nudge_red`，`severity` 同请求，`assignment_id` 必填，`initiator_id` = 请求头 User-Id）
+  2. 按目标范围找到所有状态未为 `completed` 的 `task_assignments`，为每个 `user_id` 创建一条 `notification_events`（`event_type=nudge_yellow/nudge_red`，`severity` 同请求，`assignment_id` 必填，`initiator_id` = 请求头 User-Id，**`content` 先为 NULL**）
   3. 累加对应 `task_assignments.nudge_count += 1`
   4. 将本次生成的所有 event ID 列表写入 `nudge_records.notification_event_ids`（JSON 数组，`NOT NULL`，PRD §5.5 完整审计）
-  
-  已完成的 assignment 自动跳过（计入 `skippedCount`）。整个流程在一个 SQLite 事务中完成，确保 `nudge_records.notification_event_ids` 始终完整。
+
+  事务提交后，在 **`setImmediate` 异步路径**中按人调用 `generate_nudge_message`，**`UPDATE notification_events SET content`**，并向对应用户推送 WebSocket（§15.2）。已完成的 assignment 自动跳过（计入 `skippedCount`）。
 - **权限要求**：
   - central：可催办任意 Assignment；`targetType` 允许 `employee / store / region`
 - **异常场景**：
@@ -1217,7 +1217,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 404：taskId不存在 / targetId对应员工/门店不存在
   - 409：目标范围内所有 assignment 均已完成（无可催对象）
 
-> **WS 推送：** 催办写入成功后，向所有被催用户（未完成的 assignment 对应 `user_id`）推送 `{ event: "nudge_sent", data: { nudgeRecordId, taskId, severity, eventType, } }`（见 §15.2）。
+> **WS 推送：** 每条通知的 **`content` 异步生成完成后**，向该用户推送 `{ event: "nudge_sent", data: { nudgeRecordId, taskId, severity, eventType, content, eventId } }`（见 §15.2）；非广播为「全员一条」，而是**每人一条**（与文案一一对应）。
 
 ### 4.6 获取催办记录列表**P1**
 
@@ -2812,23 +2812,27 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 ### 15.2 催办通知 `nudge_sent` **P0**
 
-**触发时机：** `POST /api/v1/nudges` 成功后，向所有被催办的目标用户推送。
+**触发时机：** 人工 `POST /api/v1/nudges` 在事务落库后，**异步**为每人生成文案并 `UPDATE notification_events.content` 时推送；自动预警在 `evaluateAndTriggerAutoNudges` 异步落库时同样推送。**不在** HTTP 响应返回前发送。
 
-**接收方：** 本次催办的目标员工（未完成的 assignment 对应用户）。
+**接收方：** 单条推送对应的一名目标员工（每人独立 `content`）。
 
 **Payload：**
 ```json
 {
   "event": "nudge_sent",
   "data": {
+    "nudgeRecordId": "string",
+    "eventId": "string",
     "taskId": "string",
     "severity": "yellow | red",
     "eventType": "nudge_yellow | nudge_red",
-    "content": "string", // AI 生成的催办话术或降级文案
-    "ruleType": "string" // 如 'progressLag', 'deadlineCrisisP0' 等
+    "content": "string",
+    "ruleType": "string"
   }
 }
 ```
+
+> **`ruleType`**：自动预警时有值（如 `progressLag`、`deadlineCrisisP0`）；**人工催办**可不传或为空，客户端以 `eventId` / `GET /events` 为准。
 
 **前端建议处理：**
 1. 铃铛角标 +1（或调 `GET /events/unread-count`）。

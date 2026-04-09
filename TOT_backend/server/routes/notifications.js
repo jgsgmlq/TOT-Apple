@@ -44,6 +44,7 @@ function formatEvent(row) {
     storeId:       row.store_id,
     targetRole:    row.target_role,
     severity:      row.severity       || null,
+    content:       row.content != null ? row.content : null,
     ruleType:      ruleType,
     isActive,
     resolvedAt,
