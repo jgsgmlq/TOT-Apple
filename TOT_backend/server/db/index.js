@@ -24,6 +24,9 @@ function getDb() {
     migrateTasksMypalColumns(_db);
     migrateNudgeRecordsConstraints(_db);
     migrateNotificationEventsContent(_db);
+    migrateUsersExecutiveScope(_db);
+    migrateUsersLastLoginAt(_db);
+    ensureChatTables(_db);
   }
   return _db;
 }
@@ -65,6 +68,53 @@ function migrateNotificationEventsContent(database) {
   const cols = database.prepare('PRAGMA table_info(notification_events)').all();
   if (cols.some((c) => c.name === 'content')) return;
   database.exec('ALTER TABLE notification_events ADD COLUMN content TEXT');
+}
+
+/** 已有库补列：users.executive_regions / executive_rtm（EChat 辖区绑定） */
+function migrateUsersExecutiveScope(database) {
+  const cols = database.prepare('PRAGMA table_info(users)').all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('executive_regions')) {
+    database.exec('ALTER TABLE users ADD COLUMN executive_regions TEXT');
+  }
+  if (!names.has('executive_rtm')) {
+    database.exec('ALTER TABLE users ADD COLUMN executive_rtm TEXT');
+  }
+}
+
+/** 已有库补列：users.last_login_at（登录时间戳记录） */
+function migrateUsersLastLoginAt(database) {
+  const cols = database.prepare('PRAGMA table_info(users)').all();
+  if (cols.some((c) => c.name === 'last_login_at')) return;
+  database.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+}
+
+/** 创建 chat_sessions / chat_messages 表（新库由 schema.sql 建，旧库由本函数兜底） */
+function ensureChatTables(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id          TEXT PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id),
+      role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
+      regions     TEXT,
+      rtm         TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      last_active TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
+      role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content     TEXT NOT NULL,
+      intent_type TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  database.exec(
+    'CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id)'
+  );
 }
 
 function ensureMypalLearningMockIndexes(database) {

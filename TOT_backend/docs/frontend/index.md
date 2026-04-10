@@ -6,11 +6,12 @@
 
 ## 文档列表
 
-| 文档 | 内容 | 状�� |
+| 文档 | 内容 | 状态 |
 |------|------|------|
 | [04-SHARED.md](./04-SHARED.md) | 公共模块：auth.js / api.js / ws.js | ✅ |
 | [01-CENTRAL.md](./01-CENTRAL.md) | central.html 总部看板页（Phase 2d）| ✅ |
 | [03-EMPLOYEE.md](./03-EMPLOYEE.md) | employee.html 员工移动端（Phase 2b）| ✅ |
+| [05-EXECUTIVE-CHAT.md](./05-EXECUTIVE-CHAT.md) | Executive Chat（`executive`）：会话/消息/历史 API 与 UI 映射；衔接 04 §6；P1，后端 `/chat/*` 未挂载前仅规格对齐 | ⚠️ |
 
 ## 历史文档（已过时）
 

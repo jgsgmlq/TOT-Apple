@@ -58,6 +58,23 @@
             >
               <n-icon size="16" class="chat-icon"><MessageOutlined /></n-icon>
               <span class="chat-title">{{ item.title }}</span>
+              <div class="chat-item-delete" @click.stop>
+                <n-popconfirm
+                  placement="left"
+                  positive-text="删除"
+                  negative-text="取消"
+                  @positive-click="removeChatFromSidebar(item)"
+                >
+                  <template #trigger>
+                    <n-button quaternary circle size="tiny" type="error" :focusable="false" aria-label="删除对话">
+                      <template #icon>
+                        <n-icon size="14"><DeleteOutlined /></n-icon>
+                      </template>
+                    </n-button>
+                  </template>
+                  确定删除该对话？服务端将删除该会话及消息记录，并从侧栏移除。若删除的是当前对话，将进入新的空白会话。
+                </n-popconfirm>
+              </div>
             </div>
           </div>
         </div>
@@ -81,15 +98,32 @@
           <div class="sider-content custom-scroll">
             <div class="history-title">历史记录</div>
             <div class="chat-list">
-              <div 
-                class="chat-item" 
-                v-for="item in historyList" 
+              <div
+                class="chat-item"
+                v-for="item in historyList"
                 :key="item.id"
                 :class="{ active: currentChatId === item.id }"
                 @click="selectChat(item)"
               >
                 <n-icon size="16" class="chat-icon"><MessageOutlined /></n-icon>
                 <span class="chat-title">{{ item.title }}</span>
+                <div class="chat-item-delete chat-item-delete--mobile" @click.stop>
+                  <n-popconfirm
+                    placement="right"
+                    positive-text="删除"
+                    negative-text="取消"
+                    @positive-click="removeChatFromSidebar(item)"
+                  >
+                    <template #trigger>
+                      <n-button quaternary circle size="tiny" type="error" :focusable="false" aria-label="删除对话">
+                        <template #icon>
+                          <n-icon size="14"><DeleteOutlined /></n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    确定删除该对话？服务端将删除该会话及消息记录，并从侧栏移除。若删除的是当前对话，将进入新的空白会话。
+                  </n-popconfirm>
+                </div>
               </div>
             </div>
           </div>
@@ -134,23 +168,29 @@
         </div>
 
         <div class="chat-body custom-scroll" ref="chatBodyRef">
-          <div v-if="messages.length === 0" class="empty-chat">
-            <h3>Hi! {{ displayName }} 👋✨</h3>
-            <p>作为你的智能助手，我可以为你答疑解惑～</p>
-            
-            <div class="preset-questions">
-              <div class="preset-bubble" @click="fillInput('Q1新品培训完成率？')">Q1新品培训完成率？</div>
-              <div class="preset-bubble" @click="fillInput('现在有什么问题需要关注？')">现在有什么问题需要关注？</div>
-              <div class="preset-bubble" @click="fillInput('最差的5家门店是哪些？')">最差的5家门店是哪些？</div>
+          <n-spin :show="isLoadingHistory" style="min-height: 120px">
+            <div v-if="messages.length === 0 && !isLoadingHistory" class="empty-chat">
+              <h3>Hi! {{ displayName }} 👋✨</h3>
+              <p>作为你的智能助手，我可以为你答疑解惑～</p>
+
+              <div class="preset-questions">
+                <div
+                  v-for="(q, qi) in presetQuestions"
+                  :key="qi"
+                  class="preset-bubble"
+                  @click="fillInput(q)"
+                >
+                  {{ q }}
+                </div>
+              </div>
             </div>
-          </div>
-          
-          <div 
-            v-for="(msg, index) in messages" 
-            :key="index" 
-            class="message-row"
-            :class="msg.role === 'user' ? 'is-user' : 'is-ai'"
-          >
+
+            <div
+              v-for="(msg, index) in messages"
+              :key="index"
+              class="message-row"
+              :class="msg.role === 'user' ? 'is-user' : 'is-ai'"
+            >
             <div class="message-avatar">
               <template v-if="msg.role === 'user'">
                 <div class="avatar-circle chat-avatar" style="cursor: default; transform: none; box-shadow: 0 2px 8px rgba(37,99,235,0.1);">
@@ -166,7 +206,8 @@
             <div class="message-content">
               {{ msg.content }}
             </div>
-          </div>
+            </div>
+          </n-spin>
         </div>
 
         <div class="chat-footer">
@@ -176,9 +217,15 @@
               type="textarea"
               placeholder="输入消息，Shift + Enter 换行，Enter 发送..."
               :autosize="{ minRows: 1, maxRows: 5 }"
-              @keydown.enter.prevent="handleSend"
+              @keydown.enter="onInputEnter"
             />
-            <n-button type="primary" :disabled="!inputValue.trim()" @click="handleSend" class="send-btn">
+            <n-button
+              type="primary"
+              :disabled="!inputValue.trim() || isSending || isLoadingHistory"
+              :loading="isSending"
+              @click="handleSend"
+              class="send-btn"
+            >
               发送
             </n-button>
           </div>
@@ -197,6 +244,7 @@ import { debounce } from 'lodash-es';
 import {
   PlusOutlined,
   MessageOutlined,
+  DeleteOutlined,
   LogoutOutlined,
   MenuOutlined,
   MenuFoldOutlined,
@@ -205,6 +253,15 @@ import {
 } from '@vicons/antd';
 import { websiteConfig } from '@/config/website.config';
 import { useUserStore } from '@/store/modules/user';
+import {
+  createChatSession,
+  sendChatMessage,
+  getChatHistory,
+  deleteChatSession,
+  formatReplyContentText,
+  type ChatHistoryItem,
+  type SendMessageResult,
+} from '@/api/chat';
 
 interface ChatHistory {
   id: string;
@@ -215,6 +272,12 @@ interface ChatMessage {
   role: 'user' | 'ai';
   content: string;
 }
+
+const FALLBACK_PRESETS = [
+  'Q1新品培训完成率？',
+  '现在有什么问题需要关注？',
+  '最差的5家门店是哪些？',
+];
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -246,15 +309,132 @@ const onLogout = () => {
   });
 };
 
-const historyList = ref<ChatHistory[]>([
-  { id: '1', title: '分析昨日门店数据' },
-  { id: '2', title: '华东区培训达标率报告' },
-  { id: '3', title: '关于 MyPal 的优化建议' }
-]);
+const historyList = ref<ChatHistory[]>([]);
+const presetQuestions = ref<string[]>([...FALLBACK_PRESETS]);
 
 const currentChatId = ref<string>('');
+const sessionId = ref<string>('');
+const isSending = ref(false);
+const isLoadingHistory = ref(false);
 
 const messages = ref<ChatMessage[]>([]);
+
+function sidebarStorageKey(): string {
+  const u = userStore.getUserInfo?.username || 'guest';
+  return `tot_executive_chat_sidebar_${u}`;
+}
+
+function presetsStorageKey(): string {
+  const u = userStore.getUserInfo?.username || 'guest';
+  return `tot_executive_chat_presets_${u}`;
+}
+
+function loadStoredPresets(): string[] | undefined {
+  try {
+    const raw = localStorage.getItem(presetsStorageKey());
+    if (!raw) return undefined;
+    const arr = JSON.parse(raw) as unknown;
+    if (Array.isArray(arr) && arr.length > 0 && arr.every((x) => typeof x === 'string')) {
+      return arr as string[];
+    }
+  } catch {
+    /* ignore */
+  }
+  return undefined;
+}
+
+function saveStoredPresets(questions: string[] | undefined | null) {
+  if (!questions?.length) return;
+  try {
+    localStorage.setItem(presetsStorageKey(), JSON.stringify(questions));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 侧栏最多保留一条「新对话」：合并重复项，返回保留的那条（列表最前视为最新） */
+function takeSingleDraftChat(): ChatHistory | null {
+  const drafts = historyList.value.filter((h) => h.title === '新对话');
+  if (drafts.length === 0) return null;
+  const keep = drafts[0];
+  if (drafts.length > 1) {
+    historyList.value = historyList.value.filter(
+      (h) => h.title !== '新对话' || h.id === keep.id
+    );
+    persistSidebar();
+  }
+  return keep;
+}
+
+function loadSidebarFromStorage() {
+  try {
+    const raw = localStorage.getItem(sidebarStorageKey());
+    if (!raw) return;
+    const arr = JSON.parse(raw) as unknown;
+    if (Array.isArray(arr)) {
+      historyList.value = arr.filter(
+        (x): x is ChatHistory => Boolean(x && typeof (x as ChatHistory).id === 'string' && typeof (x as ChatHistory).title === 'string')
+      );
+    }
+  } catch {
+    historyList.value = [];
+  }
+}
+
+function persistSidebar() {
+  try {
+    localStorage.setItem(sidebarStorageKey(), JSON.stringify(historyList.value.slice(0, 50)));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function applySessionApiResult(result: { sessionId: string; exampleQuestions?: string[] }) {
+  sessionId.value = result.sessionId;
+  currentChatId.value = result.sessionId;
+  presetQuestions.value =
+    result.exampleQuestions && result.exampleQuestions.length > 0
+      ? [...result.exampleQuestions]
+      : [...FALLBACK_PRESETS];
+}
+
+/** 将当前会话挂到侧栏顶部；若标题为「新对话」则移除侧栏中其它「新对话」，保证至多一条空白会话 */
+function ensureSidebarSession(id: string, title: string) {
+  let rest = historyList.value.filter((h) => h.id !== id);
+  if (title === '新对话') {
+    rest = rest.filter((h) => h.title !== '新对话');
+  }
+  historyList.value = [{ id, title }, ...rest];
+  persistSidebar();
+}
+
+function historyItemsToMessages(list: ChatHistoryItem[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const item of list) {
+    if (item.role === 'user' && item.content) {
+      out.push({ role: 'user', content: item.content });
+    } else if (item.role === 'assistant') {
+      out.push({ role: 'ai', content: formatReplyContentText(item.replyContent ?? undefined) });
+    }
+  }
+  return out;
+}
+
+async function loadFullHistoryMessages(chatId: string): Promise<ChatMessage[]> {
+  const pageSize = 500;
+  let pageNum = 1;
+  const acc: ChatHistoryItem[] = [];
+  for (;;) {
+    const data = await getChatHistory(chatId, pageNum, pageSize, {
+      skipGlobalErrorMessage: true,
+    }).send();
+    acc.push(...(data.historyList || []));
+    const totalPages = data.pagination?.totalPages ?? 1;
+    if (pageNum >= totalPages) break;
+    pageNum += 1;
+  }
+  return historyItemsToMessages(acc);
+}
 
 const fillInput = (text: string) => {
   inputValue.value = text;
@@ -289,28 +469,134 @@ const checkMobile = debounce(() => {
   isMobile.value = window.innerWidth <= 768;
 }, 100);
 
-onMounted(() => {
+onMounted(async () => {
   checkMobile();
   window.addEventListener('resize', checkMobile);
+  loadSidebarFromStorage();
+  const draft = takeSingleDraftChat();
+  if (draft) {
+    applySessionApiResult({
+      sessionId: draft.id,
+      exampleQuestions: loadStoredPresets(),
+    });
+    // 本地侧栏 id 可能在服务端已不存在（例如执行过 seed 清空 chat_sessions）
+    try {
+      await getChatHistory(draft.id, 1, 1, { skipGlobalErrorMessage: true }).send();
+      return;
+    } catch (e) {
+      if (isStaleExecutiveSessionError(e)) {
+        historyList.value = historyList.value.filter((h) => h.id !== draft.id);
+        persistSidebar();
+        // 继续向下创建新会话
+      } else {
+        // 网络等：保留本地草稿与 sessionId，发送/重试时再走失败逻辑
+        return;
+      }
+    }
+  }
+  try {
+    const result = await createChatSession().send();
+    applySessionApiResult(result);
+    saveStoredPresets(result.exampleQuestions);
+    ensureSidebarSession(result.sessionId, '新对话');
+  } catch {
+    /* 发送首条消息时会再创建会话 */
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile);
 });
 
-const handleNewChat = () => {
-  currentChatId.value = Date.now().toString();
-  messages.value = [];
+/** 新建服务端会话并进入空白「新对话」（侧栏置顶一条「新对话」） */
+async function openFreshDraftSession(): Promise<boolean> {
+  try {
+    const result = await createChatSession().send();
+    applySessionApiResult(result);
+    saveStoredPresets(result.exampleQuestions);
+    ensureSidebarSession(result.sessionId, '新对话');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const handleNewChat = async () => {
   showMobileSidebar.value = false;
+  messages.value = [];
+  inputValue.value = '';
+  const ok = await openFreshDraftSession();
+  if (!ok) message.error('创建会话失败，请刷新重试');
 };
 
-const selectChat = (chat: ChatHistory) => {
+/** 服务端已无该会话（如重新 seed 清空 chat_sessions、或侧栏 id 过期） */
+function isStaleExecutiveSessionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /404|会话不存在|CHAT_003|Not Found/i.test(msg);
+}
+
+/**
+ * 先请求服务端删除会话，成功（或会话已不存在）后再更新侧栏。
+ * 若删除的是当前会话，清空消息并新建空白「新对话」。
+ */
+async function removeChatFromSidebar(item: ChatHistory) {
+  if (isLoadingHistory.value) {
+    message.warning('正在加载历史，请稍候再试');
+    return;
+  }
+  const wasCurrent = item.id === currentChatId.value || item.id === sessionId.value;
+
+  try {
+    await deleteChatSession(item.id, { skipGlobalErrorMessage: true }).send();
+  } catch (e) {
+    if (!isStaleExecutiveSessionError(e)) {
+      message.error('删除失败，请稍后重试');
+      return;
+    }
+    /* 幂等：服务端已无该会话时仍同步侧栏 */
+  }
+
+  historyList.value = historyList.value.filter((h) => h.id !== item.id);
+  persistSidebar();
+
+  if (!wasCurrent) {
+    message.success('已删除该对话');
+    return;
+  }
+
+  messages.value = [];
+  inputValue.value = '';
+  const ok = await openFreshDraftSession();
+  if (ok) {
+    message.success('已删除当前对话，已进入新对话');
+    showMobileSidebar.value = false;
+    scrollToBottom();
+  } else {
+    message.error('会话已从服务端删除，但新建空白会话失败，发送消息时将尝试自动创建会话');
+    sessionId.value = '';
+    currentChatId.value = '';
+    presetQuestions.value = [...FALLBACK_PRESETS];
+  }
+}
+
+const selectChat = async (chat: ChatHistory) => {
+  if (isLoadingHistory.value) return;
   currentChatId.value = chat.id;
-  messages.value = [
-    { role: 'user', content: chat.title },
-    { role: 'ai', content: `关于 "${chat.title}" 的详细分析和历史记录如下...` }
-  ];
+  sessionId.value = chat.id;
   showMobileSidebar.value = false;
+  isLoadingHistory.value = true;
+  messages.value = [];
+  try {
+    messages.value = await loadFullHistoryMessages(chat.id);
+  } catch {
+    message.error('加载历史失败，会话可能已失效');
+    messages.value = [];
+    historyList.value = historyList.value.filter((h) => h.id !== chat.id);
+    persistSidebar();
+  } finally {
+    isLoadingHistory.value = false;
+    scrollToBottom();
+  }
 };
 
 
@@ -322,25 +608,88 @@ const scrollToBottom = () => {
   });
 };
 
-const handleSend = () => {
-  if (!inputValue.value.trim()) return;
-  
-  messages.value.push({
-    role: 'user',
-    content: inputValue.value
-  });
-  
-  const question = inputValue.value;
+function onInputEnter(e: KeyboardEvent) {
+  if (e.shiftKey) return;
+  e.preventDefault();
+  handleSend();
+}
+
+const handleSend = async () => {
+  if (!inputValue.value.trim() || isSending.value || isLoadingHistory.value) return;
+
+  // 确保有会话
+  if (!sessionId.value) {
+    try {
+      const result = await createChatSession().send();
+      applySessionApiResult(result);
+      saveStoredPresets(result.exampleQuestions);
+      ensureSidebarSession(result.sessionId, '新对话');
+    } catch {
+      message.error('创建会话失败，请重试');
+      return;
+    }
+  }
+
+  const question = inputValue.value.trim();
+  messages.value.push({ role: 'user', content: question });
   inputValue.value = '';
   scrollToBottom();
-  
-  setTimeout(() => {
-    messages.value.push({
-      role: 'ai',
-      content: `收到您的指令：\n\n"${question}"\n\n我是您的AI助手，正在进行数据聚合和分析处理。未来我将直接接入底层数据库并实时响应您的提问！`
-    });
+
+  // 占位 loading 消息
+  messages.value.push({ role: 'ai', content: '正在查询数据，请稍候…' });
+  const loadingIndex = messages.value.length - 1;
+  isSending.value = true;
+  scrollToBottom();
+
+  const applySendSuccess = (sid: string, result: SendMessageResult) => {
+    const text = formatReplyContentText(result.replyContent);
+    messages.value[loadingIndex] = { role: 'ai', content: text };
+    const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
+    const existing = historyList.value.find((h) => h.id === sid);
+    if (existing) {
+      if (existing.title === '新对话' || !existing.title.trim()) {
+        existing.title = titleShort;
+      }
+    } else {
+      historyList.value.unshift({ id: sid, title: titleShort });
+    }
+    persistSidebar();
+  };
+
+  try {
+    const result = await sendChatMessage(sessionId.value, question, {
+      skipGlobalErrorMessage: true,
+    }).send();
+    applySendSuccess(sessionId.value, result);
+  } catch (e) {
+    if (isStaleExecutiveSessionError(e) && sessionId.value) {
+      const staleId = sessionId.value;
+      historyList.value = historyList.value.filter((h) => h.id !== staleId);
+      persistSidebar();
+      try {
+        const created = await createChatSession().send();
+        applySessionApiResult(created);
+        saveStoredPresets(created.exampleQuestions);
+        ensureSidebarSession(created.sessionId, '新对话');
+        const result = await sendChatMessage(sessionId.value, question, {
+          skipGlobalErrorMessage: true,
+        }).send();
+        applySendSuccess(sessionId.value, result);
+      } catch {
+        messages.value[loadingIndex] = {
+          role: 'ai',
+          content: '本地会话已失效（例如数据库已重新 seed），已尝试新建会话但仍失败，请刷新页面。',
+        };
+        message.error('会话恢复失败，请刷新页面后重试');
+      }
+    } else {
+      messages.value[loadingIndex] = { role: 'ai', content: '查询失败，请稍后重试。' };
+      message.error('查询失败，请稍后重试');
+    }
+  } finally {
+    isSending.value = false;
     scrollToBottom();
-  }, 800);
+  }
 };
 </script>
 
@@ -452,10 +801,29 @@ const handleSend = () => {
       }
       
       .chat-title {
+        flex: 1;
+        min-width: 0;
         font-size: 14px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .chat-item-delete {
+        flex-shrink: 0;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+        display: flex;
+        align-items: center;
+      }
+
+      &:hover .chat-item-delete,
+      &.active .chat-item-delete {
+        opacity: 1;
+      }
+
+      .chat-item-delete--mobile {
+        opacity: 1;
       }
     }
   }

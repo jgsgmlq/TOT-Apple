@@ -104,7 +104,10 @@ export const Alova = createAlova({
         redirectToLogin();
       } else {
         // 可按需处理错误 一般情况下不是 912 错误，不一定需要弹出 message
-        Message?.error(message);
+        // 例如 Executive Chat 用 history 探测会话是否仍存在，预期 404 时不应全局弹窗
+        if (!method.meta?.skipGlobalErrorMessage) {
+          Message?.error(message);
+        }
         throw new Error(message);
       }
     },
