@@ -50,7 +50,7 @@ async function classify(userMessage, history) {
   // Build history context (last 3 rounds = 6 messages)
   const historyText = history
     .slice(-6)
-    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n');
 
   const prompt = historyText
@@ -71,16 +71,25 @@ async function classify(userMessage, history) {
   }
 
   try {
-    const parsed = JSON.parse(raw.trim());
+    if (typeof raw !== 'string') {
+      console.warn('[chatIntentService] LLM returned non-string:', raw);
+      return { intentType: 'progress_query', entities: {} };
+    }
+    // Strip markdown code fences that LLMs sometimes add despite instructions
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const parsed = JSON.parse(cleaned);
     const intentType = VALID_INTENTS.has(parsed.intentType)
       ? parsed.intentType
       : 'progress_query';
-    return {
-      intentType,
-      entities: parsed.entities || {},
-    };
-  } catch {
-    console.warn('[chatIntentService] Failed to parse LLM response, falling back to progress_query. Raw:', raw);
+    const entities =
+      parsed.entities &&
+      typeof parsed.entities === 'object' &&
+      !Array.isArray(parsed.entities)
+        ? parsed.entities
+        : {};
+    return { intentType, entities };
+  } catch (e) {
+    console.warn('[chatIntentService] Failed to parse LLM response:', e.message, 'Raw:', raw);
     return { intentType: 'progress_query', entities: {} };
   }
 }
