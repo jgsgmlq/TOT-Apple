@@ -118,7 +118,66 @@ async function generateTextDeepSeek(prompt, options = {}) {
   return data.choices?.[0]?.message?.content || "";
 }
 
+/**
+ * OpenAI-compatible chat completions with optional tool/function calling.
+ * Used by chatAgentRunner.js in function_calling mode.
+ *
+ * @param {{
+ *   messages: Array<{role:string, content:string|null, tool_calls?: any, tool_call_id?: string}>,
+ *   tools?: object[],
+ *   tool_choice?: 'auto'|'none'|object,
+ *   model?: string,
+ *   temperature?: number,
+ *   maxTokens?: number
+ * }} options
+ * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
+ */
+async function chatWithTools(options) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey || String(apiKey).trim() === '') {
+    throw new Error('DEEPSEEK_API_KEY is not set');
+  }
+
+  const body = {
+    model: options.model || 'deepseek-chat',
+    messages: options.messages,
+    temperature: options.temperature ?? 0.1,
+    max_tokens: options.maxTokens ?? 2048,
+    stream: false,
+  };
+
+  if (options.tools && options.tools.length > 0) {
+    body.tools = options.tools;
+    body.tool_choice = options.tool_choice || 'auto';
+  }
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'User-Agent': 'TOT-Apple-Backend/1.0',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`DeepSeek chatWithTools failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const choice = data.choices?.[0];
+  if (!choice) throw new Error('DeepSeek returned no choices');
+
+  return {
+    content:    choice.message?.content ?? null,
+    tool_calls: choice.message?.tool_calls ?? null,
+  };
+}
+
 module.exports = {
   generateText,
-  generateTextDeepSeek
+  generateTextDeepSeek,
+  chatWithTools,
 };
