@@ -69,6 +69,9 @@ function buildRegionFilter(regionScope) {
     return { sql: '', params: [] };
   }
   if (regionScope.type === 'regional') {
+    if (!regionScope.regions || regionScope.regions.length === 0) {
+      return { sql: '', params: [] };
+    }
     const placeholders = regionScope.regions.map(() => '?').join(',');
     return { sql: `AND s.region IN (${placeholders})`, params: regionScope.regions };
   }
@@ -132,12 +135,12 @@ function getOverviewData(taskId, regionScope) {
     allParams
   );
 
-  const total = row ? row.total : 0;
+  const total = row ? (row.total ?? 0) : 0;
   return {
     totalAssignments: total,
-    completedCount: row ? row.completed : 0,
-    inProgressCount: row ? row.in_progress : 0,
-    pendingCount: row ? row.pending : 0,
+    completedCount: row ? (row.completed ?? 0) : 0,
+    inProgressCount: row ? (row.in_progress ?? 0) : 0,
+    pendingCount: row ? (row.pending ?? 0) : 0,
     completionRate: total > 0 ? parseFloat(((row.completed / total) * 100).toFixed(1)) : 0,
     onTimeCompletionRate: total > 0 ? parseFloat(((row.on_time / total) * 100).toFixed(1)) : 0,
     avgCompletionTimeHours: row && row.avg_hours ? parseFloat(row.avg_hours.toFixed(1)) : null,
@@ -215,7 +218,7 @@ function getWarningsData(taskId, regionScope) {
     ddlAt: r.ddl_at,
     totalCount: r.total,
     completedCount: r.completed,
-    completionRate: parseFloat(((r.completed / r.total) * 100).toFixed(1)),
+    completionRate: r.total > 0 ? parseFloat(((r.completed / r.total) * 100).toFixed(1)) : 0,
   }));
 }
 
