@@ -307,6 +307,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 **迁移说明：** `server/db/index.js` 的 `ensureChatTables` 自动建表（新库由 `schema.sql` 建）。
 
+**删除（MVP 硬删除）：** `DELETE /api/v1/chat/executive/sessions/{sessionId}`（`routes/chat.js`）在校验 `user_id` 后调用 `services/chatService.deleteSessionById`：在**同一事务**内先 `DELETE FROM chat_messages WHERE session_id = ?`，再 `DELETE FROM chat_sessions WHERE id = ?`，数据从 `server/database.db` 中物理移除。若侧栏已删但库里仍有行，请确认后端已重启且前端请求命中该 API（非仅清 `localStorage`）。
+
 ---
 
 ## 11. chat_messages 表

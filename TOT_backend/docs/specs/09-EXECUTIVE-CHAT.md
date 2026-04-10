@@ -1,12 +1,31 @@
 # Executive Chat 规格
 
-**版本:** 1.0.1 | **PRD §5.6, §8.4, §14.7** | **优先级: P1（任务管理闭环跑通后实现）**
+**版本:** 2.0.0 | **PRD 4.0.5**（§5.7、§5.7.1、§8.5、§14.6）| **优先级:** P1（任务管理闭环跑通后实现）
+
+**HTTP 契约正本：**请求/响应字段级定义以 [04-API-SPEC.md](./04-API-SPEC.md) **§6 Executive Chat Agent API** 为准；本文描述产品行为、意图、权限口径、数据溯源与 LLM 架构，避免与 04 重复维护两套 JSON。
+
+---
+
+## 实现状态（与工程对齐）
+
+与 [04-API-SPEC.md](./04-API-SPEC.md) §6 声明一致：当前仓库 **`server/app.js` 未挂载** `/api/v1/chat/*`；本节为 **P1 产品/集成约定**。已实现的其他 AI 能力见04 文首（如 `POST /api/v1/tasks/ai-generate-description` 等）。
 
 ---
 
 ## 功能概述
 
-Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，允许用户通过自然语言查询培训进度数据，5 秒内获得结构化回答，支持多轮追问下钻。
+Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，允许用户通过自然语言查询培训进度数据，**5 秒内**（P95）获得结构化回答，支持多轮追问下钻；并支持 PRD **§5.7.1** 定义的**高阶统计、相关性与预测类**问题（分 EC-P0 / EC-P1 子能力批次）。
+
+---
+
+## 与 API 规格的分工
+
+| 内容 | 文档 |
+|------|------|
+| 路径、请求/响应 JSON、`code` / `message` / `data` / `requestId` | [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.4 |
+| 意图列表、权限裁剪、`stores.region`、溯源、LLM 可插拔、验收口径 | **本文** |
+
+**完整 URL 前缀：** 与全站一致，均为 **`/api/v1`**（例如 `POST /api/v1/chat/executive/sessions`）。
 
 ---
 
@@ -14,86 +33,117 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 
 | 角色 | 数据权限 | 说明 |
 |------|---------|------|
-| VP | 全国维度 | 可查全公司任意区域、门店、个人 |
-| 区域总监 | 本辖区维度 | 只可查本人负责区域内的数据 |
+| VP（全国） | 全国维度 | 可查全公司任意区域、门店、个人（在实现允许的前提下） |
+| 区域总监 | 本**大区**辖区 | 仅可查 `stores.region` 属于其授权大区列表内的门店及关联 Assignment |
 
-**身份识别:** 系统通过 JWT Token 自动识别 Executive 角色与数据权限，无需手动切换视图。
+**身份识别：** 通过 JWT 识别 `role === executive`；**辖区范围**由下列 MVP 策略之一绑定（见下节），服务端在所有聚合查询中 **`JOIN stores`**，并对区域型 Executive 施加 **`stores.region IN (...)`** 谓词（必要时叠加 `taskId`、时间窗等）。
+
+**与 [01-DATA-MODEL.md](./01-DATA-MODEL.md) 的关系：** 大区名称与 **`stores.region`** 同源（如「华东」）；不在 `stores` 表外的平行维度上虚构「辖区」。
+
+---
+
+## MVP：Executive 辖区与 `stores.region` 的绑定策略
+
+`users` 表当前无强制辖区字段；实现任选其一（须在工程与 seed 中一致）：
+
+| 策略 | 做法 | 说明 |
+|------|------|------|
+| **A** | `users.executive_regions`（JSON 数组，元素为 `stores.region`） | 推荐长期方案；可与 DATA-MODEL 变更记录同步 |
+| **B** | `POST /api/v1/chat/executive/sessions` 请求体携带 `regions[]`，服务端与会话绑定 | 仅本会话有效；见 04 §6.1 |
+| **C** | Seed 约定（如 `executive_huadong` → `['华东']`） | 演示/MVP 临时 |
+
+**全国型 Executive：** `roleScope: national`（04 §6.1），不加 `region` 过滤。
+
+**大区型 Executive：** `roleScope: regional` 且 **`regions` 非空**；若为空则 **400**（见 04 §6.1）。
+
+**按 RTM 分管：** 保留 `roleScope: rtm` + `rtm` 字段，与 PRD「大区」并存时，以产品一句说明为准：**PRD 默认「区域总监 = 大区」优先使用 `regional` + `regions[]`**；`rtm` 用于「按渠道分管」的补充场景。
 
 ---
 
 ## 入口
 
 - 独立 H5 页面：`executive.html`（局域网 URL 直接访问，无需安装）
-- 扫码或点击链接打开，Token 鉴权后自动加载对应权限数据
+- 扫码或点击链接打开，Token 鉴权后创建/恢复会话并加载权限内数据
 - 与其他角色页面完全独立，不共享路由
 
 ---
 
 ## 支持的查询意图
 
-| 意图类型 | 示例问题 | 说明 |
-|---------|---------|------|
-| 培训进度查询 | "Q1 新品培训完成率？" | 全局或指定任务的完成率、人数 |
-| 项目状态查询 | "Trade-in 准备到哪一步了？" | 特定培训项目当前阶段 |
-| 预警查询 | "现在有什么问题需要关注？" | 当前 P1/P2 预警列表 |
-| 区域/门店下钻 | "华东区怎么样？""最差的 5 家门店是哪些？" | 按区域或门店细化 |
+### 基础四类（PRD §5.7）
+
+| 意图类型 | `intentType`（见 04 §6.4） | 示例问题 | 说明 |
+|---------|---------------------------|---------|------|
+| 培训进度查询 | `progress_query` | 「Q1 新品培训完成率？」 | 全局或指定任务的完成率、人数 |
+| 项目状态查询 | `project_status` | 「Trade-in 准备到哪一步了？」 | 特定培训项目当前阶段 |
+| 预警查询 | `warning_query` | 「现在有什么问题需要关注？」 | 需关注门店/区域、P1/P2 口径（数据见溯源表） |
+| 区域/门店下钻 | `drill_down` | 「华东区怎么样？」「最差的 5 家门店是哪些？」 | 按区域或门店细化 |
+
+### 高阶统计与分析（PRD §5.7.1）
+
+> **子能力优先级：** **EC-P0** = Chat 分析能力首发批次必含；**EC-P1** = 后续批次。Executive Chat **整体仍为产品 P1**。
+
+| 场景 | `intentType`（建议） | `analysisType`（建议，见 04 §6.4 `entities`） | 示例问题 | EC |
+|------|---------------------|-----------------------------------------------|---------|-----|
+| 分位数 / 极值 | `analytics_query` | `quantile_duration` | 「华东区员工完成任务时间的 P90 是多少？」 | EC-P0 |
+| 分布曲线 | `analytics_query` | `completion_time_distribution` | 「大家一般是任务下发后第几小时完成的？」 | EC-P0 |
+| 相关性 | `analytics_query` | `metric_correlation` | 「起步异常率高的门店和完成率负相关吗？」 | EC-P0 |
+| 渠道离散度 | `analytics_query` | `progress_variance_by_channel` | 「各渠道培训进度哪个方差最大？」 | EC-P1 |
+| 趋势预测 | `analytics_query` | `completion_rate_forecast` | 「按现在速度，今晚 12 点整体达成率大概多少？」 | EC-P1 |
+| 截尾均值 | `analytics_query` | `trimmed_mean_duration` | 「去掉最快最慢各 5%，平均耗时多少？」 | EC-P1 |
+
+实现上可将 `intentType` 统一为 `analytics_query`，必须用 **`entities.analysisType`** 区分子类型，避免 04 §6.4 单一枚举爆炸。
 
 ---
 
 ## 统一回答格式
 
-每次回答必须包含以下四段结构（严格顺序）：
+每次回答必须包含以下四段语义（与04 §6.2 `replyContent` 对齐：`overview` / `keyNumbers` / `attentionPoints` / `followUpSuggestions`）：
 
-```
-1. 状态概览   — 一句话概括整体情况
-2. 关键数字   — 完成率、完成人数、逾期数等核心指标
-3. 需关注事项 — 预警门店/区域、风险提示（若无则省略）
-4. 追问引导   — 提示用户可继续追问的方向
-```
+1. **状态概览** — `overview`：一句话概括  
+2. **关键数字** — `keyNumbers[]`：完成率、人数、统计量等  
+3. **需关注事项** — `attentionPoints[]`：预警与风险（无则空数组）  
+4. **追问引导** — `followUpSuggestions[]`
 
-**示例回答（"Q1 新品培训什么情况？"）:**
+### PRD §5.7.1 扩展字段（建议在 `replyContent` 内可选扩展）
 
-```
-整体进展良好，完成率 72%，仍有部分区域需要跟进。
+与04 §6.2 兼容：在 **`data.replyContent`** 上增加可选键（04 已预留结构化对象，实现时向后兼容）：
 
-关键数字：
-- 已完成：216/300 人
-- 进行中：54 人
-- 未开始：30 人
-- 逾期：12 人
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `statisticsProvenance` | object | 统计/推断类 **必填** | `timeWindow`、`taskFilter`、`sampleSize`、`includesIncomplete`、`regionFilter`、`rtmFilter` 等 |
+| `visualizations` | array | 否 | 如 `{ "type": "histogram", "title": "...", "data": { ... } }` 或图表 URL |
+| `forecastDisclaimer` | string | 预测类 **必填** | 模型假设、不确定性、非承诺口径 |
+| `correlationNote` | string | 相关类 **推荐** | 「相关非因果」、Pearson 方向与强度 |
+| `ecCapabilityTier` | string | 否 | `EC-P0` / `EC-P1`，与 PRD 子能力对齐 |
 
-需关注：
-- 华北区完成率 35%（P1 预警），距截止还有 48 小时
-- 东北区 3 家门店完成率低于 50%
-
-你可以继续问：
-- "华北区具体哪些门店有问题？"
-- "最差的 5 家门店是哪几家？"
-```
+**示例（节选）：** 分位数回答须在 `keyNumbers` 或 `overview` 中给出 **P90 数值**，并在 `statisticsProvenance` 中写明样本范围。
 
 ---
 
 ## 多轮追问规则
 
-- 支持**至少 3 轮**连续追问，保持上下文（前序问题 + 回答均纳入上下文）
-- 下钻路径：全国 → 区域 → 门店 → 个人
-- 上下文在单次会话内有效；刷新页面后重置
+- 支持**至少 3 轮**连续追问；上下文由 **`contextId`**（04 §6.1）与可选服务端会话存储承载  
+- 下钻路径：全国 → 区域 → 门店 → 个人  
+- 刷新页面或新会话：`contextId` / `sessionId` 策略由实现决定；产品要求**同一会话内**连贯
 
 ---
 
-## 性能目标
+## 性能与异步
 
 | 指标 | 目标 |
 |------|------|
-| 回答响应时间 | ≤ 5 秒（P95）|
-| 回答数字与后台数据一致性 | 实时一致（调用 summary API）|
-| 支持追问轮次 | ≥ 3 轮 |
+| 回答响应时间 | ≤ 5 秒（P95），常规进度/下钻类 |
+| 数字一致性 | 与同源 Dashboard / 落库聚合一致 |
+| 追问轮次 | ≥ 3 轮 |
+
+**PRD §14.6：** **EC-P1** 重计算（如大规模方差、长序列外推、高清绘图）允许 **异步**：可返回 **202** + `jobId` + 轮询接口，或 WebSocket 推送结果（具体路径由实现 spec 补充）；**同步路径**仍须在 UI 标明「计算中」与口径。 **EC-P0** 默认应在5s 内完成或明确降级为简化回答。
 
 ---
 
 ## 首屏引导设计
 
-首屏展示 3 个示例问题，帮助 Executive 快速上手：
+创建会话成功后，04 §6.1 返回 `exampleQuestions`；首屏亦可固定展示：
 
 ```
 你好，请问有什么可以帮你？
@@ -106,96 +156,79 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 
 ---
 
-## API 设计框架（P1，POC 验证阶段）
+## HTTP API（摘要）
 
-### POST /api/executive/chat
+**正本：** [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.3、§6.2.1。
 
-**权限:** executive（VP 或区域总监角色）
-
-**请求体:**
-```json
-{
-  "message": "Q1 新品培训完成率是多少？",
-  "sessionId": "session_abc123",
-  "context": [
-    { "role": "user", "content": "Q1 新品培训完成率是多少？" },
-    { "role": "assistant", "content": "整体完成率 72%..." }
-  ]
-}
-```
-
-**字段说明:**
-
-| 字段 | 必填 | 说明 |
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| message | Y | 当前用户提问 |
-| sessionId | Y | 会话 ID，用于上下文追踪 |
-| context | N | 历史对话数组，支持多轮（最多保留最近 6 条）|
+| POST | `/api/v1/chat/executive/sessions` | 创建会话，返回 `sessionId`、`contextId`、`exampleQuestions` |
+| POST | `/api/v1/chat/executive/sessions/{sessionId}/messages` | 发送消息，返回结构化 `replyContent` |
+| DELETE | `/api/v1/chat/executive/sessions/{sessionId}` | 删除会话及其全部消息（仅所属 executive） |
+| GET | `/api/v1/chat/executive/sessions/{sessionId}/history` | 分页历史 |
 
-**响应 200:**
-```json
-{
-  "sessionId": "session_abc123",
-  "answer": {
-    "overview": "整体进展良好，完成率 72%...",
-    "keyMetrics": {
-      "completionRate": 72,
-      "completed": 216,
-      "inProgress": 54,
-      "pending": 30,
-      "overdue": 12
-    },
-    "alerts": [
-      {
-        "level": "P1",
-        "region": "华北",
-        "completionRate": 35,
-        "description": "华北区完成率 35%，距截止还有 48 小时"
-      }
-    ],
-    "followUpSuggestions": [
-      "华北区具体哪些门店有问题？",
-      "最差的 5 家门店是哪几家？"
-    ],
-    "plainText": "整体进展良好，完成率 72%，仍有部分区域需要跟进。\n\n关键数字：..."
-  },
-  "dataScope": "national",
-  "respondedAt": "2026-03-24T12:00:00Z"
-}
-```
+**已废弃（非正本）：** ~~`POST /api/executive/chat`~~ — 不得作为新实现依据。
 
-**错误响应:**
-```json
-{ "error": "暂时无法回答，请稍后重试", "errorCode": "CHAT_001" }
-```
+---
+
+## 数据溯源（意图 → 现有 REST）
+
+Agent 或后端工具层应优先调用已存在接口，保证与看板数字一致；路径均为 **`/api/v1`** 前缀。
+
+| 意图 / 场景 | 主要数据源（04 文档节） | 备注 |
+|-------------|----------------------|------|
+| 进度/北极星/链路/预警计数 | `GET /dashboard/overview`（§5.1） | `warningCount` 等；executive 按权限裁剪 |
+| RTM/渠道差异 | `GET /dashboard/heatmap`（§5.2） | `taskId` 必填等以 04 为准 |
+| Top/Bottom 门店 | `GET /dashboard/store-rank`（§5.3） | |
+| 按天/按小时完成趋势、外推输入 | `GET /dashboard/trend`（§5.4.5） | `type=hourly` 服务 PRD 预测类 |
+| 预警列表明细 | `GET /dashboard/warnings`（§5.5） | **当前 04 写仅 `central`**；Executive 的「预警查询」在实现上应对齐 PRD：或扩展 executive 只读权限，或用 `overview` + `store-rank` 聚合等效信息（**产品缺口在04 与实现对齐时收口**） |
+| 门店下钻、员工明细 | `GET /dashboard/store-detail`（§5.6） | **当前 04 写 `central` / `admin`**；若 PRD 要求 Executive 下钻到员工，需 **扩展权限或提供 Executive 只读同源聚合** |
+| 任务列表 / Assignment 列表 | `GET /tasks`、`GET /assignments`（§3、§4） | `executive` 行为以 04 为准（部分列表可能为空，依赖聚合 API） |
+
+**§5.7.1 专项：** 分位数、方差、Pearson、截尾均值、分布直方图等，若现有 REST 不直接暴露，允许 **服务端只读聚合**（与 Dashboard SQL 口径一致）或独立 **分析服务**；不得在 Chat 层捏造与 DB 不一致的数字。
 
 ---
 
 ## 数据权限裁剪（服务端）
 
+所有涉及 Assignment/门店的查询必须能关联到 **`stores`**，并应用：
+
+- **全国：**无 `region` 谓词（仍可按 `taskId`、时间窗过滤）  
+- **大区：** `stores.region IN (:authorized_regions)`  
+- **RTM（若使用 roleScope=rtm）：** `stores.rtm = :rtm`（与 DATA-MODEL 一致）
+
+伪代码：
+
 ```javascript
-function buildExecutiveDataScope(user) {
-  if (user.executiveRole === 'vp') {
-    return { scope: 'national', regionFilter: null };
+function buildExecutiveDataScope(session) {
+  if (session.roleScope === 'national') {
+    return { regionFilter: null, rtmFilter: null };
   }
-  if (user.executiveRole === 'regional_director') {
-    return { scope: 'regional', regionFilter: user.region };
+  if (session.roleScope === 'regional') {
+    return { regionFilter: session.regions /* 非空 */ };
+  }
+  if (session.roleScope === 'rtm') {
+    return { rtmFilter: session.rtm };
   }
   throw new Error('AUTH_003');
 }
 ```
 
-服务端在查询培训数据时，**必须**将 dataScope 应用于所有 SQL 查询的 WHERE 条件，确保区域总监无法看到辖区外数据。
+跨权访问返回 **`AUTH_003`**（与全站错误码风格一致，见 04）。
 
 ---
 
-## 技术实现说明（POC 阶段）
+## LLM 与推理架构（厂商无关）
 
-- **AI 推理层：** 使用 Claude API（claude-sonnet-4-6）解析用户意图，生成结构化查询参数
-- **数据层：** 调用现有 `/api/tasks/:id/summary` 和相关聚合 API 获取实时数据
-- **上下文管理：** 将最近 6 条对话历史传入 Claude API 的 messages 数组
-- **风险：** AI 推理延迟可能超过 5s 目标，上线前需完成 POC 验证
-- **降级策略：** 推理超时（>5s）时返回 `CHAT_001` 错误，前端提示"查询超时，请重试"
+1. **意图识别 / 实体抽取：** 将自然语言转为 `intentType`、`entities`（任务名、区域、`taskId`、`topN`、`analysisType` 等）。  
+2. **工具调用 / 数据拉取：** 调用上节 REST 或内部只读查询，填充事实表。  
+3. **回答生成：** 将事实压缩为 PRD 四段结构 + 可选 `statisticsProvenance` / `visualizations`。
+
+**适配层：** 通过环境变量配置 **`LLM_BASE_URL`**、**`LLM_API_KEY`**、**`LLM_MODEL`**（或等价命名）；协议可为 **OpenAI Chat Completions 兼容**或其他团队选型的 HTTP API。**规格不绑定**单一云厂商；DeepSeek、Claude、Azure OpenAI 等仅作部署选项。
+
+**上下文：** 最近若干轮对话与 `contextId` 一并传入适配层；条数上限由实现定义（如 ≤6 轮）。
+
+**降级：** 推理超时或上游故障时返回 **`CHAT_001`** 或04 约定的 **503**，前端提示重试；不得返回伪造指标。
 
 ---
 
@@ -203,8 +236,19 @@ function buildExecutiveDataScope(user) {
 
 | 标准 | 口径 |
 |------|------|
-| 响应时间 | 提问后 ≤ 5 秒返回结构化回答 |
-| 数字一致性 | Chat 回答数字与后台 summary API 数据一致 |
-| 多轮追问 | 支持至少 3 轮连续追问，上下文连贯 |
-| 权限隔离 | VP 可查全国；区域总监仅可查本辖区，跨区查询返回 AUTH_003 |
-| 首屏引导 | 显示 3 个示例问题引导 Executive 提问 |
+| 响应时间 | 常规提问 ≤ 5 秒（P95）；EC-P1 异步场景除外但需有明确 UX |
+| 数字一致性 | 与 `GET /dashboard/*` 等同源数据一致 |
+| 多轮追问 | ≥ 3 轮，上下文连贯 |
+| 权限隔离 | 全国 vs 大区 vs RTM 裁剪正确；越权 **AUTH_003** |
+| 首屏引导 | 示例问题可用（04 §6.1 或首屏固定文案） |
+| EC-P0（PRD §10.2） | 分位数、分布、相关性能力可测、口径可追溯 |
+| EC-P1 | 渠道方差、外推预测、截尾均值按批次交付 |
+
+---
+
+## 文档修订记录
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| 1.0.1 | — | 初版单接口草案 |
+| 2.0.0 | 2026-04-10 | 对齐 PRD 4.0.5 §5.7/§5.7.1；HTTP 以 04 §6 为正本；`stores.region` 权限；溯源表；LLM 可插拔；废弃 `/api/executive/chat` 正本地位 |

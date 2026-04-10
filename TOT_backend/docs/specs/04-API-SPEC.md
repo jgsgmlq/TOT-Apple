@@ -1817,6 +1817,32 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 400：content为空/contextId不存在
   - 503：AI Agent服务未就绪（响应超时）
 
+### 6.2.1 删除Executive Chat会话**P1**
+
+- **接口名称**：删除Executive Chat会话
+- **接口路径**：`/chat/executive/sessions/{sessionId}`
+- **完整 URL 示例**：`DELETE /api/v1/chat/executive/sessions/{sessionId}`
+- **请求方法**：DELETE
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：`sessionId`（必填）
+- **请求体**：无
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "会话已删除",
+    "data": {
+      "sessionId": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **接口说明**：硬删除该会话及其下全部 `chat_messages` 行；仅允许删除**当前登录用户**拥有的会话。
+- **权限要求**：仅 executive；且 `sessionId` 必须属于 `req.user.id`
+- **异常场景**：
+  - 404：`CHAT_003`，会话不存在
+  - 403：`CHAT_004`，非本会话所属用户
+
 ### 6.3 获取会话历史**P1**
 
 - **接口名称**：获取聊天会话历史

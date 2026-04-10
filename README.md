@@ -5,7 +5,7 @@
 > 产品需求口径：以 [`TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md) 为准。
 > 完整文档索引见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
-**更新日期：** 2026-04-09
+**更新日期：** 2026-04-10
 
 ---
 
@@ -20,6 +20,7 @@
   - [演示模式（Build + Funnel）](#演示模式build--funnel)
   - [本地独立开发](#本地独立开发)
 - [环境变量](#环境变量)
+- [Seed 数据库与本地 SQLite 操作](#seed-数据库与本地-sqlite-操作)
 - [测试账号](#测试账号)
 - [核心业务流程](#核心业务流程)
 - [系统架构](#系统架构)
@@ -66,10 +67,20 @@
 |------|------|----------|---------|
 | `central` | 总部运营，全量权限 | `/hq` | central / Train2026! |
 | `employee` | 店员，仅本人数据 | `/employee/login` | emp_E002 / Train2026! |
-| `executive` | 高管（P1）| `/executive` | executive / Train2026! |
+| `executive` | 高管，Executive Chat（自然语言查数） | `/executive/login` → `/executive` | executive / Train2026! |
 | `admin` | 系统管理员 | — | admin / Admin2026! |
 
 > 店员 username 格式：`emp_E{employeeId}`（如 `emp_E002`～`emp_E006`）。`emp_E001` 为店长账号，不用于店员端登录。
+
+**本地开发完整网址（Vite 默认端口 8001）：**
+
+| 入口 | URL |
+|------|-----|
+| 总部 | `http://localhost:8001/hq` |
+| 店员 | `http://localhost:8001/employee/login` |
+| Executive Chat | `http://localhost:8001/executive/login`（登录后进入 `http://localhost:8001/executive`） |
+
+接口规格见 [`TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md`](TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md)。
 
 **终端形态：** 总部使用 PC，店员使用手机（iPhone 为主）。
 
@@ -132,6 +143,7 @@ pnpm run dev                 # 默认端口 8001
 访问：
 - **总部**：`http://localhost:8001/hq`
 - **店员**：`http://localhost:8001/employee/login`
+- **Executive Chat**：`http://localhost:8001/executive/login`（登录后为 `http://localhost:8001/executive`）
 
 > `TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` 默认留空（Vite 代理到本机 `:3000`）。  
 > 若需直连共享后端，在 `.env.development.local`（**不要提交**）中覆盖：
@@ -162,6 +174,7 @@ tailscale funnel status                      # 输出 https://<machine>.<tailnet
 将 Funnel 地址发给演示设备：
 - 总部：`https://<...>/hq`
 - 店员：`https://<...>/employee/login`
+- Executive Chat：`https://<...>/executive/login`（登录后为 `https://<...>/executive`）
 
 演示结束后关闭隧道：
 ```bash
@@ -229,11 +242,13 @@ pnpm install
 pnpm run dev                  # 端口 8001
 ```
 
+浏览器访问：总部 `http://localhost:8001/hq`，店员 `http://localhost:8001/employee/login`，Executive Chat `http://localhost:8001/executive/login`。
+
 ---
 
 ## 环境变量
 
-后端配置文件：`TOT_backend/.env`（�� `TOT_backend/.env.example` 复制）。
+后端配置文件：`TOT_backend/.env`（从 `TOT_backend/.env.example` 复制）。
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -251,6 +266,68 @@ pnpm run dev                  # 端口 8001
 |------|------|
 | `VITE_GLOB_API_URL` | 后端 API 地址，留空则走 Vite 代理到 `:3000` |
 | `VITE_PORT` | Vite 开发端口，默认 `8001` |
+
+---
+
+## Seed 数据库与本地 SQLite 操作
+
+### 文件与职责
+
+| 路径 | 说明 |
+|------|------|
+| `TOT_backend/server/database.db` | 运行时 SQLite 主库（及同目录 `database.db-wal` / `database.db-shm`，WAL 模式时可能出现） |
+| `TOT_backend/server/db/schema.sql` | 建表与索引的权威 SQL |
+| `TOT_backend/server/db/index.js` | 启动时加载库、执行 `schema.sql`，并做列/表迁移（与 `schema.sql` 增量对齐） |
+| `TOT_backend/server/db/seed.js` | 开发用种子数据脚本（**不**随 `npm run dev` 自动执行） |
+
+更细的表说明见 [`TOT_backend/docs/backend/03-DATABASE.md`](TOT_backend/docs/backend/03-DATABASE.md)、[`TOT_backend/docs/specs/01-DATA-MODEL.md`](TOT_backend/docs/specs/01-DATA-MODEL.md)。
+
+### 如何执行 Seed（更新 / 补全种子数据）
+
+在 **`TOT_backend/server`** 目录执行：
+
+```bash
+cd TOT_backend/server
+npm run seed
+```
+
+等价于 `node db/seed.js`。首次拉仓库、删库重建后、或需要补齐 **MyPal Mock**（`mypal_learning_mock`）与基础账号时，都应执行一次。
+
+**Seed 会写入的内容（摘要）：**
+
+- `stores`：50 家门店  
+- `employees`：300 名员工（含与 MyPal Mock 对齐的 `email`）  
+- `users`：系统账号（`central` / `executive` / `admin`）+ 各 `emp_*` 店员账号（`INSERT OR IGNORE`，已存在则跳过插入）  
+- `mypal_learning_mock`：联调用学习进度 Mock（`INSERT OR REPLACE` 按主键覆盖）
+
+**不会**由 Seed 清空或重建：`tasks`、`task_assignments`、`notification_events` 等业务表。你在系统里创建的任务、下发记录会保留；若希望「连任务一起回到干净状态」，请使用下面的**整库重置**。
+
+**重复执行 `npm run seed`：** 对 stores / employees / users 多为幂等（忽略已存在行）；`mypal_learning_mock` 会按脚本逻辑覆盖更新。适合补数据、换机后对齐基线，不适合当作「删业务数据」的唯一手段。
+
+### 整库重置（从零开始）
+
+适用于库损坏、迁移异常，或需要清空含任务在内的所有业务数据：
+
+```bash
+cd TOT_backend/server
+
+# 先停掉占用数据库的 Node 进程（例如正在跑的 npm run dev）
+
+rm -f database.db database.db-shm database.db-wal
+
+npm run seed    # 会创建新库文件、应用 schema + 写入种子数据
+
+npm run dev     # 再启动 API
+```
+
+说明：加载 `db/index.js` 时会自动执行 `schema.sql` 与迁移；**种子数据必须单独执行 `npm run seed`**，不会随 `npm run dev` 自动灌入。
+
+### 日常如何查看或改数据
+
+- **只读浏览 / 简单 SQL：** 使用 [DB Browser for SQLite](https://sqlitebrowser.org/) 打开 `TOT_backend/server/database.db`，或系统自带的 `sqlite3`：  
+  `sqlite3 TOT_backend/server/database.db` → `.tables` / `SELECT ...`  
+- **在 Cursor / VS Code 内：** 安装 SQLite 相关扩展后打开 `database.db`。  
+- **注意：** 后端正在运行时写入库文件可能触发锁；重要修改前建议先停止 `npm run dev`，改完再启动。
 
 ---
 
@@ -522,8 +599,10 @@ PORT=3001 npm run dev
 
 ```bash
 cd TOT_backend/server
+# 先停止正在使用该库的进程
 rm -f database.db database.db-shm database.db-wal
-npm run dev        # 自动重建表结构和种子数据
+npm run seed       # 新建库、表结构 + 种子数据（详见上文「Seed 数据库与本地 SQLite 操作」）
+npm run dev
 ```
 
 ### JWT Token 过期
@@ -570,6 +649,7 @@ ws.onerror = (e) => console.error('连接失败', e);
 | [`docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md) | 产品需求全文（权威口径）|
 | [`docs/specs/00-OVERVIEW.md`](TOT_backend/docs/specs/00-OVERVIEW.md) | Spec 总览，功能范围 |
 | [`docs/specs/01-DATA-MODEL.md`](TOT_backend/docs/specs/01-DATA-MODEL.md) | 数据库全部表结构 |
+| [`docs/backend/03-DATABASE.md`](TOT_backend/docs/backend/03-DATABASE.md) | 数据库现状、表说明与迁移入口 |
 | [`docs/specs/04-API-SPEC.md`](TOT_backend/docs/specs/04-API-SPEC.md) | REST API + WebSocket 完整规格（v1.4.9）|
 | [`docs/backend/index.md`](TOT_backend/docs/backend/index.md) | 后端文档入口 |
 | [`docs/backend/01-ROUTES.md`](TOT_backend/docs/backend/01-ROUTES.md) | 路由现状 vs 目标 + Gap 清单 |
