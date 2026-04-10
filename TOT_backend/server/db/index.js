@@ -71,11 +71,12 @@ function migrateNotificationEventsContent(database) {
 
 /** 已有库补列：users.executive_regions / executive_rtm（EChat 辖区绑定） */
 function migrateUsersExecutiveScope(database) {
-  const cols = database.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-  if (!cols.includes('executive_regions')) {
+  const cols = database.prepare('PRAGMA table_info(users)').all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('executive_regions')) {
     database.exec('ALTER TABLE users ADD COLUMN executive_regions TEXT');
   }
-  if (!cols.includes('executive_rtm')) {
+  if (!names.has('executive_rtm')) {
     database.exec('ALTER TABLE users ADD COLUMN executive_rtm TEXT');
   }
 }
