@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL,             -- central | employee | executive | admin
   store_id      TEXT REFERENCES stores(id),
   employee_id   TEXT UNIQUE REFERENCES employees(id),  -- ★ UNIQUE：一个 employee 只能对应一个 user
+  last_login_at TEXT,                      -- ★ 上次登录时间（UTC 文本 `YYYY-MM-DD HH:MM:SS`）
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
@@ -128,6 +129,7 @@ CREATE TABLE IF NOT EXISTS users (
 | role | Y | 系统权限角色，决定前端入口和数据可见范围（见 08-PERMISSION-MODEL.md）|
 | store_id | N | 店员必填，指向所属门店；central / executive / admin 为 NULL |
 | employee_id | N | 店员必填，指向 employees 表中对应记录；UNIQUE 保证一对一；其他角色为 NULL |
+| last_login_at | N | 上次登录时间，用于任务触达率的精准计算 |
 
 > **`role` 与 DB 约束：** 当前 `server/db/schema.sql` 中 **`users.role` 未加 `CHECK` 枚举**；合法取值以应用层校验与 **`08-PERMISSION-MODEL.md`** 为准（`central` \| `employee` \| `executive` \| `admin`）。
 
@@ -201,11 +203,11 @@ CREATE TABLE IF NOT EXISTS tasks (
 | rtm_filter | N | JSON 数组或 null | 按渠道属性动态筛选目标门店，优先级高于 store_scope；条件内 AND，条件间 OR（见 07-RTM-FILTER.md）|
 | store_scope | Y（有默认） | "all" 或 JSON 数组 | **NOT NULL，默认 `'all'`**；rtm_filter 为空时使用；"all"=全部门店，JSON 数组=指定门店列表；DB 约束保证值为 all 或合法 JSON 数组 |
 | auto_nudge_rules | N | JSON 对象或 null | **自动预警规则**（PRD：进度掉队、起步异常、deadline 危机等）；服务端定时调度与 `POST /api/v1/tasks/:id/auto-nudge` 读取该字段；实现层字段名仍含 `nudge`（见 `04-API-SPEC.md` §2.9） |
-| start_at | Y | 有默认 | 任务开始时间；与 PRD「开始时间」对应；默认 `datetime('now')`（SQLite 服务器本地时区文本） |
+| start_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务开始时间；与 PRD「开始时间」对应；落库前由服务端规范化 |
 | pass_score | Y | 默认 100 | 达标分数（PRD `passingScore`）；整数 |
 | mypal_task_week | N | 文本 | MyPal 查询用任务周 / `queryDate`，如 `FY26Q2W1`；**has_mypal=1 时建议必填**；见 `mypalSyncService` |
 | mypal_product_name | N | 文本 | 与 MyPal 响应 `productName` **精确匹配**时用于筛选学习行；可空 |
-| ddl_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务截止时间；请求体可为任意可被解析的时间串，**落库前**由服务端 `parseDdlAtToSqliteUtc` 规范化 |
+| ddl_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务截止时间；请求体可为任意可被解析的时间串，**落库前**由服务端 `parseDateToSqliteUtc` 规范化 |
 | created_by | Y | — | 创建者 username（软引用，不设外键），用于审计 |
 | created_at / updated_at | Y | DEFAULT | 创建/更新时间 |
 | CHECK（平台）| — | 至少 1 个平台为 1 | 任务必须包含至少一个学习平台 |
@@ -544,6 +546,13 @@ nudge_records (TEXT PK: nanoid)
 ---
 
 ## 变更记录
+
+### v2.8.0（2026-04-10）
+
+| 范围 | 变更 | 理由 |
+|------|------|------|
+| §3 users | 新增 `last_login_at` 列 | 记录用户最后登录时间，支持精准计算看板任务触达率 |
+| §4 tasks | 更新 `start_at` 与 `ddl_at` 规范说明 | 统一限定为无 T/Z 的 UTC `YYYY-MM-DD HH:MM:SS` |
 
 ### v2.7.0（2026-04-09）
 

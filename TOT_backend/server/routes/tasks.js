@@ -57,6 +57,27 @@ router.post('/ai-generate-description', authenticate, requireRole(['central', 'a
   }
 });
 
+
+// ─── POST /api/v1/tasks/ai-parse ───────────────────────────────
+router.post('/ai-parse', authenticate, requireRole(['central', 'admin']), async (req, res, next) => {
+  try {
+    const { instruction } = req.body;
+    
+    const result = await mainAgent.execute('parse_task_deepseek', {
+      instruction
+    });
+
+    res.json({
+      code: 200,
+      message: 'success',
+      data: result,
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── 辅助：DB 行 → API 对象（snake_case → camelCase + 类型转换）────────────
 function formatTask(row) {
   if (!row) return null;
@@ -101,12 +122,15 @@ router.get('/', authenticate, (req, res, next) => {
   try {
     let rows;
     const { role, storeId, employeeId } = req.user;
+    const { status } = req.query;
 
     if (role === 'central' || role === 'admin') {
-      rows = db.all('SELECT * FROM tasks ORDER BY created_at DESC');
+      let q = 'SELECT * FROM tasks ';
+      const p = [];
+      q += ' ORDER BY created_at DESC';
+      rows = db.all(q, p);
     } else if (role === 'employee') {
-      rows = db.all(
-        `SELECT t.*,
+      let q = `SELECT t.*,
                 ta.id AS assignment_id,
                 ta.status AS assignment_status,
                 ta.progress AS assignment_progress,
@@ -115,10 +139,16 @@ router.get('/', authenticate, (req, res, next) => {
                 ta.completed_at AS assignment_completed_at
          FROM tasks t
          INNER JOIN task_assignments ta ON ta.task_id = t.id
-         WHERE ta.user_id = ?
-         ORDER BY t.created_at DESC`,
-        [employeeId]
-      );
+         WHERE ta.user_id = ?`;
+      const p = [employeeId];
+
+      if (status) {
+        q += ` AND ta.status = ?`;
+        p.push(status);
+      }
+
+      q += ` ORDER BY t.created_at DESC`;
+      rows = db.all(q, p);
     } else {
       rows = [];
     }
@@ -207,6 +237,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     const storeScopeStr = (!storeScope || storeScope === 'all') ? 'all' : JSON.stringify(storeScope);
     const autoNudgeRulesStr = autoNudgeRules ? JSON.stringify(autoNudgeRules) : null; // 保留
     const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
+    const startAtNorm = parseDdlAtToSqliteUtc(startAt);
 
     db.run(
       `INSERT INTO tasks
@@ -215,7 +246,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
          mypal_task_week, mypal_product_name, ddl_at, created_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
-       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAt, passScore,
+       rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAtNorm, passScore,
        mypalWeekStr, mypalProductStr, ddlAtNorm, req.user.username, now, now]
     );
 
@@ -324,6 +355,8 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
 
       const ddlAtResolved =
         ddlAt !== undefined ? parseDdlAtToSqliteUtc(ddlAt) : task.ddl_at;
+      const startAtResolved =
+        startAt !== undefined ? parseDdlAtToSqliteUtc(startAt) : task.start_at;
 
       db.run(
         `UPDATE tasks
@@ -340,7 +373,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           rtmFilterStr,
           storeScopeStr,
           autoNudgeRulesStr,  // 保留
-          startAt    ?? task.start_at,
+          startAtResolved,
           passScore  !== undefined ? passScore : task.pass_score,
           platforms[0] === 1 ? mypalWeekResolved : null,
           platforms[0] === 1 ? mypalProductResolved : null,

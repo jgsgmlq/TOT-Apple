@@ -1,5 +1,14 @@
 # ToT API 接口定义文档
 
+### v1.4.10（2026-04-10）
+
+- **AI 解析任务**：新增 `/tasks/ai-parse` 接口，支持一键根据自然语言解析任务信息并格式化返回所有任务所需的创建字段。
+- **店员任务筛选**：店员端 `/tasks` 列表新增 `status=completed` 支持，满足已完成任务的历史记录查询。
+- **通知联动**：`/events/:eventId/read` 支持点击通知时自动标记底层任务为 `received_at` 并返回 `assignmentId`，实现点开即直达“去完成”。
+- **看板触达率优化**：记录了用户最新登录时间（`last_login_at`），只把任务下发后产生登录的人算进 `taskReachRate`。
+- **时间格式**：后端涉及的 `startAt`、`ddlAt` 等出入参及大模型生成的格式规范统一变更为无 T 无 Z 的 `YYYY-MM-DD HH:MM:SS`。
+- **预警催办简化**：保留了原有的定时预警服务（`/tasks/:id/auto-nudge` 以及后台的 `autoNudgeScheduler`），但文案不再调用 AI 进行润色，直接返回设定的规则触发原文。
+
 ### v1.4.9（2026-04-09）
 
 - **§2 Task API（`routes/tasks.js`）**：
@@ -277,10 +286,10 @@
     "hasAiDemo": false,          // 是否包含 AI Demo，可选（默认 false）
     "hasLiveBroadcast": false,   // 是否包含 Live Broadcast，可选（默认 false）
     // 四平台至少一个为 true，否则 400（TASK_001）
-    "startAt": "2026-04-01T00:00:00Z", // 开始时间，ISO 8601，必填
-    "passScore": 100,            // 达标分数，整数，必填
-    "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，必填（常用 ISO 8601；服务端落库规范为 UTC `YYYY-MM-DD HH:MM:SS`）
-    "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
+    "startAt": "2026-04-24 09:38:14", // 开始时间，必填（格式为 YYYY-MM-DD HH:MM:SS）
+    "passScore": 100,                 // 达标分数，整数，必填
+    "ddlAt": "2026-04-30 23:59:59",   // 截止时间，必填（格式为 YYYY-MM-DD HH:MM:SS）
+    "rtmFilter": null,                // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
     "autoNudgeRules": {          // 自动预警规则，可选
       "progressLag": { "lifestyle": 3, "mono": 1 },
@@ -361,7 +370,7 @@
     "hasLiveBroadcast": false,
     "rtmFilter": null,
     "storeScope": "all",
-    "startAt": "2026-04-01T00:00:00Z",
+    "startAt": "2026-04-24 09:38:14",
     "passScore": 100,
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
@@ -429,7 +438,10 @@
 - **接口路径**：`/tasks`
 - **请求方法**：GET
 - **权限要求**：所有已认证角色
-- **查询参数**：无（当前版本不支持过滤/分页，后续按需补充）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress` |
 - **角色过滤规则**：
   - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
   - `employee`：仅返回本人有 `task_assignments` 记录的任务
@@ -462,7 +474,7 @@
 - **接口路径**：`/tasks/ai-generate-description`
 - **请求方式**：`POST`
 - **权限要求**：`central`, `admin`
-- **接口说明**：通过 Gemini 2.5 Pro 大模型，根据简短指令、截止时间和学习平台生成一段长篇、有煽动性的任务说明文案。
+- **接口说明**：通过 Gemini 2.5 Pro 或 DeepSeek 大模型，根据简短指令、截止时间和学习平台生成一段长篇、有煽动性的任务说明文案。
 - **请求参数 (Body)**：
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -479,6 +491,39 @@
   "message": "success",
   "data": {
     "description": "亲爱的小伙伴们，本次新款 iPhone 培训非常关键... (AI 生成的话术)"
+  },
+  "requestId": "req-123..."
+}
+```
+
+### 2.9 AI 一键根据自然语言解析任务信息
+
+- **接口路径**：`/tasks/ai-parse`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：通过大模型（如 DeepSeek），根据一段自然语言指令自动解析并生成任务表单所需的各个字段，包含自动扩写后的任务说明。供前端一键填表使用。如果自然语言无法解析出某个字段，则对应字段返回 `null`。
+- **请求参数 (Body)**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `instruction` | string | 是 | 核心指令，如："下周一前完成iPhone新款卖点学习，大家都要学MyPal" |
+
+- **返回参数**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "title": "iPhone 新款卖点学习",
+    "description": "亲爱的小伙伴们，本次新款 iPhone 培训非常关键... (AI 生成的话术)",
+    "hasMypal": true,
+    "hasSmartSell": false,
+    "hasAiDemo": false,
+    "hasLiveBroadcast": false,
+    "startAt": "2026-04-24 09:38:14",
+    "ddlAt": "2026-04-30 23:59:59",
+    "passScore": 100
   },
   "requestId": "req-123..."
 }

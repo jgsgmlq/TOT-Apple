@@ -273,7 +273,7 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
 });
 
 // ─── POST /api/v1/events/:eventId/read ────────────────────────────────────────
-// 标记通知已读（铃铛点击，source=notification_click）
+// 标记通知已读（铃铛点击，source=notification_click），同时标记任务已收到 (received_at)
 
 router.post('/:eventId/read', authenticate, (req, res, next) => {
   try {
@@ -290,31 +290,44 @@ router.post('/:eventId/read', authenticate, (req, res, next) => {
     const now = new Date().toISOString();
     const userId = employeeId || null;
 
-    // UNIQUE(event_id, user_id) 保证幂等
-    const existing = db.get(
-      'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
-      [eventId, userId]
-    );
-    if (existing) {
-      return res.json({
-        code: 200,
-        message: '标记已读成功（已读）',
-        data: { receiptId: existing.id, eventId, readAt: existing.read_at },
-        requestId: req.requestId,
-      });
-    }
+    db.transaction(() => {
+      // UNIQUE(event_id, user_id) 保证幂等
+      const existing = db.get(
+        'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
+        [eventId, userId]
+      );
+      
+      if (!existing) {
+        db.run(
+          `INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
+           VALUES (?, ?, ?, ?, 'notification_click')`,
+          [nanoid(), eventId, userId, now]
+        );
+      }
 
-    const receiptId = nanoid();
-    db.run(
-      `INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
-       VALUES (?, ?, ?, ?, 'notification_click')`,
-      [receiptId, eventId, userId, now]
+      // 联动：如果这个事件关联了任务，同时标记任务已收到，从而支持“点开即已读并直接去完成”的交互要求
+      if (event.assignment_id && userId) {
+        const assignment = db.get('SELECT id, received_at FROM task_assignments WHERE id = ?', [event.assignment_id]);
+        if (assignment && !assignment.received_at) {
+          db.run('UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE id = ?', [now, now, assignment.id]);
+        }
+      }
+    });
+
+    const finalReceipt = db.get(
+      'SELECT id, read_at FROM read_receipts WHERE event_id = ? AND user_id = ?',
+      [eventId, userId]
     );
 
     res.json({
       code: 200,
       message: '标记已读成功',
-      data: { receiptId, eventId, readAt: now },
+      data: { 
+        receiptId: finalReceipt.id, 
+        eventId, 
+        readAt: finalReceipt.read_at,
+        assignmentId: event.assignment_id || null // 将 assignmentId 吐出，供前端直接跳转
+      },
       requestId: req.requestId,
     });
   } catch (err) {

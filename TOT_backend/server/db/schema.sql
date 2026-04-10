@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL,
   store_id      TEXT REFERENCES stores(id),
   employee_id   TEXT UNIQUE REFERENCES employees(id),
+  last_login_at TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
