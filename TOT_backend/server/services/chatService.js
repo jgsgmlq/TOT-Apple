@@ -34,7 +34,7 @@ function buildExampleQuestions() {
   return [
     `${taskRef}培训完成率是多少？`,
     '有哪些门店需要重点关注？',
-    '现在有哪��进行中的培训任务？',
+    '现在有哪些进行中的培训任务？',
   ];
 }
 
