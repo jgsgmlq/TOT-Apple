@@ -18,12 +18,12 @@ const SYSTEM_PROMPT = `你是一个培训数据分析助手，请根据以下查
 - followUpSuggestions：最多 3 项，以"可追问："开头；无建议时返回 []
 - 如果查询结果为空或 null，overview 说明"暂无相关数据"，其余字段返回空数组`;
 
-const FALLBACK_REPLY = {
-  overview: '抱歉，回复生成时遇到了问题，请稍后重试。',
-  keyNumbers: [],
-  attentionPoints: [],
-  followUpSuggestions: [],
-};
+const FALLBACK_OVERVIEW = '抱歉，回复生成时遇到了问题，请稍后重试。';
+
+/** Returns a fresh fallback object to prevent shared mutable state. */
+function makeFallback() {
+  return { overview: FALLBACK_OVERVIEW, keyNumbers: [], attentionPoints: [], followUpSuggestions: [] };
+}
 
 /**
  * Format tool results into a structured ReplyContent object.
@@ -68,13 +68,13 @@ async function format(userMessage, toolResult, history) {
     });
   } catch (err) {
     console.error('[chatAnswerService] LLM call failed:', err.message);
-    return FALLBACK_REPLY;
+    return makeFallback();
   }
 
   try {
     if (typeof raw !== 'string') {
       console.warn('[chatAnswerService] LLM returned non-string:', raw);
-      return FALLBACK_REPLY;
+      return makeFallback();
     }
     // Strip markdown code fences that LLMs sometimes add despite instructions
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -87,7 +87,7 @@ async function format(userMessage, toolResult, history) {
     };
   } catch (e) {
     console.warn('[chatAnswerService] Failed to parse LLM response:', e.message, 'Raw:', raw);
-    return FALLBACK_REPLY;
+    return makeFallback();
   }
 }
 
