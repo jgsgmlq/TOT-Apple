@@ -18,7 +18,7 @@
             <template #icon>
               <n-icon><AlertOutlined /></n-icon>
             </template>
-            任务预警规则
+            统一预警规则
           </n-button>
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -265,96 +265,48 @@
       </div>
     </n-modal>
 
-    <!-- 各任务预警规则（与「已布置的任务」同交互：卡片展开） -->
+    <!-- 统一任务预警规则 -->
     <n-modal
       v-model:show="showAlertRulesModal"
       preset="card"
-      title="任务预警规则"
-      :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
+      title="统一预警规则"
+      :style="{ width: 'min(480px, 90vw)', maxHeight: '80vh' }"
       :segmented="{ content: 'soft', footer: 'soft' }"
       class="hq-rules-modal"
     >
-      <div class="hq-dispatched-body">
-        <n-spin :show="alertRulesListLoading">
-          <n-empty v-if="!alertRulesListLoading && taskList.length === 0" description="暂无任务" />
-          <div v-else class="hq-waterfall-list">
-            <div
-              v-for="task in taskList"
-              :key="'rules-' + task.id"
-              class="hq-waterfall-card hq-rules-card"
-              :class="{ 'is-expanded': expandedRulesTaskId === task.id }"
-            >
-              <div class="hq-wf-summary" @click="toggleAlertRulesExpand(task.id)">
-                <div class="hq-wf-head">
-                  <n-tag :type="task.statusType" size="small" :bordered="false">{{
-                    task.statusText
-                  }}</n-tag>
-                  <n-icon
-                    class="hq-wf-chevron"
-                    :class="{ 'is-open': expandedRulesTaskId === task.id }"
-                  >
-                    <DownOutlined />
-                  </n-icon>
-                </div>
-                <h3 class="hq-wf-title">{{ task.name }}</h3>
-                <p class="hq-wf-meta">截止：{{ task.deadline }}</p>
-                <p class="hq-wf-hint">
-                  {{ expandedRulesTaskId === task.id ? '点击收起' : '点击展开查看预警规则' }}
-                </p>
-              </div>
+      <div class="hq-rules-body static-rules" style="padding: 16px 8px; font-size: 14px; color: #374151; line-height: 1.6;">
+        <p style="margin-bottom: 24px; color: #6b7280; font-size: 13px;">
+          总部已针对所有培训任务应用以下统一预警标准，暂不支持针对单个任务进行修改。
+        </p>
 
-              <div
-                v-show="expandedRulesTaskId === task.id"
-                class="hq-wf-expand hq-rules-expand"
-                @click.stop
-              >
-                <div v-if="hasAutoNudgeRulesConfigured(task.autoNudgeRules)" class="hq-rules-body">
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">进度掉队预警</div>
-                    <p class="hq-rule-line">
-                      Lifestyle：个人完成率处于门店最后
-                      <strong>{{ hqRulesDisplay(task).laggingLifestyle ?? '—' }}</strong> 位
-                    </p>
-                    <p class="hq-rule-line">
-                      Mono：个人完成率处于门店最后
-                      <strong>{{ hqRulesDisplay(task).laggingMono ?? '—' }}</strong> 位
-                    </p>
-                  </div>
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">起步异常预警</div>
-                    <p class="hq-rule-line">
-                      任务期限已度过
-                      <strong>{{ hqRulesDisplay(task).startDelayPercent ?? '—' }}</strong> %
-                      ，但个人进度仍为 0%
-                    </p>
-                  </div>
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">临期危机（Deadline）</div>
-                    <p class="hq-rule-line">
-                      距 Deadline 不足
-                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHours ?? '—' }}</strong>
-                      小时（P0）
-                    </p>
-                    <p class="hq-rule-line">
-                      距 Deadline 不足
-                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHoursSecondary ?? '—' }}</strong>
-                      小时（P1）
-                    </p>
-                  </div>
-                </div>
-                <n-empty v-else description="未配置预警规则" size="small" class="hq-rules-empty" />
-                <n-button
-                  type="primary"
-                  block
-                  class="hq-detail-edit-btn"
-                  @click.stop="goEditRulesTask(task.id)"
-                >
-                  前往任务管理编辑
-                </n-button>
-              </div>
-            </div>
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">
+            进度掉队预警 <n-tag size="small" type="info" :bordered="false" style="margin-left: 6px; font-weight: normal;">仅 Monobrand</n-tag>
           </div>
-        </n-spin>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f59e0b; font-size: 18px;">•</span> Lifestyle：个人完成率处于门店最后 <strong>3</strong> 位
+          </p>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f59e0b; font-size: 18px;">•</span> Mono：个人完成率处于门店最后 <strong>1</strong> 位
+          </p>
+        </div>
+
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">起步异常预警</div>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #ef4444; font-size: 18px;">•</span> 任务期限已度过 <strong>50</strong>%，但个人进度仍为 0%
+          </p>
+        </div>
+
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">临期危机预警 (Deadline)</div>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #ef4444; font-size: 18px;">•</span> 距 Deadline 不足 <strong>24</strong> 小时，仍未完成 (P0 级)
+          </p>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f97316; font-size: 18px;">•</span> 距 Deadline 不足 <strong>48</strong> 小时，仍未完成 (P1 级)
+          </p>
+        </div>
       </div>
     </n-modal>
 
@@ -441,14 +393,6 @@
       <n-spin :show="boardStatsLoading" class="board-stats-spin">
         <!-- 1. 概览 KPI（/dashboard/overview） -->
         <div class="north-star-container">
-          <div class="ns-card">
-            <div class="ns-label">整体完成率</div>
-            <div class="ns-value highlight"
-              >{{ formatPct2(activeTask.northStar.overallRate) }}<span class="unit">%</span></div
-            >
-            <div class="ns-sub">已完成人数 / 应完成总人数</div>
-          </div>
-          <div class="divider"></div>
           <div class="ns-card">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
@@ -1136,14 +1080,8 @@
   const alertRulesListLoading = ref(false);
   const expandedRulesTaskId = ref<string | null>(null);
 
-  const openAlertRulesDialog = async () => {
-    alertRulesListLoading.value = true;
-    try {
-      await loadTasks();
-      showAlertRulesModal.value = true;
-    } finally {
-      alertRulesListLoading.value = false;
-    }
+  const openAlertRulesDialog = () => {
+    showAlertRulesModal.value = true;
   };
 
   watch(showAlertRulesModal, (open) => {

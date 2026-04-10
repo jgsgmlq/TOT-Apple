@@ -79,7 +79,12 @@
 
     <!-- 下半部分：信息瀑布流 -->
     <section class="emp-waterfall-section">
-      <h2 class="section-title">消息中心 📬</h2>
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding: 0 20px;">
+        <h2 class="section-title" style="margin-bottom: 0; padding: 0;">消息中心 📬</h2>
+        <n-button text type="primary" style="font-size: 13px;" @click="showHistoryModal = true">
+          已完成任务 >
+        </n-button>
+      </div>
       <div class="waterfall-list">
         <transition-group name="fade-list">
           <div
@@ -133,14 +138,8 @@
             </div>
 
             <!-- 卡片底部操作按钮 -->
-            <div class="card-actions">
-              <n-button
-                class="action-btn view-btn"
-                secondary
-                @click.stop="msg.type === 'warning' ? handleMarkRead(msg) : handleMarkComplete(msg)"
-              >
-                {{ msg.type === 'warning' ? '标记已读' : '标记完成' }}
-              </n-button>
+            <div class="card-actions" v-if="msg.type === 'task' && msg.isRead" style="display: flex; justify-content: flex-end;">
+              
               <n-button
                 class="action-btn do-btn"
                 type="primary"
@@ -197,6 +196,7 @@
           v-if="currentTaskDetail"
           class="td-container custom-scroll"
           style="padding: 20px; overflow-y: auto; flex: 1"
+          @scroll="onTaskModalScroll"
         >
           <n-descriptions
             label-placement="top"
@@ -261,23 +261,16 @@
           </div>
         </div>
 
-        <!-- 固定底部：确认已读（计入总部任务读取率）+ 去完成 -->
-        <div v-if="currentTaskDetail" class="td-footer-actions">
+        <!-- 固定底部：已读状态 + 去完成 -->
+        <div v-if="currentTaskDetail" class="td-footer-actions" style="flex-direction: column; align-items: stretch; gap: 8px;">
+          <div style="text-align: center; margin-bottom: 4px;">
+            <span v-if="readConfirmDone" style="color: #10b981; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+               <n-icon><CheckCircleOutlined /></n-icon> 已读
+            </span>
+            <span v-else style="color: #9ca3af; font-size: 13px;">请下滑阅读全部内容以标记已读</span>
+          </div>
           <n-button
-            secondary
-            block
-            size="large"
-            class="td-btn td-btn-confirm-read"
-            :loading="readConfirmSending"
-            :disabled="readConfirmDone || !currentTaskModalAssignmentId"
-            @click="handleConfirmTaskRead"
-          >
-            {{ readConfirmDone ? '已确认已读' : '确认已读' }}
-          </n-button>
-          <p v-if="currentTaskDetail && !currentTaskModalAssignmentId" class="td-read-hint">
-            无法获取分配信息，已读状态可能无法同步到总部看板
-          </p>
-          <n-button
+            v-if="readConfirmDone"
             type="primary"
             block
             size="large"
@@ -285,7 +278,7 @@
             style="box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2)"
             @click="handleGoToMiniProgram"
           >
-            进入学习平台去完成
+            去完成
           </n-button>
         </div>
       </div>
@@ -420,6 +413,20 @@
         </div>
       </div>
     </n-modal>
+    <!-- 历史记录 Modal -->
+    <n-modal v-model:show="showHistoryModal" preset="card" title="已完成任务记录" class="history-modal" style="width: 90%; max-width: 400px; border-radius: 16px;">
+      <div v-if="completedTasksData.length === 0" style="text-align: center; color: #999; padding: 40px 0;">
+        暂无已完成的任务哦 ~
+      </div>
+      <div v-else class="history-list">
+        <div v-for="task in completedTasksData" :key="task.id" class="history-card" @click="handleViewTask(task)">
+          <div class="h-title">{{ task.title }}</div>
+          <div class="h-time" style="color: #999; font-size: 12px; margin-top: 6px;">
+            完成时间: {{ formatCompleteTime(task.assignment?.completedAt) }}
+          </div>
+        </div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -434,6 +441,7 @@
     CloseOutlined,
     ClockCircleOutlined,
     WarningOutlined,
+    CheckCircleOutlined,
     ShopOutlined,
   } from '@vicons/antd';
   import { getTaskList, getTaskDetail } from '@/api/task';
@@ -479,6 +487,15 @@
   // --- 数据响应式结构 ---
   const pendingBanners = ref<any[]>([]);
   const waterfallMessages = ref<any[]>([]);
+  const completedTasksData = ref<any[]>([]);
+  const showHistoryModal = ref(false);
+
+  function formatCompleteTime(iso: string | null | undefined): string {
+    if (!iso) return '未知';
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
   const showTaskModal = ref(false);
   const currentTaskDetail = ref<any>(null);
   /** 当前弹窗对应 assignment，用于 POST /assignments/:id/viewed（task_detail_open） */
@@ -697,6 +714,14 @@
       const openTasks = realTasks.filter(
         (t: any) => !t.assignment || t.assignment.status !== 'completed'
       );
+      const doneTasks = realTasks.filter(
+        (t: any) => t.assignment && t.assignment.status === 'completed'
+      );
+      completedTasksData.value = doneTasks.sort((a, b) => {
+        const tA = new Date(a.assignment.completedAt || a.updatedAt).getTime();
+        const tB = new Date(b.assignment.completedAt || b.updatedAt).getTime();
+        return tB - tA; // newest completed first
+      });
 
       const formattedTasks = openTasks.map((t: any) => {
         const ddl = new Date(t.ddlAt);
@@ -707,6 +732,7 @@
         return {
           id: t.id,
           assignmentId: t.assignment?.id as string | undefined,
+          isRead: !!t.assignment?.receivedAt,
           type: 'task' as const,
           title: t.title,
           desc: t.description || '总部未提供详细描述',
@@ -783,22 +809,39 @@
   };
 
   /** 确认已读：写入 read_receipts（task_detail_open），计入总部看板「任务读取率」 */
-  const handleConfirmTaskRead = async () => {
+  const handleConfirmTaskRead = async (silent = false) => {
     const aid = currentTaskModalAssignmentId.value;
-    if (!aid) {
-      message.warning('无法获取任务分配信息，请刷新页面后重试');
-      return;
-    }
-    if (readConfirmDone.value) return;
+    if (!aid) return;
+    if (readConfirmDone.value || readConfirmSending.value) return;
     readConfirmSending.value = true;
     try {
       await postAssignmentViewed(aid).send();
       readConfirmDone.value = true;
-      message.success('已确认已读');
+      
+      // 更新外层瀑布流中的状态
+      const t = waterfallMessages.value.find(m => m.assignmentId === aid);
+      if (t) t.isRead = true;
     } catch (err: any) {
-      message.error(err?.message || '确认已读失败，请稍后重试');
+      if (!silent) console.error(err);
     } finally {
       readConfirmSending.value = false;
+    }
+  };
+
+  const onTaskModalScroll = (e: Event) => {
+    const target = e.target as HTMLElement;
+    // 到底部留点容差（例如10px）
+    if (target.scrollHeight - target.scrollTop - target.clientHeight <= 10) {
+      handleConfirmTaskRead(true);
+    }
+  };
+
+  const checkScrollToBottom = () => {
+    const el = document.querySelector('.td-container');
+    if (el) {
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 10) {
+         handleConfirmTaskRead(true);
+      }
     }
   };
 
@@ -810,7 +853,7 @@
       return;
     }
 
-    readConfirmDone.value = false;
+    readConfirmDone.value = !!msg.isRead;
     currentTaskModalAssignmentId.value = msg.assignmentId as string | undefined;
 
     const msgReactive = message.loading('加载任务详情中...', { duration: 0 });
@@ -818,6 +861,7 @@
       const res = await getTaskDetail(msg.id).send();
       currentTaskDetail.value = res;
       showTaskModal.value = true;
+      setTimeout(checkScrollToBottom, 100);
     } catch (err: any) {
       message.error(err.message || '获取任务详情失败');
     } finally {
@@ -1150,15 +1194,15 @@
       transition: all 0.3s ease;
       cursor: pointer;
 
-      /* 预警：背景尽量浅，避免与灰色按钮（#f3f4f6）糊在一起 */
+      /* 预警：浅色底 + 柔和左边框（红/黄再浅一档） */
       &.is-warning-red {
-        border-left: 4px solid #ef4444;
-        background: #fff8f8;
+        border-left: 4px solid #fca5a5;
+        background: #fffafa;
       }
 
       &.is-warning-yellow {
-        border-left: 4px solid #f59e0b;
-        background: #fffef9;
+        border-left: 4px solid #fcd34d;
+        background: #fffef6;
       }
 
       &.is-task {
@@ -1188,11 +1232,11 @@
         }
 
         .card-warn-icon--red {
-          color: #ef4444;
+          color: #f87171;
         }
 
         .card-warn-icon--yellow {
-          color: #f59e0b;
+          color: #fbbf24;
         }
 
         .card-tag {
@@ -1267,14 +1311,6 @@
           color: #ffffff;
           border: none;
           box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
-        }
-      }
-
-      &.is-warning-red,
-      &.is-warning-yellow {
-        .card-actions .view-btn {
-          background: #e5e7eb;
-          color: #374151;
         }
       }
     }
@@ -1413,11 +1449,11 @@
   }
 
   .wd-hero--red {
-    background: linear-gradient(145deg, #fef2f2 0%, #fee8e8 100%);
+    background: linear-gradient(145deg, #fffbfb 0%, #fef2f2 100%);
   }
 
   .wd-hero--yellow {
-    background: linear-gradient(145deg, #fffdf5 0%, #fff7e0 100%);
+    background: linear-gradient(145deg, #fffef9 0%, #fffbeb 100%);
   }
 
   .wd-icon-box {
@@ -1432,13 +1468,13 @@
   }
 
   .wd-icon-box--red {
-    background: #ef4444;
-    box-shadow: 0 8px 16px rgba(239, 68, 68, 0.25);
+    background: #fca5a5;
+    box-shadow: 0 8px 16px rgba(252, 165, 165, 0.35);
   }
 
   .wd-icon-box--yellow {
-    background: #f59e0b;
-    box-shadow: 0 8px 16px rgba(245, 158, 11, 0.3);
+    background: #fcd34d;
+    box-shadow: 0 8px 16px rgba(252, 211, 77, 0.35);
   }
 
   .wd-hero-title {
@@ -1448,11 +1484,11 @@
   }
 
   .wd-hero-title--red {
-    color: #b91c1c;
+    color: #ef4444;
   }
 
   .wd-hero-title--yellow {
-    color: #92400e;
+    color: #b45309;
   }
 
   .wd-hero-sub {
@@ -1462,11 +1498,11 @@
   }
 
   .wd-hero-sub--red {
-    color: #ef4444;
+    color: #f87171;
   }
 
   .wd-hero-sub--yellow {
-    color: #d97706;
+    color: #f59e0b;
   }
 
   .wd-item-card {
@@ -1489,11 +1525,11 @@
   }
 
   .wd-item-stripe--red {
-    background: #ef4444;
+    background: #fca5a5;
   }
 
   .wd-item-stripe--yellow {
-    background: #f59e0b;
+    background: #fcd34d;
   }
 
   .wd-item-title {
@@ -1512,10 +1548,34 @@
   }
 
   .wd-item-warn-icon--red {
-    color: #ef4444;
+    color: #f87171;
   }
 
   .wd-item-warn-icon--yellow {
-    color: #f59e0b;
+    color: #fbbf24;
   }
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.history-card {
+  padding: 12px 16px;
+  background: #f9f9fb;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.history-card:active {
+  background: #f0f0f5;
+}
+.h-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
 </style>
