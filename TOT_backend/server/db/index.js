@@ -25,6 +25,7 @@ function getDb() {
     migrateNudgeRecordsConstraints(_db);
     migrateNotificationEventsContent(_db);
     migrateUsersExecutiveScope(_db);
+    migrateUsersLastLoginAt(_db);
     ensureChatTables(_db);
   }
   return _db;
@@ -79,6 +80,13 @@ function migrateUsersExecutiveScope(database) {
   if (!names.has('executive_rtm')) {
     database.exec('ALTER TABLE users ADD COLUMN executive_rtm TEXT');
   }
+}
+
+/** 已有库补列：users.last_login_at（登录时间戳记录） */
+function migrateUsersLastLoginAt(database) {
+  const cols = database.prepare('PRAGMA table_info(users)').all();
+  if (cols.some((c) => c.name === 'last_login_at')) return;
+  database.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
 }
 
 /** 创建 chat_sessions / chat_messages 表（新库由 schema.sql 建，旧库由本函数兜底） */
