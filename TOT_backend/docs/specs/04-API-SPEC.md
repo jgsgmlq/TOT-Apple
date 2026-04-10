@@ -1714,20 +1714,24 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
-> **与实现对齐**：当前仓库 **`server/app.js` 未挂载** `/api/v1/chat/*`、**`/api/v1/ai/*`**；本节（含 §6.5.2 代理路径）为 **产品/集成约定**，实现状态 **P1（未接入 HTTP 路由）**。已实现的能力见 **`POST /api/v1/tasks/ai-generate-description`**、**`POST /api/v1/nudges/ai-generate`**（各路由文件）。
+> **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前实现模式为 `intent_routing`（MVP），通过环境变量 `CHAT_AGENT_MODE=function_calling` 可切换至 FC 模式（需完成 Task 9 升级步骤）。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
+
+> **产品行为、意图清单、`stores.region` 权限、数据溯源、LLM 可插拔说明：** 见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)（与 PRD 4.0.5 §5.7 / §5.7.1 对齐）。
 
 ### 6.1 创建聊天会话**P1**
 
 - **接口名称**：创建Executive Chat会话
 - **接口路径**：`/chat/executive/sessions`
+- **完整 URL 示例**：`POST /api/v1/chat/executive/sessions`
 - **请求方法**：POST
 - **请求头**：需携带通用请求头（Role=executive）
 - **请求体**：
   ```json
   {
     "executiveId": "string", // 高管ID，与User-Id一致
-    "roleScope": "national/rtm", // 权限范围：全国/按RTM
-    "rtm": "string" // 可选，仅按RTM分管需填
+    "roleScope": "national/regional/rtm", // 权限范围：全国 / 按大区(stores.region) / 按门店RTM
+    "regions": ["华东", "华北"], // 当 roleScope=regional 时必填，元素与 stores.region 同源
+    "rtm": "string" // 当 roleScope=rtm 时必填；门店 stores.rtm 精确匹配
   }
   ```
 - **响应体（成功）**：
@@ -1748,10 +1752,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：创建高管聊天会话，生成上下文ID用于多轮对话
+- **接口说明**：创建高管聊天会话，生成上下文ID用于多轮对话。`regional` 与 PRD 区域总监「本辖区」对齐，过滤条件为 **`stores.region IN regions`**（见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)）。`roleScope=national` 时忽略 `regions`、`rtm`。
 - **权限要求**：仅executive角色
 - **异常场景**：
-  - 400：roleScope=rtm但rtm为空
+  - 400：`roleScope=regional` 但 `regions` 为空或未传
+  - 400：`roleScope=rtm` 但 `rtm` 为空
 
 ### 6.2 发送聊天消息（Agent处理）**P1**
 
@@ -1776,7 +1781,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "message": "success",
     "data": {
       "messageId": "string",
-      "replyContent": { // 结构化回答（PRD 5.6）
+      "replyContent": { // 结构化回答（PRD §5.7）；统计/推断类可选扩展见 09-EXECUTIVE-CHAT.md（statisticsProvenance、visualizations、forecastDisclaimer 等）
         "overview": "Q1新品培训整体完成率72%，全国共300人参与，216人已完成",
         "keyNumbers": [
           {
@@ -1877,12 +1882,13 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "code": 200,
     "message": "success",
     "data": {
-      "intentType": "progress_query/project_status/warning_query/drill_down", // 意图类型（PRD 5.6）
+      "intentType": "progress_query/project_status/warning_query/drill_down/analytics_query", // PRD §5.7 / §5.7.1；analytics_query 时需配合 analysisType
       "entities": { // 实体提取
         "taskName": "Q1新品培训",
         "rtm": "Monobrand",
         "dimension": "store",
-        "topN": 5
+        "topN": 5,
+        "analysisType": "quantile_duration|completion_time_distribution|metric_correlation|progress_variance_by_channel|completion_rate_forecast|trimmed_mean_duration"
       },
       "confidence": 0.98, // 意图识别置信度
       "sqlQuery": "SELECT * FROM task_assignments WHERE taskId='xxx' AND store_id IN (SELECT id FROM stores WHERE rtm='Monobrand') LIMIT 5" // 生成的查询语句（可选）
