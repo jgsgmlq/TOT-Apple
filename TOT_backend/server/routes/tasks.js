@@ -6,7 +6,7 @@ const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { requireTaskAccess } = require('../middleware/permissions');
 const { createError } = require('../middleware/errorHandler');
-const { broadcastToUsers } = require('../ws/manager');
+const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 const mainAgent = require('../agent');
 const { evaluateAndTriggerAutoNudges } = require('../services/autoNudge'); // 保留
 const { parseDdlAtToSqliteUtc } = require('../utils/ddlAt');
@@ -540,6 +540,14 @@ router.post('/:id/dispatch', authenticate, requireRole(['central', 'admin']), (r
     });
 
     const updated = db.get('SELECT * FROM tasks WHERE id = ?', [task.id]);
+
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: {
+        taskId: task.id,
+        operationType: 'task_dispatched'
+      }
+    });
 
     broadcastToUsers(targetUsers.map(u => u.user_id), {
       event: 'task_assigned',

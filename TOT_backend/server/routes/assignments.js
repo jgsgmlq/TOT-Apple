@@ -5,7 +5,7 @@ const { nanoid } = require('nanoid');
 const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
-const { broadcastToUser, broadcastToUsers } = require('../ws/manager');
+const { broadcastToUser, broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 const { batchCreateAssignments } = require('../services/assignmentBatch');
 const { getConfiguredPlatformColumns, computeAssignmentProgressStatus } = require('../services/assignmentProgress');
 
@@ -486,7 +486,19 @@ router.put('/:id/status', authenticate, (req, res, next) => {
 
     const finalRow = db.get('SELECT * FROM task_assignments WHERE id = ?', [assignment.id]);
 
-    // WS 广播：任务完成时通知本人、central（central 无 employeeId，靠轮询）
+    // WS 广播：给看板端推送数据刷新信号
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: {
+        taskId: finalRow.task_id,
+        assignmentId: finalRow.id,
+        status: finalRow.status,
+        progress: finalRow.progress,
+        operationType
+      }
+    });
+
+    // WS 广播：任务完成时通知本人及同门店其他人
     if (finalRow.status === 'completed') {
       const wsPayload = {
         event: 'assignment_completed',

@@ -3,7 +3,7 @@
 const { db } = require('../db');
 const { nanoid } = require('nanoid');
 const mainAgent = require('../agent');
-const { broadcastToUsers } = require('../ws/manager');
+const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 
 const systemUserId = 1; // 系统执行账号（写入 initiator_id）
 
@@ -196,6 +196,15 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
         ruleType: target.ruleType,
         eventId,
       },
+    });
+
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: {
+        taskId,
+        assignmentId: target.assignmentId,
+        operationType: 'auto_nudge_sent'
+      }
     });
   }
 }

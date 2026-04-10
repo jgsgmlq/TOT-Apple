@@ -1140,7 +1140,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **异常场景**：
   - 400：pageNum/pageSize非法
 
-### 4.3 标记通知已读（铃铛点击）**P0**
+### 4.3 标记通知已读（打开事件）**P0**
 
 - **接口名称**：标记通知事件已读（notification_click）
 - **接口路径**：`/events/{eventId}/read`
@@ -1156,12 +1156,13 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "receiptId": "string", // read_receipts.id（nanoid）
       "eventId": "string",
-      "readAt": "string"     // read_receipts.read_at（ISO8601）
+      "readAt": "string",    // read_receipts.read_at（ISO8601）
+      "assignmentId": "string" // 底层任务分配记录 ID，供前端直达任务去完成（若无则为 null）
     },
     "requestId": "string"
   }
   ```
-- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**不写 `assignment.received_at`**（该动作由 §4.3b 负责）。
+- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**★ 联动：同时将该通知关联的任务分配记录更新为已收到（写 `assignment.received_at`），前端可利用返回的 `assignmentId` 直接进入详情“去完成”任务。**
 - **权限要求**：仅本人事件
 - **异常场景**：
   - 404：eventId不存在
@@ -2857,12 +2858,18 @@ main();
 ws://[host]/ws?token=<JWT Bearer Token>
 ```
 
-- 仅 `employee` 角色（有 `employeeId`）可建立持久连接；`central` / `executive` 无 employeeId，使用 REST 轮询降级。
+- 连接建立后，系统通过 Token 中的 `role` 自动判定并分流：
+  - **店员端 (`employee`)**：放入店员连接池，支持精准的 `employeeId` 定向推送。
+  - **管理端 (`central`, `executive`, `admin`)**：放入看板连接池，统一接收全局的数据刷新信号 (`dashboard_updated`)。
 - 连接成功后服务端立即推送 `connected` 确认帧：
   ```json
-  { "event": "connected", "employeeId": "E001" }
+  // 店员端
+  { "event": "connected", "role": "employee", "employeeId": "E001" }
+  
+  // 管理端
+  { "event": "connected", "role": "central" }
   ```
-- Token 无效或无 employeeId 时，服务端关闭连接（code 4001/4002），前端需重新登录后重连。
+- Token 无效时，服务端关闭连接（code 4001），前端需重新登录后重连。
 
 ---
 
@@ -2926,6 +2933,7 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **接收方：**
 - 完成任务的员工（自身）
+- 同门店的其他员工
 
 **Payload：**
 ```json
@@ -2943,6 +2951,32 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **前端建议处理：**
 - 员工端：展示完成庆祝动效（可选）。
+
+---
+
+### 15.4 看板数据更新通知 `dashboard_updated` **P0**
+
+**触发时机：** 当任何影响看板统计的行为发生时（例如：新任务下发、员工点开通知/任务已读、员工更新任务进度或状态、触发新的预警时）。
+
+**接收方：**
+- 当前在线的总部 (`central`)、行政 (`executive`)、管理员 (`admin`) 角色。
+
+**Payload：**
+```json
+{
+  "event": "dashboard_updated",
+  "data": {
+    "taskId": "string",
+    "assignmentId": "string | null",
+    "status": "string | null",
+    "progress": "number | null",
+    "operationType": "task_dispatched | notification_read | start_task | complete_platform | complete_task | auto_nudge_sent"
+  }
+}
+```
+
+**前端建议处理：**
+- 管理端：监听到该事件后，可以防抖（debounce）几秒钟后静默重新调用 `GET /api/v1/dashboard/overview` 或 `heatmap`、`trend` 等数据接口，从而实现看板数据的**自动刷新**。
 
 ---
 

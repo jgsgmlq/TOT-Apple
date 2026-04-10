@@ -5,6 +5,7 @@ const { nanoid } = require('nanoid');
 const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
+const { broadcastToDashboard } = require('../ws/manager');
 
 const router = express.Router();
 
@@ -318,6 +319,18 @@ router.post('/:eventId/read', authenticate, (req, res, next) => {
       'SELECT id, read_at FROM read_receipts WHERE event_id = ? AND user_id = ?',
       [eventId, userId]
     );
+
+    // 给看板端推送数据刷新信号 (任务阅读率等改变)
+    if (event.task_id) {
+      broadcastToDashboard({
+        event: 'dashboard_updated',
+        data: {
+          taskId: event.task_id,
+          assignmentId: event.assignment_id || null,
+          operationType: 'notification_read'
+        }
+      });
+    }
 
     res.json({
       code: 200,
