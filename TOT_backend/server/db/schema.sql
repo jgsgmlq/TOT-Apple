@@ -157,3 +157,24 @@ CREATE TABLE IF NOT EXISTS mypal_learning_mock (
 );
 CREATE INDEX IF NOT EXISTS idx_mypal_mock_seed_id   ON mypal_learning_mock(seed_id);
 CREATE INDEX IF NOT EXISTS idx_mypal_mock_task_week  ON mypal_learning_mock(task_week);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
+  regions     TEXT,
+  rtm         TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  last_active TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
+  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content     TEXT NOT NULL,
+  intent_type TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
