@@ -85,13 +85,20 @@ async function runFunctionCalling(userMessage, history, regionScope) {
   }
 
   // Execute all requested tools (synchronous, serial)
-  const toolResults = response.tool_calls.map((tc) =>
-    chatToolsService.executeByName(
+  const toolResults = response.tool_calls.map((tc) => {
+    let args;
+    try {
+      args = JSON.parse(tc.function.arguments || '{}');
+    } catch {
+      console.warn('[chatAgentRunner] Failed to parse tool arguments:', tc.function.arguments);
+      args = {};
+    }
+    return chatToolsService.executeByName(
       tc.function.name,
-      JSON.parse(tc.function.arguments),
+      args,
       regionScope  // regionScope injected here — LLM never sees permission boundaries
-    )
-  );
+    );
+  });
 
   // Second LLM call: provide tool results, get final answer
   const finalMessages = [
