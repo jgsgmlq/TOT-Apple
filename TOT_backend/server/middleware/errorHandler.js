@@ -21,7 +21,14 @@ function errorHandler(err, req, res, next) {
     payload.errorCode = err.errorCode;
   }
 
-  console.error("DEBUG ERR:", err.stack); payload.stack = err.stack; res.status(status).json(payload);
+  // 客户端可恢复的预期错误（如本地仍缓存已删会话 id）不打满栈，避免 seed/刷新后刷屏
+  if (err.errorCode === 'CHAT_003') {
+    console.warn('[expected]', status, message, err.errorCode);
+  } else {
+    console.error('DEBUG ERR:', err.stack);
+    payload.stack = err.stack;
+  }
+  res.status(status).json(payload);
 }
 
 /**

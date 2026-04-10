@@ -1,7 +1,7 @@
 'use strict';
 
 const { nanoid }       = require('nanoid');
-const { db }           = require('../db');
+const { db, getDb }    = require('../db');
 const chatAgentRunner  = require('./chatAgentRunner');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
@@ -87,7 +87,9 @@ async function sendMessage(sessionId, userMessage, userId) {
   // Ownership verified at route layer — double-check here for safety
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
-  if (session.user_id !== userId) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
+  if (Number(session.user_id) !== Number(userId)) {
+    throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
+  }
 
   // Restore regionScope from session row
   const regionScope = {
@@ -189,4 +191,19 @@ function getHistory(sessionId, pageNum, pageSize) {
   };
 }
 
-module.exports = { createSession, sendMessage, getHistory };
+// ─── deleteSessionById ────────────────────────────────────────────────────────
+/**
+ * 硬删除：从 SQLite 中删除该会话及 `chat_messages` 中所有关联行（路由层需先校验归属）。
+ * 使用 `getDb().transaction()` 与 better-sqlite3 官方用法一致，保证原子提交。
+ * @param {string} sessionId
+ */
+function deleteSessionById(sessionId) {
+  const database = getDb();
+  const runDelete = database.transaction(() => {
+    database.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(sessionId);
+    database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
+  });
+  runDelete();
+}
+
+module.exports = { createSession, sendMessage, getHistory, deleteSessionById };

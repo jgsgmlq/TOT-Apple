@@ -48,4 +48,30 @@ assert d['data']['pagination']['total'] >= 2, d['data']['pagination']
 print('getHistory OK, total messages:', d['data']['pagination']['total'])
 "
 
+# Delete session（需当前 server 已包含 DELETE 路由；否则响应非 JSON）
+R=$(curl -s -X DELETE "$BASE/chat/executive/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $TOKEN")
+echo "$R" | python3 -c "
+import json,sys
+raw=sys.stdin.read().strip()
+if not raw:
+    sys.stderr.write('deleteSession: empty response (restart server after pulling chat routes?)\n')
+    sys.exit(1)
+try:
+    d=json.loads(raw)
+except json.JSONDecodeError as e:
+    sys.stderr.write('deleteSession: not JSON: %r\n' % (raw[:200],))
+    sys.exit(1)
+assert d.get('code')==200, d
+assert d.get('data',{}).get('sessionId'), d
+print('deleteSession OK')
+"
+
+# History should 404
+HTTP=$(curl -s -o /tmp/echat_hist_after_del.json -w '%{http_code}' \
+  "$BASE/chat/executive/sessions/$SESSION_ID/history?pageNum=1&pageSize=10" \
+  -H "Authorization: Bearer $TOKEN")
+test "$HTTP" = "404" || { echo "expected 404 after delete, got $HTTP"; cat /tmp/echat_hist_after_del.json; exit 1; }
+echo "history after delete returns 404 OK"
+
 echo "ALL EChat HTTP tests PASSED"
