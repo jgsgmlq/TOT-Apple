@@ -41,6 +41,9 @@ router.post('/login', async (req, res, next) => {
       throw createError(401, '用户名或密码错误', 'AUTH_005');
     }
 
+    const now = new Date().toISOString();
+    db.run('UPDATE users SET last_login_at = ? WHERE id = ?', [now, user.id]);
+
     const payload = {
       id:         user.id,
       username:   user.username,

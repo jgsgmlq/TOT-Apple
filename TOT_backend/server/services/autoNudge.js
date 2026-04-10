@@ -3,7 +3,7 @@
 const { db } = require('../db');
 const { nanoid } = require('nanoid');
 const mainAgent = require('../agent');
-const { broadcastToUsers } = require('../ws/manager');
+const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 
 const systemUserId = 1; // 系统执行账号（写入 initiator_id）
 
@@ -68,7 +68,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
       const targetUsers = storeData.users.slice(0, limit);
 
       for (const u of targetUsers) {
-        triggeredUsers.push({ userId: u.user_id, storeId: u.store_id, assignmentId: u.id, severity: 'yellow', ruleType: 'progressLag' });
+        triggeredUsers.push({ userId: u.user_id, storeId: u.store_id, assignmentId: u.id, severity: 'yellow', ruleType: 'progressLag', threshold: limit });
       }
     }
   }
@@ -76,7 +76,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   if (rules.startDelay && passedPercent >= rules.startDelay) {
     for (const a of assignments) {
       if (a.progress === 0) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'startDelay' });
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'startDelay', threshold: rules.startDelay });
       }
     }
   }
@@ -87,11 +87,11 @@ async function evaluateAndTriggerAutoNudges(taskId) {
 
     if (hoursLeft <= p0Hours) {
       for (const a of assignments) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0' });
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0', threshold: p0Hours });
       }
     } else if (hoursLeft <= p1Hours) {
       for (const a of assignments) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP1' });
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP1', threshold: p1Hours });
       }
     }
   }
@@ -141,7 +141,8 @@ async function evaluateAndTriggerAutoNudges(taskId) {
 }
 
 /**
- * 异步：逐人调用 generate_nudge_message，写入 notification_events.content 并广播。
+ * 异步：逐人产生预警消息，写入 notification_events.content 并广播。
+ * （已移除 AI 生成逻辑，固化为展示触发的规则原文）
  */
 async function processAutoNudgeTargetsAsync(taskId, targets) {
   for (const target of targets) {
@@ -150,15 +151,16 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
     if (exists) continue;
 
     let content = '你有未完成的培训任务，请抓紧时间！';
-    try {
-      const aiResult = await mainAgent.execute('generate_nudge_message', {
-        taskId,
-        userId: target.userId,
-        severity: target.severity,
-      });
-      if (aiResult && aiResult.content) content = aiResult.content;
-    } catch (err) {
-      console.error(`Auto-nudge AI generation failed for user ${target.userId}:`, err.message);
+    
+    // 固化业务规则，预警文案直接展示触发的规则原文
+    if (target.ruleType === 'progressLag') {
+      content = `个人任务完成率处于门店最后${target.threshold}位`;
+    } else if (target.ruleType === 'startDelay') {
+      content = `期限达到${target.threshold}%但进度为0`;
+    } else if (target.ruleType === 'deadlineCrisisP0') {
+      content = `距离deadline<${target.threshold}h但未完成课程(p0)`;
+    } else if (target.ruleType === 'deadlineCrisisP1') {
+      content = `距离deadline<${target.threshold}h但未完成课程(p1)`;
     }
 
     const eventId = nanoid();
@@ -194,6 +196,15 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
         ruleType: target.ruleType,
         eventId,
       },
+    });
+
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: {
+        taskId,
+        assignmentId: target.assignmentId,
+        operationType: 'auto_nudge_sent'
+      }
     });
   }
 }

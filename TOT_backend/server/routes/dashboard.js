@@ -210,6 +210,20 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const crisisP1Rate =
       total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
 
+    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达
+    const reachRow = db.get(
+      `SELECT COUNT(ta.id) AS reached_count
+       FROM task_assignments ta
+       JOIN users u ON ta.user_id = u.employee_id
+       ${joinStore}
+       WHERE ${taConditions.join(' AND ')} ${storeWhere}
+         AND u.last_login_at IS NOT NULL
+         AND u.last_login_at >= ta.created_at`,
+      allParams
+    );
+    const reachedCount = (reachRow && reachRow.reached_count) || 0;
+    const taskReachRate = total > 0 ? parseFloat(((reachedCount / total) * 100).toFixed(2)) : 0;
+
     res.json({
       code: 200,
       message: 'success',
@@ -227,7 +241,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         avgCompletionTimeHours,
 
         // 链路数据
-        taskReachRate: total > 0 ? 100 : 0, // 系统目前创建即触达；展示为 100.00%
+        taskReachRate,
         taskReadRate: total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0,
         nudgeConversionRate,
         

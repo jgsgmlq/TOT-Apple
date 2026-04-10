@@ -1,5 +1,14 @@
 # ToT API 接口定义文档
 
+### v1.4.10（2026-04-10）
+
+- **AI 解析任务**：新增 `/tasks/ai-parse` 接口，支持一键根据自然语言解析任务信息并格式化返回所有任务所需的创建字段。
+- **店员任务筛选**：店员端 `/tasks` 列表新增 `status=completed` 支持，满足已完成任务的历史记录查询。
+- **通知联动**：`/events/:eventId/read` 支持点击通知时自动标记底层任务为 `received_at` 并返回 `assignmentId`，实现点开即直达“去完成”。
+- **看板触达率优化**：记录了用户最新登录时间（`last_login_at`），只把任务下发后产生登录的人算进 `taskReachRate`。
+- **时间格式**：后端涉及的 `startAt`、`ddlAt` 等出入参及大模型生成的格式规范统一变更为无 T 无 Z 的 `YYYY-MM-DD HH:MM:SS`。
+- **预警催办简化**：保留了原有的定时预警服务（`/tasks/:id/auto-nudge` 以及后台的 `autoNudgeScheduler`），但文案不再调用 AI 进行润色，直接返回设定的规则触发原文。
+
 ### v1.4.9（2026-04-09）
 
 - **§2 Task API（`routes/tasks.js`）**：
@@ -277,10 +286,10 @@
     "hasAiDemo": false,          // 是否包含 AI Demo，可选（默认 false）
     "hasLiveBroadcast": false,   // 是否包含 Live Broadcast，可选（默认 false）
     // 四平台至少一个为 true，否则 400（TASK_001）
-    "startAt": "2026-04-01T00:00:00Z", // 开始时间，ISO 8601，必填
-    "passScore": 100,            // 达标分数，整数，必填
-    "ddlAt": "2026-04-30T00:00:00Z", // 截止时间，必填（常用 ISO 8601；服务端落库规范为 UTC `YYYY-MM-DD HH:MM:SS`）
-    "rtmFilter": null,           // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
+    "startAt": "2026-04-24 09:38:14", // 开始时间，必填（格式为 YYYY-MM-DD HH:MM:SS）
+    "passScore": 100,                 // 达标分数，整数，必填
+    "ddlAt": "2026-04-30 23:59:59",   // 截止时间，必填（格式为 YYYY-MM-DD HH:MM:SS）
+    "rtmFilter": null,                // RTM 筛选规则数组（见 07-RTM-FILTER.md），可选
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
     "autoNudgeRules": {          // 自动预警规则，可选
       "progressLag": { "lifestyle": 3, "mono": 1 },
@@ -361,7 +370,7 @@
     "hasLiveBroadcast": false,
     "rtmFilter": null,
     "storeScope": "all",
-    "startAt": "2026-04-01T00:00:00Z",
+    "startAt": "2026-04-24 09:38:14",
     "passScore": 100,
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
@@ -429,7 +438,10 @@
 - **接口路径**：`/tasks`
 - **请求方法**：GET
 - **权限要求**：所有已认证角色
-- **查询参数**：无（当前版本不支持过滤/分页，后续按需补充）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress` |
 - **角色过滤规则**：
   - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
   - `employee`：仅返回本人有 `task_assignments` 记录的任务
@@ -462,7 +474,7 @@
 - **接口路径**：`/tasks/ai-generate-description`
 - **请求方式**：`POST`
 - **权限要求**：`central`, `admin`
-- **接口说明**：通过 Gemini 2.5 Pro 大模型，根据简短指令、截止时间和学习平台生成一段长篇、有煽动性的任务说明文案。
+- **接口说明**：通过 Gemini 2.5 Pro 或 DeepSeek 大模型，根据简短指令、截止时间和学习平台生成一段长篇、有煽动性的任务说明文案。
 - **请求参数 (Body)**：
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -479,6 +491,39 @@
   "message": "success",
   "data": {
     "description": "亲爱的小伙伴们，本次新款 iPhone 培训非常关键... (AI 生成的话术)"
+  },
+  "requestId": "req-123..."
+}
+```
+
+### 2.9 AI 一键根据自然语言解析任务信息
+
+- **接口路径**：`/tasks/ai-parse`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：通过大模型（如 DeepSeek），根据一段自然语言指令自动解析并生成任务表单所需的各个字段，包含自动扩写后的任务说明。供前端一键填表使用。如果自然语言无法解析出某个字段，则对应字段返回 `null`。
+- **请求参数 (Body)**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `instruction` | string | 是 | 核心指令，如："下周一前完成iPhone新款卖点学习，大家都要学MyPal" |
+
+- **返回参数**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "title": "iPhone 新款卖点学习",
+    "description": "亲爱的小伙伴们，本次新款 iPhone 培训非常关键... (AI 生成的话术)",
+    "hasMypal": true,
+    "hasSmartSell": false,
+    "hasAiDemo": false,
+    "hasLiveBroadcast": false,
+    "startAt": "2026-04-24 09:38:14",
+    "ddlAt": "2026-04-30 23:59:59",
+    "passScore": 100
   },
   "requestId": "req-123..."
 }
@@ -1095,7 +1140,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **异常场景**：
   - 400：pageNum/pageSize非法
 
-### 4.3 标记通知已读（铃铛点击）**P0**
+### 4.3 标记通知已读（打开事件）**P0**
 
 - **接口名称**：标记通知事件已读（notification_click）
 - **接口路径**：`/events/{eventId}/read`
@@ -1111,12 +1156,13 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "receiptId": "string", // read_receipts.id（nanoid）
       "eventId": "string",
-      "readAt": "string"     // read_receipts.read_at（ISO8601）
+      "readAt": "string",    // read_receipts.read_at（ISO8601）
+      "assignmentId": "string" // 底层任务分配记录 ID，供前端直达任务去完成（若无则为 null）
     },
     "requestId": "string"
   }
   ```
-- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**不写 `assignment.received_at`**（该动作由 §4.3b 负责）。
+- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**★ 联动：同时将该通知关联的任务分配记录更新为已收到（写 `assignment.received_at`），前端可利用返回的 `assignmentId` 直接进入详情“去完成”任务。**
 - **权限要求**：仅本人事件
 - **异常场景**：
   - 404：eventId不存在
@@ -2812,12 +2858,18 @@ main();
 ws://[host]/ws?token=<JWT Bearer Token>
 ```
 
-- 仅 `employee` 角色（有 `employeeId`）可建立持久连接；`central` / `executive` 无 employeeId，使用 REST 轮询降级。
+- 连接建立后，系统通过 Token 中的 `role` 自动判定并分流：
+  - **店员端 (`employee`)**：放入店员连接池，支持精准的 `employeeId` 定向推送。
+  - **管理端 (`central`, `executive`, `admin`)**：放入看板连接池，统一接收全局的数据刷新信号 (`dashboard_updated`)。
 - 连接成功后服务端立即推送 `connected` 确认帧：
   ```json
-  { "event": "connected", "employeeId": "E001" }
+  // 店员端
+  { "event": "connected", "role": "employee", "employeeId": "E001" }
+  
+  // 管理端
+  { "event": "connected", "role": "central" }
   ```
-- Token 无效或无 employeeId 时，服务端关闭连接（code 4001/4002），前端需重新登录后重连。
+- Token 无效时，服务端关闭连接（code 4001），前端需重新登录后重连。
 
 ---
 
@@ -2881,6 +2933,7 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **接收方：**
 - 完成任务的员工（自身）
+- 同门店的其他员工
 
 **Payload：**
 ```json
@@ -2898,6 +2951,32 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **前端建议处理：**
 - 员工端：展示完成庆祝动效（可选）。
+
+---
+
+### 15.4 看板数据更新通知 `dashboard_updated` **P0**
+
+**触发时机：** 当任何影响看板统计的行为发生时（例如：新任务下发、员工点开通知/任务已读、员工更新任务进度或状态、触发新的预警时）。
+
+**接收方：**
+- 当前在线的总部 (`central`)、行政 (`executive`)、管理员 (`admin`) 角色。
+
+**Payload：**
+```json
+{
+  "event": "dashboard_updated",
+  "data": {
+    "taskId": "string",
+    "assignmentId": "string | null",
+    "status": "string | null",
+    "progress": "number | null",
+    "operationType": "task_dispatched | notification_read | start_task | complete_platform | complete_task | auto_nudge_sent"
+  }
+}
+```
+
+**前端建议处理：**
+- 管理端：监听到该事件后，可以防抖（debounce）几秒钟后静默重新调用 `GET /api/v1/dashboard/overview` 或 `heatmap`、`trend` 等数据接口，从而实现看板数据的**自动刷新**。
 
 ---
 

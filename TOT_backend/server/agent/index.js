@@ -5,6 +5,7 @@ const generateNudgeSkill = require('./skills/generateNudge');
 const generateTaskDescriptionSkill = require('./skills/generateTaskDesc');
 const { generateNudgeSkillDeepSeek } = require('./skills/generateNudge');
 const { generateTaskDescriptionSkillDeepSeek } = require('./skills/generateTaskDesc');
+const parseTaskSkillDeepSeek = require('./skills/parseTask');
 
 // 实例化系统全局 AI Agent
 const mainAgent = new Agent();
@@ -14,5 +15,6 @@ mainAgent.register(generateNudgeSkill);
 mainAgent.register(generateTaskDescriptionSkill);
 mainAgent.register(generateNudgeSkillDeepSeek);
 mainAgent.register(generateTaskDescriptionSkillDeepSeek);
+mainAgent.register(parseTaskSkillDeepSeek);
 
 module.exports = mainAgent;
