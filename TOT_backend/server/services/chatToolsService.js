@@ -70,7 +70,8 @@ function buildRegionFilter(regionScope) {
   }
   if (regionScope.type === 'regional') {
     if (!regionScope.regions || regionScope.regions.length === 0) {
-      return { sql: '', params: [] };
+      // 阻断：返回永假条件，防止空 regions 意外暴露全局数据
+      return { sql: 'AND 1=0', params: [] };
     }
     const placeholders = regionScope.regions.map(() => '?').join(',');
     return { sql: `AND s.region IN (${placeholders})`, params: regionScope.regions };
@@ -105,7 +106,7 @@ function resolveStoreId(storeName) {
  */
 function getOverviewData(taskId, regionScope) {
   const filter = buildRegionFilter(regionScope);
-  const taConditions = ['1=1'];
+  const taConditions = ["t.status = 'dispatched'"];
   const params = [];
 
   if (taskId) {
@@ -224,12 +225,38 @@ function getWarningsData(taskId, regionScope) {
 
 /**
  * getStoreDetailData — 具体门店员工进度明细
+ * @param {string} storeId
+ * @param {string|null} taskId
+ * @param {{ type: string, regions: string[]|null, rtm: string|null }} regionScope
  */
-function getStoreDetailData(storeId, taskId) {
+function getStoreDetailData(storeId, taskId, regionScope) {
   // Fallback: if storeId looks like a name (no S prefix), try resolving
   let resolvedId = storeId;
   if (storeId && !storeId.match(/^S\d+$/i)) {
     resolvedId = resolveStoreId(storeId) || storeId;
+  }
+
+  // Region access control: verify the store is within the executive's authorized scope
+  if (regionScope && regionScope.type !== 'national') {
+    const storeCheck = db.get('SELECT region, rtm FROM stores WHERE id = ?', [resolvedId]);
+    if (storeCheck) {
+      if (regionScope.type === 'regional') {
+        const authorized = regionScope.regions || [];
+        if (!authorized.includes(storeCheck.region)) {
+          throw Object.assign(
+            new Error(`Store ${resolvedId} (region: ${storeCheck.region}) is outside authorized regions`),
+            { status: 403, code: 'AUTH_003' }
+          );
+        }
+      } else if (regionScope.type === 'rtm') {
+        if (storeCheck.rtm !== regionScope.rtm) {
+          throw Object.assign(
+            new Error(`Store ${resolvedId} (rtm: ${storeCheck.rtm}) is outside authorized RTM`),
+            { status: 403, code: 'AUTH_003' }
+          );
+        }
+      }
+    }
   }
 
   // If no taskId, use the most recently created dispatched task for this store
@@ -314,7 +341,7 @@ function executeByName(toolName, params, regionScope) {
       return getWarningsData(params.taskId || null, regionScope);
     case 'getStoreDetailData':
       if (!params.storeId) throw new Error('getStoreDetailData requires storeId');
-      return getStoreDetailData(params.storeId, params.taskId || null);
+      return getStoreDetailData(params.storeId, params.taskId || null, regionScope);
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }

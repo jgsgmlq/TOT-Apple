@@ -16,8 +16,12 @@ function resolveRegionScope(user) {
   if (user.executive_regions) {
     try {
       const regions = JSON.parse(user.executive_regions);
+      if (!Array.isArray(regions) || regions.length === 0) {
+        throw Object.assign(new Error('executive_regions must be a non-empty array for regional scope'), { status: 400, code: 'AUTH_003' });
+      }
       return { type: 'regional', regions, rtm: null };
-    } catch {
+    } catch (e) {
+      if (e.code === 'AUTH_003') throw e;
       // Malformed JSON — fall through to national
     }
   }

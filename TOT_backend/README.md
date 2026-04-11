@@ -76,7 +76,7 @@
 cd server
 npm install
 
-# 2. 初始化数据库（50 店 / 300 员工 / 303 用户）
+# 2. 初始化数据库（10 店 / 100 员工；3 个预置任务 + 300 条分配 + MyPal Mock；详见 db/seed.js）
 npm run seed
 
 # 3. 配置环境变量（在仓库根目录）
@@ -103,7 +103,8 @@ npm run dev
 | REST API | `http://localhost:3000/api/v1` |
 | WebSocket | `ws://localhost:3000/ws?token=<JWT>` |
 
-> **重置数据库：** 删除 `server/database.db`（及同名 `-shm`、`-wal` 文件）后重新执行 `node db/seed.js`。
+> **重置数据库：** 删除 `server/database.db`（及同名 `-shm`、`-wal` 文件）后重新执行 `npm run seed`（或 `node db/seed.js`）。  
+> **重复执行 seed：** 会清空任务分配、通知、MyPal Mock 等并删除非脚本内的门店/员工/任务，再写入当前种子；详见仓库根目录 `README.md`「Seed 数据库」。
 
 ---
 
@@ -145,11 +146,12 @@ cp .env.example .env
 | 用户名 | 密码 | 角色 | 说明 |
 |--------|------|------|------|
 | `central` | `Train2026!` | central | 总部，全量读写权限 |
-| `emp_E001` | `Train2026!` | employee | S001 门店员工（查看/操作本人 assignment） |
-| `executive` | `Train2026!` | executive | 只读看板 |
+| `executive` | `Train2026!` | executive | 只读看板（全国视角） |
+| `executive_huadong` | `Train2026!` | executive | 只读看板，`executive_regions` 预置华东 |
 | `admin` | `Admin2026!` | admin | 管理员 |
+| `emp_E001` | `Train2026!` | employee | S001 店员（示例；共 E001–E100） |
 
-Seed 还生成了所有员工账号：用户名形如 `emp_E{员工编号}`（共 300 个），密码均为 `Train2026!`。
+Seed 生成所有店员登录：`emp_E001`～`emp_E100`（对应 `employees.id`），密码均为 `Train2026!`。亦可用邮箱登录：`e001@mypal.seed.local`～`e100@mypal.seed.local`（与 MyPal `seedId` 对齐）。推荐联调画像见 `npm run seed` 控制台末尾说明（如 `emp_E010`、`emp_E091`）。
 
 ---
 

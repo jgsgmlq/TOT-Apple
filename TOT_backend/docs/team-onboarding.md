@@ -15,7 +15,10 @@
 | 后端端口 | `3000` |
 | 前端开发端口 | `8001` |
 | Git 仓库 | GitHub（问管理员要链接） |
-| 主开发分支 | `dev_joint` |
+| 稳定 / 集成分支 | `dev_joint`（Mac Studio PM2、日常 PR 目标） |
+| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明 |
+
+**关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。下文命令里出现 `$REPO_ROOT` 时，请替换为管理员提供的真实绝对路径，或在终端先执行 `export REPO_ROOT='/实际路径'` 再复制命令。Cursor 里若已用「打开文件夹」选中该根目录，内置终端的当前目录即为 `REPO_ROOT`，此时可直接 `cd TOT_frontend` 等相对路径操作。
 
 ---
 
@@ -119,7 +122,7 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 |--------|------|------|
 | API | `curl` 见上文「第四步」登录接口 | 返回含 `token` 的 JSON |
 | 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000` | 与后端联调正常 |
-| 完整前端（可选） | Mac Studio 上已执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
+| 完整前端（可选） | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
 
 ---
 
@@ -177,7 +180,7 @@ ssh mac-studio
 1. 打开 Cursor → 左侧 Extensions 图标 → 搜索 `Remote - SSH` → Install
 2. 按 `Cmd+Shift+P` → 输入 `Remote-SSH: Connect to Host` → 选 `mac-studio`
 3. 第一次连接会在 Mac Studio 安装 VS Code Server，等待约 1 分钟
-4. 连接成功后：`File → Open Folder → /Users/skylerwang/Desktop/MVP`
+4. 连接成功后：`File → Open Folder` → 选择 **`REPO_ROOT`**（仓库根目录，路径由管理员提供；须包含 `TOT_frontend`、`TOT_backend`）
 
 现在你在 Mac Studio 上写代码，本地 Cursor 只是显示界面。
 
@@ -187,8 +190,8 @@ ssh mac-studio
 
 ### 选项 A：Cursor Remote SSH（推荐）
 
-- 按 Step 4 连接 Mac Studio，打开 `/Users/skylerwang/Desktop/MVP`
-- 在 Mac Studio 的 `TOT_frontend/` 目录工作
+- 按 Step 4 连接 Mac Studio，打开 **`REPO_ROOT`**（仓库根目录）
+- 在 Mac Studio 的 `TOT_frontend/` 目录工作（终端已在 `REPO_ROOT` 时可直接 `cd TOT_frontend`）
 - 在 Cursor 内置终端启动前端：
   ```bash
   cd TOT_frontend
@@ -216,18 +219,19 @@ ssh mac-studio
 1. Cursor Remote SSH 连接 Mac Studio
 2. 切到自己的功能分支：
    ```bash
-   git checkout dev_joint && git pull
+   git checkout dev_joint
+   git pull origin dev_joint
    git checkout -b feature/be-你的功能名
    ```
 3. 开发时单独启动 dev 服务（与 PM2 守护的服务区分）：
    ```bash
-   cd /Users/skylerwang/Desktop/MVP/TOT_backend/server
+   cd "$REPO_ROOT/TOT_backend/server"
    npm run dev   # node --watch，改代码自动重启，跑在 3000 端口
    ```
    > ⚠️ 注意：开发时如果 PM2 的 `tot-api` 已在占用 3000 端口，先停掉：`pm2 stop tot-api`
 4. 功能完成，PR 到 `dev_joint`，merge 后通知管理员执行部署：
    ```bash
-   bash /Users/skylerwang/Desktop/MVP/scripts/deploy.sh
+   bash "$REPO_ROOT/scripts/deploy.sh"
    ```
 
 ---
@@ -247,7 +251,7 @@ ssh mac-studio
 1. 完成上文「管理员基线检查」，确认 `tot-api` 在 `3000` 正常。
 2. 进入前端目录并启动 Vite（需与 Funnel 指向的端口一致，默认 **8001**）：
    ```bash
-   cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+   cd "$REPO_ROOT/TOT_frontend"
    # 若首屏长时间卡在 loading，使用本地覆盖配置（勿提交）：
    cp .env.development.local.example .env.development.local   # 已存在则可跳过；确保含 VITE_FUNNEL_MODE=1
    pnpm run dev
@@ -267,7 +271,7 @@ ssh mac-studio
 ```bash
 # Terminal A（Mac Studio）- 运行前端演示服务
 pm2 status tot-api
-cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+cd "$REPO_ROOT/TOT_frontend"
 pnpm install
 pnpm run build
 pnpm run preview:dist --host 0.0.0.0 --port 4173
@@ -305,11 +309,12 @@ tailscale funnel status
 
 ## Git 分支规范
 
+**稳定与集成以 `dev_joint` 为准：** 日常开发、联调、Mac Studio 上 PM2 运行的代码均以此分支为基准。仓库若仍存在 `main` / `master` 等分支，可能用于历史或后续发布流程，**团队默认仍以 `dev_joint` 为 PR 目标与部署源**。
+
 ```
-main              ← 稳定版，只接受来自 dev_joint 的 PR（需 review）
-  └── dev_joint   ← Mac Studio 始终运行此分支（PM2 守护）
-        ├── feature/be-<简短描述>   ← 后端功能分支
-        └── feature/fe-<简短描述>   ← 前端功能分支
+dev_joint         ← 稳定集成分支；Mac Studio 始终运行此分支（PM2 守护）
+  ├── feature/be-<简短描述>   ← 后端功能分支
+  └── feature/fe-<简短描述>   ← 前端功能分支
 ```
 
 **完整日常流程：**
@@ -329,8 +334,9 @@ git push -u origin feature/fe-ws-notification
 
 # 4. 在 GitHub 上创建 PR，target branch 选 dev_joint
 
-# 5. PR 合并后，管理员在 Mac Studio 执行部署
+# 5. PR 合并后，管理员在 Mac Studio 于 REPO_ROOT 下执行部署
 bash scripts/deploy.sh
+# （若当前不在仓库根目录，使用 bash "$REPO_ROOT/scripts/deploy.sh"）
 ```
 
 **命名规范：**
@@ -340,6 +346,8 @@ bash scripts/deploy.sh
 | 后端功能 | `feature/be-<描述>` | `feature/be-ws-nudge` |
 | 前端功能 | `feature/fe-<描述>` | `feature/fe-employee-ws` |
 | Bug 修复 | `fix/<描述>` | `fix/ws-reconnect` |
+
+也可使用 `feature/<主题>`（如 `feature/Echat`），仍建议 **PR 目标分支选 `dev_joint`**。
 
 ---
 
@@ -357,8 +365,8 @@ pm2 logs tot-api
 # 重启后端（不停机）
 pm2 reload tot-api
 
-# 部署最新代码
-bash /Users/skylerwang/Desktop/MVP/scripts/deploy.sh
+# 部署最新代码（在 REPO_ROOT 下或替换路径）
+bash "$REPO_ROOT/scripts/deploy.sh"
 
 # 获取 Mac Studio 的 Tailscale IP
 tailscale ip -4

@@ -28,7 +28,7 @@ const SYSTEM_PROMPT = `你是一个培训管理系统的意图分类助手。
 - progress_query   查完成率/进度数据（如"Q1培训完成率是多少？"）
 - project_status   查任务列表/状态概览（如"现在有哪些进行中的任务？"）
 - warning_query    查预警/风险门店（如"有哪些门店需要关注？"）
-- drill_down       查具体门店员工进度（如"上���环球港店具体情况怎么样？"）
+- drill_down       查具体门店员工进度（如"上海环球港店具体情况怎么样？"）
 - unknown          闲聊/打招呼，或系统无对应数据的业务问题
 
 unknown 的判断标准：
@@ -66,21 +66,21 @@ async function classify(userMessage, history) {
     });
   } catch (err) {
     console.error('[chatIntentService] LLM call failed:', err.message);
-    // Fallback: treat as progress_query with empty entities
-    return { intentType: 'progress_query', entities: {} };
+    // Fallback: treat as unknown (no data query) with empty entities
+    return { intentType: 'unknown', entities: {} };
   }
 
   try {
     if (typeof raw !== 'string') {
       console.warn('[chatIntentService] LLM returned non-string:', raw);
-      return { intentType: 'progress_query', entities: {} };
+      return { intentType: 'unknown', entities: {} };
     }
     // Strip markdown code fences that LLMs sometimes add despite instructions
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned);
     const intentType = VALID_INTENTS.has(parsed.intentType)
       ? parsed.intentType
-      : 'progress_query';
+      : 'unknown';
     const entities =
       parsed.entities &&
       typeof parsed.entities === 'object' &&
@@ -90,7 +90,7 @@ async function classify(userMessage, history) {
     return { intentType, entities };
   } catch (e) {
     console.warn('[chatIntentService] Failed to parse LLM response:', e.message, 'Raw:', raw);
-    return { intentType: 'progress_query', entities: {} };
+    return { intentType: 'unknown', entities: {} };
   }
 }
 

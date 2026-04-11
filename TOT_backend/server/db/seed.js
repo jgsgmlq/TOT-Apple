@@ -340,9 +340,10 @@ async function generateUsers(employees) {
   const defaultHash = await bcrypt.hash(DEFAULT_PASSWORD, SALT_ROUNDS);
   const adminHash   = await bcrypt.hash(ADMIN_PASSWORD, SALT_ROUNDS);
   const users = [
-    { username: 'central',   password_hash: defaultHash, role: 'central',   store_id: null, employee_id: null },
-    { username: 'executive', password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null },
-    { username: 'admin',     password_hash: adminHash,   role: 'admin',     store_id: null, employee_id: null },
+    { username: 'central',            password_hash: defaultHash, role: 'central',   store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
+    { username: 'executive',          password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
+    { username: 'executive_huadong',  password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null, executive_regions: '["华东"]',    executive_rtm: null },
+    { username: 'admin',              password_hash: adminHash,   role: 'admin',     store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
   ];
   for (const emp of employees) {
     users.push({ username: `emp_${emp.id}`, password_hash: defaultHash, role: 'employee', store_id: emp.store_id, employee_id: emp.id });
@@ -460,16 +461,21 @@ async function seed() {
   // ── users（bcrypt 在事务外）
   for (const u of users) {
     db.run(
-      'INSERT OR IGNORE INTO users (username, password_hash, role, store_id, employee_id) VALUES (?, ?, ?, ?, ?)',
-      [u.username, u.password_hash, u.role, u.store_id, u.employee_id]
+      'INSERT OR IGNORE INTO users (username, password_hash, role, store_id, employee_id, executive_regions, executive_rtm) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [u.username, u.password_hash, u.role, u.store_id, u.employee_id, u.executive_regions ?? null, u.executive_rtm ?? null]
+    );
+    db.run(
+      'UPDATE users SET executive_regions = ?, executive_rtm = ? WHERE username = ?',
+      [u.executive_regions ?? null, u.executive_rtm ?? null, u.username]
     );
   }
   console.log(`  ✓ users: ${users.length} 条`);
 
   console.log('\n✅ Seed 完成');
   console.log('\n── 测试账号 ──────────────────────────────────────');
-  console.log('  central     / Train2026!  (总部看板)');
-  console.log('  executive   / Train2026!  (Executive Chat)');
+  console.log('  central              / Train2026!  (总部看板)');
+  console.log('  executive            / Train2026!  (Executive Chat — 全国)');
+  console.log('  executive_huadong    / Train2026!  (Executive Chat — 华东区总监)');
   console.log('  emp_E001    / Train2026!  (上海环球港，优秀门店，画像0：早鸟完成者)');
   console.log('  emp_E010    / Train2026!  (上海环球港，优秀门店，画像9：高风险待催办)');
   console.log('  emp_E091    / Train2026!  (哈尔滨中央大街店，预警门店)');

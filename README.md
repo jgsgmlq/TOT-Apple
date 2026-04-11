@@ -5,7 +5,7 @@
 > 产品需求口径：以 [`TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md) 为准。
 > 完整文档索引见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
-**更新日期：** 2026-04-10
+**更新日期：** 2026-04-11
 
 ---
 
@@ -36,7 +36,7 @@
 
 ## 项目简介
 
-**TOT（Training On Track）** 是面向 Apple 零售体系的培训任务管理平台，覆盖约 **50 家门店 × 300 名学习对象**。
+**TOT（Training On Track）** 是面向 Apple 零售体系的培训任务管理平台；产品愿景约 **50 家门店 × 300 名学习对象**（见 PRD）。**当前开发用 seed** 为 **10 店 × 100 人**，并预置 **3 个任务**与对应分配，用于看板梯度、预警与 MyPal Mock 联调（详见下文「Seed 数据库」）。
 
 **P0 双主线：**
 1. **任务管理闭环** — 总部下发培训任务 → 学习对象（店员）执行 → 规则引擎自动预警提醒
@@ -70,7 +70,7 @@
 | `executive` | 高管，Executive Chat（自然语言查数） | `/executive/login` → `/executive` | executive / Train2026! |
 | `admin` | 系统管理员 | — | admin / Admin2026! |
 
-> 店员 username 格式：`emp_E{employeeId}`（如 `emp_E002`～`emp_E006`）。`emp_E001` 为店长账号，不用于店员端登录。
+> 店员 username 格式：`emp_{员工表 id}`（如 `emp_E001`～`emp_E100`，对应 `employees.id`）。也可用 **员工邮箱**登录（与 MyPal `seedId` 对齐），形如 `e001@mypal.seed.local`～`e100@mypal.seed.local`。联调推荐账号见「测试账号」与执行 `npm run seed` 末尾打印。
 
 **本地开发完整网址（Vite 默认端口 8001）：**
 
@@ -108,7 +108,7 @@ TOT-Apple/                         # 仓库根目录
     │   ├── services/              # 业务逻辑层（autoNudge · stateSync 等）
     │   ├── db/
     │   │   ├── schema.js          # 建表 SQL
-    │   │   └── seed.js            # 种子数据（50 门店 × 300 员工）
+    │   │   └── seed.js            # 种子数据（10 店 × 100 人 + 预置任务/分配/MyPal Mock）
     │   ├── ws/
     │   │   └── manager.js         # WebSocket 广播与角色裁剪
     │   ├── jobs/
@@ -291,18 +291,19 @@ cd TOT_backend/server
 npm run seed
 ```
 
-等价于 `node db/seed.js`。首次拉仓库、删库重建后、或需要补齐 **MyPal Mock**（`mypal_learning_mock`）与基础账号时，都应执行一次。
+等价于 `node db/seed.js`。首次拉仓库、删库重建后、或需要与脚本定义对齐（含 MyPal Mock、预置任务）时，都应执行一次。
 
-**Seed 会写入的内容（摘要）：**
+**Seed 会写入的内容（摘要，与 `TOT_backend/server/db/seed.js` 一致）：**
 
-- `stores`：50 家门店  
-- `employees`：300 名员工（含与 MyPal Mock 对齐的 `email`）  
-- `users`：系统账号（`central` / `executive` / `admin`）+ 各 `emp_*` 店员账号（`INSERT OR IGNORE`，已存在则跳过插入）  
-- `mypal_learning_mock`：联调用学习进度 Mock（`INSERT OR REPLACE` 按主键覆盖）
+- `stores`：**10** 家门店（华东/华南/华北/华西/东北，含 Monobrand / Multibrand / Carrier / Education 等 RTM 与档位 archetype）  
+- `employees`：**100** 名（每店 10 人，`email` 为 `e001@mypal.seed.local`～`e100@mypal.seed.local`，与 MyPal Mock 对齐）  
+- `tasks`：**3** 条预置任务（`TASK_A` 已过期、`TASK_B` 临近截止、`TASK_C` 刚下发；脚本内 `INSERT OR REPLACE`）  
+- `task_assignments`：**300** 条（100 人 × 3 任务，含差异化完成状态与平台进度）  
+- `notification_events`：与上述分配对应的 `task_assigned` 初始事件  
+- `mypal_learning_mock`：联调学习进度 Mock（`INSERT OR REPLACE`）  
+- `users`：`central`、`executive`、`executive_huadong`（华东辖区）、`admin`，以及 `emp_E001`～`emp_E100`（事务外 `INSERT OR IGNORE` + 更新 executive 辖区字段）
 
-**不会**由 Seed 清空或重建：`tasks`、`task_assignments`、`notification_events` 等业务表。你在系统里创建的任务、下发记录会保留；若希望「连任务一起回到干净状态」，请使用下面的**整库重置**。
-
-**重复执行 `npm run seed`：** 对 stores / employees / users 多为幂等（忽略已存在行）；`mypal_learning_mock` 会按脚本逻辑覆盖更新。适合补数据、换机后对齐基线，不适合当作「删业务数据」的唯一手段。
+**重复执行 `npm run seed` 会先清空再对齐（重要）：** 按外键顺序删除 `read_receipts`、`notification_events`、`nudge_records`、`task_assignments`、聊天相关表、`mypal_learning_mock`；删除 **不在**本脚本 `TASKS` 列表中的 `tasks`；删除全部店员 `users` 与全部 `employees`；删除 **不在** `STORE_DEFS` 中的 `stores`；再重新写入上述种子。**你在库里自建的任务、分配、通知等会被清掉**（除非任务 id 恰为脚本保留的 `TASK_A`/`TASK_B`/`TASK_C` 且你愿意接受分配被重建）。若只想「空库从零开始」，仍可用下文**整库重置**。
 
 ### 整库重置（从零开始）
 
@@ -336,15 +337,15 @@ npm run dev     # 再启动 API
 | 账号 | 密码 | 角色 | 说明 |
 |------|------|------|------|
 | `central` | `Train2026!` | 总部运营 | 创建/下发任务，查看全网看板 |
-| `executive` | `Train2026!` | Executive（P1）| 自然语言查询看板 |
+| `executive` | `Train2026!` | Executive（P1）| 自然语言查询看板（全国视角） |
+| `executive_huadong` | `Train2026!` | Executive（P1）| `executive_regions` 预置为华东，用于辖区演示 |
 | `admin` | `Admin2026!` | 系统管理员 | 数据维护 |
-| `emp_E001` | `Train2026!` | 店员（S001）| 注意：E001 在业务上是店长账号 |
-| `emp_E002` | `Train2026!` | 店员（S001）| 推荐用于店员端测试 |
-| `emp_E003` | `Train2026!` | 店员（S001）| |
-| `emp_E004` | `Train2026!` | 店员（S001）| |
-| `emp_E005` | `Train2026!` | 店员（S001）| |
-| `emp_E006` | `Train2026!` | 店员（S001）| |
-| `store_S001` | `Train2026!` | 历史店长账号 | （已移除 store_manager 角色，此账号仅历史兼容）|
+| `emp_E001` | `Train2026!` | 店员（S001 上海环球港）| Seed 标注：优秀门店、画像 0（早鸟完成者） |
+| `emp_E002` | `Train2026!` | 店员（S001）| 通用店员端 smoke 测试 |
+| `emp_E010` | `Train2026!` | 店员（S001）| Seed 标注：优秀门店、画像 9（高风险待催办） |
+| `emp_E091` | `Train2026!` | 店员（S010 哈尔滨）| Seed 标注：预警门店 |
+
+其余店员：`emp_E003`～`emp_E100` 等未在表中逐行列出；**所有**店员邮箱为 `e001@mypal.seed.local`～`e100@mypal.seed.local`，密码均为 `Train2026!`。更完整的画像与门店档位说明以 **`npm run seed` 控制台末尾输出** 为准。
 
 ---
 
@@ -392,8 +393,8 @@ stores → employees → users → tasks → task_assignments
 
 | 表 | 说明 |
 |----|------|
-| `stores` | 50 家门店，含 RTM 渠道类型（Monobrand / Multibrand / Carrier 等）、区域、城市 |
-| `employees` | 300 名店员，归属门店，含 MyPAL email 对接字段 |
+| `stores` | **Seed：10 家**；含 RTM（Monobrand / Multibrand / Carrier / Education 等）、区域、城市（PRD 目标规模见产品文档） |
+| `employees` | **Seed：100 名**；归属门店，含 MyPal `seedId` 对齐的 `email` |
 | `users` | 登录账号，与 employees 关联（`role`: central / employee / admin） |
 | `tasks` | 培训任务，含平台列表、RTM 筛选规则、截止时间、预警规则（JSON） |
 | `task_assignments` | 任务 × 员工的分配记录，状态机最小执行单元 |
