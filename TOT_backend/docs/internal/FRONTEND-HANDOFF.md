@@ -1,8 +1,8 @@
 # 前端对接交付文档
 
-**版本:** 1.0.1 | **日期:** 2026-04-09 | **后端负责人:** Dev1 + Dev2
+**版本:** 1.0.2 | **日期:** 2026-04-11 | **后端负责人:** Dev1 + Dev2
 
-**产品口径：** 需求与角色定义见 `docs/product/PRODUCT_REQUIREMENTS.md`。PRD 下 **店长为学习对象时与店员共用同一学习端**，**无独立店长管理端**；下表测试账号若含 `store_manager`，用于 JWT 角色与联调，含义以 PRD §2.2 为准。
+**产品口径：** 需求与角色定义见 `docs/product/PRODUCT_REQUIREMENTS.md`。PRD 下 **店长为学习对象时与店员共用同一学习端**，**无独立店长管理端**。接口仍可能返回 `store_manager` JWT 场景（规格/历史兼容）；**当前 `db/seed.js` 仅生成 `employee` 店员账号**，店长端联调请用 PRD 约定或自建用户。
 
 ---
 
@@ -23,7 +23,7 @@
 ```bash
 cd server
 npm install --registry https://registry.npmjs.org
-node db/seed.js      # 初始化数据库，写入 50 店 / 300 员工 / 303 用户
+npm run seed         # 初始化数据库：10 店 / 100 员工 / 3 预置任务 / 300 条分配 / MyPal Mock / 见 seed.js
 npm start            # 默认监听 PORT=3000（可通过环境变量覆盖）
 ```
 
@@ -32,7 +32,7 @@ npm start            # 默认监听 PORT=3000（可通过环境变量覆盖）
 | REST API 基础路径 | `http://localhost:3000/api/v1` |
 | WebSocket | `ws://localhost:3000/ws?token=<JWT>` |
 
-> **重新初始化：** 删除 `server/database.db`（及 `-shm` / `-wal`）后重新执行 `node db/seed.js`。
+> **重新初始化：** 删除 `server/database.db`（及 `-shm` / `-wal`）后重新执行 `npm run seed`。重复执行 seed 会清空分配/通知等并重建种子数据，详见仓库根目录 `README.md`「Seed 数据库」。
 
 ---
 
@@ -41,10 +41,14 @@ npm start            # 默认监听 PORT=3000（可通过环境变量覆盖）
 | 用户名 | 密码 | 角色 | 说明 |
 |--------|------|------|------|
 | `central` | `Train2026!` | central | 总部，全量读写权限 |
-| `store_S001` | `Train2026!` | store_manager | S001 门店店长 |
-| `emp_E002` | `Train2026!` | employee | S001 门店普通店员 |
-| `executive` | `Train2026!` | executive | 只读看板，无写权限 |
+| `executive` | `Train2026!` | executive | 只读看板（全国），无写权限 |
+| `executive_huadong` | `Train2026!` | executive | 只读看板，辖区预置华东 |
 | `admin` | `Admin2026!` | admin | 管理员，等同 central + 额外维护权限 |
+| `emp_E002` | `Train2026!` | employee | S001 店员（通用 smoke） |
+| `emp_E010` | `Train2026!` | employee | 优秀门店滞后画像（催办联调） |
+| `emp_E091` | `Train2026!` | employee | 预警门店（S010） |
+
+其余店员：`emp_E001`～`emp_E100`；亦可使用邮箱 `e001@mypal.seed.local`～`e100@mypal.seed.local` 登录，密码均为 `Train2026!`。完整说明以 `npm run seed` 末尾打印为准。
 
 所有账号通过 `POST /api/v1/auth/login` 获取 JWT，有效期 7 天。
 
@@ -75,7 +79,7 @@ Authorization: Bearer <token>
 
 ### 5.3 WebSocket 覆盖范围
 
-WebSocket 推送仅支持 **employee** 和 **store_manager** 角色（有 `employeeId` 的账号）。`central` / `executive` / `admin` 不支持 WS 连接，需通过轮询 REST API 获取实时数据。
+WebSocket 推送仅支持 **employee** 和 **store_manager** 角色（JWT 需带 `employeeId`）。`central` / `executive` / `admin` 不支持 WS 连接，需通过轮询 REST API 获取实时数据。当前 seed 仅含 `employee` 店员账号。
 
 ### 5.4 assignments 列表响应结构
 
