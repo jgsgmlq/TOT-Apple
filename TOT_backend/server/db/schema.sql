@@ -31,8 +31,10 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL,
   store_id      TEXT REFERENCES stores(id),
   employee_id   TEXT UNIQUE REFERENCES employees(id),
-  last_login_at TEXT,
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  last_login_at     TEXT,
+  executive_regions TEXT,   -- JSON array e.g. '["华东","华南"]'，NULL = 全国
+  executive_rtm     TEXT,   -- RTM 渠道名，NULL = 不按渠道分管
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 4. tasks

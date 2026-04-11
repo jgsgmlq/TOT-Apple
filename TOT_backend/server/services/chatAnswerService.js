@@ -18,17 +18,11 @@ const SYSTEM_PROMPT = `你是一个培训数据分析助手，请根据以下查
 - followUpSuggestions：最多 3 项，以"可追问："开头；无建议时返回 []
 - 如果查询结果为空或 null，overview 说明"暂无相关数据"，其余字段返回空数组`;
 
-const FALLBACK_OVERVIEW = '抱歉，回复生成时遇到了问题，请稍后重试。';
-
-/** Returns a fresh fallback object to prevent shared mutable state. */
-function makeFallback() {
-  return { overview: FALLBACK_OVERVIEW, keyNumbers: [], attentionPoints: [], followUpSuggestions: [] };
-}
-
 /**
  * Format tool results into a structured ReplyContent object.
+ * Throws { status: 503, code: 'CHAT_001' } on LLM failure -- caller (route) returns HTTP 503.
  * @param {string} userMessage
- * @param {any} toolResult  — result from chatToolsService.executeByName (or null for unknown intent)
+ * @param {any} toolResult  -- result from chatToolsService.executeByName (or null for unknown intent)
  * @param {Array<{role:string, content:string}>} history
  * @returns {Promise<ReplyContent>}
  */
@@ -68,27 +62,30 @@ async function format(userMessage, toolResult, history) {
     });
   } catch (err) {
     console.error('[chatAnswerService] LLM call failed:', err.message);
-    return makeFallback();
+    throw Object.assign(new Error('LLM inference failed'), { status: 503, code: 'CHAT_001' });
   }
 
+  if (typeof raw !== 'string' || !raw.trim()) {
+    console.warn('[chatAnswerService] LLM returned empty/non-string response');
+    throw Object.assign(new Error('LLM returned empty response'), { status: 503, code: 'CHAT_001' });
+  }
+
+  // Strip markdown code fences that LLMs sometimes add despite instructions
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let parsed;
   try {
-    if (typeof raw !== 'string') {
-      console.warn('[chatAnswerService] LLM returned non-string:', raw);
-      return makeFallback();
-    }
-    // Strip markdown code fences that LLMs sometimes add despite instructions
-    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(cleaned);
-    return {
-      overview:             String(parsed.overview || ''),
-      keyNumbers:           Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
-      attentionPoints:      Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
-      followUpSuggestions:  Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
-    };
+    parsed = JSON.parse(cleaned);
   } catch (e) {
     console.warn('[chatAnswerService] Failed to parse LLM response:', e.message, 'Raw:', raw);
-    return makeFallback();
+    throw Object.assign(new Error('LLM returned non-JSON response'), { status: 503, code: 'CHAT_001' });
   }
+
+  return {
+    overview:             String(parsed.overview || ''),
+    keyNumbers:           Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
+    attentionPoints:      Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
+    followUpSuggestions:  Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
+  };
 }
 
 module.exports = { format };
