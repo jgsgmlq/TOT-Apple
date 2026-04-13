@@ -1,6 +1,6 @@
 # 数据库现状文档
 
-**版本:** 2.0.0 | **更新:** 2026-04-10 | **权威来源:** `server/db/schema.sql` + `server/db/index.js`
+**版本:** 2.0.1 | **更新:** 2026-04-13 | **与代码同步:** `server/db/schema.sql`、`server/db/index.js`
 
 ---
 
@@ -19,6 +19,7 @@
 | `mypal_learning_mock` | 开发联调表，生产环境需替换为真实 MyPal 同步层 |
 | `chat_sessions` | EChat 会话表，含 `user_id`、`role_scope`、`regions`、`rtm` |
 | `chat_messages` | EChat 消息表，含 `role`、`content`（JSON）、`intent_type` |
+| `dashboard_insights` | 看板智能洞察：模块类型、`task_id`、下钻筛选、`content`、`context_json`、**`up_count`/`down_count`（赞/踩次数，不记投票人）**、创建人 |
 
 ---
 
@@ -269,6 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_mypal_mock_task_week ON mypal_learning_mock(task_
 | `migrateNotificationEventsContent` | 旧库补 `notification_events.content` 列 |
 | `migrateNudgeRecordsConstraints` | 旧库重建 `nudge_records` 以补齐 CHECK 约束 |
 | `ensureMypalLearningMockIndexes` | 补齐 `mypal_learning_mock` 索引 |
+| `migrateDashboardInsightCounts` | 旧库补 `dashboard_insights.up_count` / `down_count` 列 |
 
 ---
 
@@ -325,4 +327,38 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 ```
 
-**字段说明：** `role='user'` 时 content 为原始提问文本；`role='assistant'` 时 content 为 JSON 序列化的 `ReplyContent` 对象。`intent_type` 仅 assistant 行填写���
+**字段说明：** `role='user'` 时 content 为原始提问文本；`role='assistant'` 时 content 为 JSON 序列化的 `ReplyContent` 对象。`intent_type` 仅 assistant 行填写。
+
+---
+
+## 12. dashboard_insights（看板智能洞察）
+
+```sql
+CREATE TABLE IF NOT EXISTS dashboard_insights (
+  id                  TEXT PRIMARY KEY,
+  module_type         TEXT NOT NULL
+                        CHECK (module_type IN ('trend', 'heatmap_rank', 'funnel', 'warning_stats')),
+  task_id             TEXT REFERENCES tasks(id),
+  filter_rtm          TEXT,
+  filter_format       TEXT,
+  filter_dealer_name  TEXT,
+  filter_store_id     TEXT REFERENCES stores(id),
+  extra_params_json   TEXT,
+  content             TEXT NOT NULL,
+  context_json        TEXT,
+  up_count            INTEGER NOT NULL DEFAULT 0
+                        CHECK (up_count >= 0),
+  down_count          INTEGER NOT NULL DEFAULT 0
+                        CHECK (down_count >= 0),
+  created_by          INTEGER NOT NULL REFERENCES users(id),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (extra_params_json IS NULL OR (json_valid(extra_params_json) AND json_type(extra_params_json) = 'object')),
+  CHECK (context_json IS NULL OR (json_valid(context_json) AND json_type(context_json) = 'object'))
+);
+CREATE INDEX IF NOT EXISTS idx_di_module_task ON dashboard_insights(module_type, task_id);
+CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
+```
+
+**字段说明：** `module_type` 枚举：`trend`、`heatmap_rank`、`funnel`、`warning_stats`。`context_json` 存生成洞察时使用的聚合事实（便于审计）；`extra_params_json` 存 `trendType`、`date`、`rtmLevel` 等。**`up_count` / `down_count`** 为赞、踩累计次数，不存投票人。
+
+**迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列。

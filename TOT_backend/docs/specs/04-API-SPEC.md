@@ -1,5 +1,13 @@
 # ToT API 接口定义文档
 
+### v1.4.13（2026-04-13）
+
+- **看板智能洞察投票**：赞/踩仅累加 **`dashboard_insights.up_count` / `down_count`**，不记录投票人。
+
+### v1.4.12（2026-04-13）
+
+- **看板智能洞察**：新增 **`POST /dashboard/insights`**（`module`：`trend` | `heatmap_rank` | `funnel` | `warning_stats`），基于看板同源聚合数据调用 LLM 生成短文案，落库表 **`dashboard_insights`**；**`POST /dashboard/insights/{insightId}/vote`** 提交点赞/点踩（`vote`: `up` | `down`）。详见 §5.7。
+
 ### v1.4.11（2026-04-01）
 
 - **看板门店下钻（可选）**：`GET /dashboard/overview`、`/heatmap`、`/store-rank`、`/warnings`、`/trend` 支持可选查询参数 **`rtm`、`format`、`dealerName`、`storeId`**（可组合，AND，对应 `stores` 表：`rtm` → `format` → `dealer_name` → `id`）。不传参时与旧行为一致。概览中 **推送人数 / 已读人数** 在下钻且带 **`taskId`** 时与 assignment 口径一致（经 `notification_events`/`read_receipts` 与 `stores` 关联过滤）。**热力图** `rtmLevel` 新增 **`dealer` / `dealer_name` / `dealername`**（按经销商名聚合）、**`store`**（按门店聚合，`rtmValue` 为店名）。
@@ -76,8 +84,8 @@
 
 | 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.11 |
-| 更新时间 | 2026-04-01 |
+| 文档版本 | 1.4.13 |
+| 更新时间 | 2026-04-13 |
 | 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
@@ -1734,6 +1742,75 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **权限要求**：`central` / `admin`
 - **异常场景**：
   - 400：缺少 `taskId`（`DASH_001`）；未传 `storeId`（`DASH_004`）
+
+### 5.7 看板智能洞察（生成 + 点赞/点踩）**P0**
+
+- **接口名称**：生成看板模块 AI 洞察文案；对指定洞察投票
+- **接口路径**：`POST /dashboard/insights`、`POST /dashboard/insights/{insightId}/vote`
+- **完整 URL 示例**：`POST /api/v1/dashboard/insights`、`POST /api/v1/dashboard/insights/{insightId}/vote`
+- **请求方法**：POST
+- **请求头**：`Authorization: Bearer {token}`
+
+#### 5.7.1 生成洞察 `POST /dashboard/insights`
+
+- **请求体（JSON）**：
+  | 字段 | 类型 | 必选 | 说明 |
+  |------|------|------|------|
+  | module | string | 是 | `trend`（完成人数趋势）、`heatmap_rank`（区域/热力 + 门店排行摘要）、`funnel`（漏斗/链路类 KPI）、`warning_stats`（预警相关统计） |
+  | taskId | string | 条件 | `trend`、`heatmap_rank` **必填**；`funnel`、`warning_stats` 可选（不传则按全任务范围） |
+  | rtm / format / dealerName / storeId | string | 否 | 与 §5.1 下钻一致，可组合 AND |
+  | trendType | string | 否 | 仅 `module=trend`：`daily`（默认）或 `hourly` |
+  | date | string | 否 | 仅 `trendType=hourly` 时建议传 `YYYY-MM-DD`，默认当天 |
+  | rtmLevel | string | 否 | 仅 `heatmap_rank`：与 §5.2 热力图维度一致，默认 `rtm` |
+
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "insightId": "string",
+      "module": "funnel",
+      "taskId": "string|null",
+      "filters": { "rtm": null, "format": null, "dealerName": null, "storeId": null },
+      "content": "string",
+      "createdAt": "string",
+      "voteSummary": { "up": 0, "down": 0 }
+    },
+    "requestId": "string"
+  }
+  ```
+
+- **接口说明**：服务端将当前模块相关的**聚合事实**（写入 `context_json`）送入 LLM（优先 DeepSeek，失败时可回退 Floodgate/Gemini，以部署环境为准），生成 2～4 句中文洞察，持久化至 **`dashboard_insights`**。
+- **权限要求**：`central` / `executive` / `admin`
+- **异常场景**：400（`module` 非法、缺 `taskId` 等，`INSIGHT_001` / `INSIGHT_002`）；404/503 见实现
+
+#### 5.7.2 点赞/点踩 `POST /dashboard/insights/{insightId}/vote`
+
+- **路径参数**：`insightId` — `POST /insights` 返回的 `insightId`
+- **请求体**：
+  ```json
+  { "vote": "up" }
+  ```
+  `vote` 取值：`up`（赞）或 `down`（踩）。每次请求对对应计数 **+1**，**不记录投票人**（可被重复点击累加，若产品需防刷需另加频控）。
+
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "insightId": "string",
+      "up": 2,
+      "down": 1
+    },
+    "requestId": "string"
+  }
+  ```
+
+- **接口说明**：在 **`dashboard_insights`** 行上更新 **`up_count` / `down_count`**。
+- **权限要求**：`central` / `executive` / `admin`
+- **异常场景**：400（`vote` 非法 `INSIGHT_003`）；404（洞察不存在 `INSIGHT_404`）
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
