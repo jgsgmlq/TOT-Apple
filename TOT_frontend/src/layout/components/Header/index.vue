@@ -72,7 +72,23 @@
       </n-breadcrumb>
     </div>
     <div class="layout-header-right">
-      <!-- 个人中心静态展示 (已移除原有的 GitHub/搜索/全屏/退出登录/项目配置 等按钮) -->
+      <!-- 个人中心静态展示 (已移除原有的 GitHub/搜索/退出登录/项目配置 等按钮) -->
+      
+      <!-- 全屏按钮 -->
+      <div
+        class="layout-header-trigger layout-header-trigger-min"
+        @click="toggleFullScreen"
+      >
+        <n-tooltip placement="bottom">
+          <template #trigger>
+            <n-icon size="18">
+              <component :is="fullscreenIcon" />
+            </n-icon>
+          </template>
+          <span>全屏</span>
+        </n-tooltip>
+      </div>
+
       <div class="layout-header-trigger layout-header-trigger-min static-avatar">
         <div class="avatar">
           <n-avatar :src="websiteConfig.logo">
@@ -240,7 +256,12 @@
       // 全屏切换
       const toggleFullScreen = () => {
         if (!document.fullscreenElement) {
-          document.documentElement.requestFullscreen();
+          // 只全屏主要的 content 区域，这样就可以把左侧菜单和上方的 header 挤掉
+          const mainView = document.querySelector('.layout-content');
+          const p = mainView ? mainView.requestFullscreen() : document.documentElement.requestFullscreen();
+          p.then(() => {
+            message.info('已进入全屏模式，按 ESC 键即可退出', { duration: 3000 });
+          }).catch(() => {});
         } else {
           if (document.exitFullscreen) {
             document.exitFullscreen();
