@@ -7,16 +7,18 @@
 
 ## 前置信息
 
-| 项目 | 值 |
-|------|----|
-| 共享服务器 | Mac Studio（始终开机） |
-| macOS 用户名 | `skylerwang` |
-| Mac Studio Tailscale IP | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`） |
-| 后端端口 | `3000` |
-| 前端开发端口 | `8001` |
-| Git 仓库 | GitHub（问管理员要链接） |
-| 稳定 / 集成分支 | `dev_joint`（Mac Studio PM2、日常 PR 目标） |
-| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明 |
+
+| 项目                           | 值                                            |
+| ---------------------------- | -------------------------------------------- |
+| 共享服务器                        | Mac Studio（始终开机）                             |
+| macOS 用户名                    | `skylerwang`                                 |
+| Mac Studio Tailscale IP      | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`） |
+| 后端端口                         | `3000`                                       |
+| 前端开发端口                       | `8001`                                       |
+| Git 仓库                       | GitHub（问管理员要链接）                              |
+| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）         |
+| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明                          |
+
 
 **关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。下文命令里出现 `$REPO_ROOT` 时，请替换为管理员提供的真实绝对路径，或在终端先执行 `export REPO_ROOT='/实际路径'` 再复制命令。Cursor 里若已用「打开文件夹」选中该根目录，内置终端的当前目录即为 `REPO_ROOT`，此时可直接 `cd TOT_frontend` 等相对路径操作。
 
@@ -48,18 +50,18 @@ Tailscale 是一个 P2P VPN 工具，安装后无论你在哪个网络（家里�
 
 **创建 Tailscale 账号并建立 Network：**
 
-1. 访问 https://tailscale.com，点击右上角 **Get started**
+1. 访问 [https://tailscale.com，点击右上角](https://tailscale.com，点击右上角) **Get started**
 2. 用 Google 或 GitHub 账号注册（推荐 Google）
-3. 下载 Mac 客户端：https://tailscale.com/download/mac，安装后打开
+3. 下载 Mac 客户端：[https://tailscale.com/download/mac，安装后打开](https://tailscale.com/download/mac，安装后打开)
 4. 点击菜单栏 Tailscale 图标 → **Log in** → 用刚注册的账号登录
 5. 登录成功后 Mac Studio 自动加入你的 Network，获得固定虚拟 IP `100.65.95.128`
 
 **邀请团队成员加入 Network：**
 
-1. 浏览器打开：https://login.tailscale.com/admin/invite
+1. 浏览器打开：[https://login.tailscale.com/admin/invite](https://login.tailscale.com/admin/invite)
 2. 点击 **Generate invite link**，生成邀请链接
 3. 把链接通过微信/飞书发给每个团队成员（链接默认有效期 24 小时，过期可重新生成）
-4. 成员接受后，在 https://login.tailscale.com/admin/machines 能看到他们的设备上线
+4. 成员接受后，在 [https://login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines) 能看到他们的设备上线
 
 ---
 
@@ -73,12 +75,14 @@ Tailscale 是一个 P2P VPN 工具，安装后无论你在哪个网络（家里�
 
 **第二步：下载并安装 Tailscale**
 
-| 设备 | 下载地址 |
-|------|---------|
-| Mac | https://tailscale.com/download/mac |
-| Windows | https://tailscale.com/download/windows |
-| iPhone | App Store 搜索 Tailscale |
-| Android | Google Play 搜索 Tailscale |
+
+| 设备      | 下载地址                                                                             |
+| ------- | -------------------------------------------------------------------------------- |
+| Mac     | [https://tailscale.com/download/mac](https://tailscale.com/download/mac)         |
+| Windows | [https://tailscale.com/download/windows](https://tailscale.com/download/windows) |
+| iPhone  | App Store 搜索 Tailscale                                                           |
+| Android | Google Play 搜索 Tailscale                                                         |
+
 
 **第三步：登录 Tailscale**
 
@@ -106,11 +110,13 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 
 **常见问题：**
 
-| 现象 | 原因 | 解决 |
-|------|------|------|
-| ping 不通 | Tailscale 未启动 | 点开 App，确认图标是绿色 |
-| ping 不通 | 未加入同一 Network | 确认用接受邀请时的账号登录，不是新注册账号 |
+
+| 现象                          | 原因               | 解决                      |
+| --------------------------- | ---------------- | ----------------------- |
+| ping 不通                     | Tailscale 未启动    | 点开 App，确认图标是绿色          |
+| ping 不通                     | 未加入同一 Network    | 确认用接受邀请时的账号登录，不是新注册账号   |
 | API 返回 `Connection refused` | Mac Studio 后端未运行 | 通知管理员执行 `pm2 status` 检查 |
+
 
 ---
 
@@ -118,11 +124,13 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 
 成员完成 Step 1-B 后，建议按下面确认 **路径 A**（不经过公网 Funnel）可用：
 
-| 检查项 | 操作 | 预期 |
-|--------|------|------|
-| API | `curl` 见上文「第四步」登录接口 | 返回含 `token` 的 JSON |
-| 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000` | 与后端联调正常 |
-| 完整前端（可选） | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
+
+| 检查项           | 操作                                                                                     | 预期                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| API           | `curl` 见上文「第四步」登录接口                                                                    | 返回含 `token` 的 JSON                                                                       |
+| 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000`                                                   | 与后端联调正常                                                                                  |
+| 完整前端（可选）      | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
+
 
 ---
 
@@ -180,7 +188,7 @@ ssh mac-studio
 1. 打开 Cursor → 左侧 Extensions 图标 → 搜索 `Remote - SSH` → Install
 2. 按 `Cmd+Shift+P` → 输入 `Remote-SSH: Connect to Host` → 选 `mac-studio`
 3. 第一次连接会在 Mac Studio 安装 VS Code Server，等待约 1 分钟
-4. 连接成功后：`File → Open Folder` → 选择 **`REPO_ROOT`**（仓库根目录，路径由管理员提供；须包含 `TOT_frontend`、`TOT_backend`）
+4. 连接成功后：`File → Open Folder` → 选择 `**REPO_ROOT**`（仓库根目录，路径由管理员提供；须包含 `TOT_frontend`、`TOT_backend`）
 
 现在你在 Mac Studio 上写代码，本地 Cursor 只是显示界面。
 
@@ -190,7 +198,7 @@ ssh mac-studio
 
 ### 选项 A：Cursor Remote SSH（推荐）
 
-- 按 Step 4 连接 Mac Studio，打开 **`REPO_ROOT`**（仓库根目录）
+- 按 Step 4 连接 Mac Studio，打开 `**REPO_ROOT**`（仓库根目录）
 - 在 Mac Studio 的 `TOT_frontend/` 目录工作（终端已在 `REPO_ROOT` 时可直接 `cd TOT_frontend`）
 - 在 Cursor 内置终端启动前端：
   ```bash
@@ -214,25 +222,108 @@ ssh mac-studio
 
 ## Step 6：后端开发者工作方式
 
-后端开发者**必须在 Mac Studio 上工作**（SQLite 数据库文件在那里，不能分布）。**数据如何协作维护、是否进 Git、何时跑 seed**，见下文「团队协作：如何维护数据（SQLite）」。
+后端须在 **Mac Studio** 上开发（SQLite 单文件在同一台机器，不能当「每人一份远程库」用）。`**database.db` 不进 Git、何时跑 seed** 见下文「团队协作：如何维护数据（SQLite）」。
 
-1. Cursor Remote SSH 连接 Mac Studio
-2. 切到自己的功能分支：
-   ```bash
-   git checkout dev_joint
-   git pull origin dev_joint
-   git checkout -b feature/be-你的功能名
-   ```
-3. 开发时单独启动 dev 服务（与 PM2 守护的服务区分）：
-   ```bash
-   cd "$REPO_ROOT/TOT_backend/server"
-   npm run dev   # node --watch，改代码自动重启，跑在 3000 端口
-   ```
-   > ⚠️ 注意：开发时如果 PM2 的 `tot-api` 已在占用 3000 端口，先停掉：`pm2 stop tot-api`
-4. 功能完成，PR 到 `dev_joint`，merge 后通知管理员执行部署：
-   ```bash
-   bash "$REPO_ROOT/scripts/deploy.sh"
-   ```
+**Git（集成分支：`dev_joint`）**
+
+以下命令均在 **REPO_ROOT** 下执行；`feature/be-你的功能名` 可换成 `feature/EChat` 等团队约定命名。  
+代码块里以 `#` 开头的行是 Shell 注释，复制整段执行时会被忽略；也可只复制没有 `#` 的命令行。
+
+**1）每个新功能：从最新主干开分支并推到远程**
+
+```bash
+# 回到集成分支并拉取远程最新提交
+git checkout dev_joint
+git pull origin dev_joint
+# 基于当前 dev_joint 新建功能分支（把分支名改成你的）
+git checkout -b feature/be-你的功能名
+# 首次推送并建立本地分支与 origin 上同名分支的跟踪关系
+git push -u origin feature/be-你的功能名
+```
+
+**2）日常开发：在同一功能分支上可反复执行**
+
+```bash
+# 查看有哪些文件被改动
+git status
+# 暂存改动；也可写成 git add path/to/file 只加部分文件
+git add .
+git commit -m "feat: 简短说明"
+git push
+```
+
+提交信息前缀可按约定使用 `feat:`、`fix:`、`chore:` 等。
+
+**3）定期把 `dev_joint` 并进当前分支（须在功能分支上执行）**
+
+```bash
+# 把远程 dev_joint 的更新 rebase 到当前功能分支顶端
+git pull --rebase origin dev_joint
+```
+
+不要用无参数的 `git pull --rebase`，那样追的是当前分支的 upstream，**不一定**是 `dev_joint`。
+
+若 rebase 过程中出现冲突：在编辑器里解决冲突后执行：
+
+```bash
+# 标记冲突已解决
+git add .
+# 继续 rebase；若还有下一轮冲突会再次停下，重复「改文件 → git add → git rebase --continue」
+git rebase --continue
+```
+
+若本次 rebase **之前**已经 `push` 过该功能分支，历史被改写后需要覆盖远程**功能分支**（比 `--force` 更安全；**不要**对 `dev_joint` 做 force push）：
+
+```bash
+# 仅推你自己的功能分支；若提示被拒绝，确认当前分支名不是 dev_joint
+git push --force-with-lease
+```
+
+**4）提 PR 与合并后收尾**
+
+- 在 GitHub 创建 PR：**base** 选 `dev_joint`，**compare** 选你的功能分支。
+
+合并完成后在本地清理：切回主干、更新、删除**本地**已合并的功能分支。
+
+```bash
+git checkout dev_joint
+git pull origin dev_joint
+# -d 为安全删除：未合并完会拒绝；强删可用 -D（慎用）
+git branch -d feature/be-你的功能名
+```
+
+远程功能分支若不再需要，可在 GitHub 上删除，或执行：
+
+```bash
+# 删除 origin 上的功能分支（不影响本地 dev_joint）
+git push origin --delete feature/be-你的功能名
+```
+
+**本地运行**
+
+1. Cursor Remote SSH 打开 **REPO_ROOT**。
+2. 开发用 `npm run dev` 会占用 `3000`，与 PM2 的 `tot-api` 冲突时需先停 PM2。
+3. 可整段复制执行：
+
+```bash
+# 释放 3000 端口，避免与 PM2 守护进程冲突
+pm2 stop tot-api
+# 进入后端目录；REPO_ROOT 见本文「前置信息」
+cd "$REPO_ROOT/TOT_backend/server"
+# 开发模式：改代码自动重启（node --watch）
+npm run dev
+```
+
+调试结束后若要恢复共享环境，由管理员或本人执行 `pm2 start tot-api`（具体以本机 PM2 配置为准）。
+
+**部署**
+
+PR 合并进 `dev_joint` 后，由管理员在仓库根目录执行拉代码、安装依赖并 reload PM2：
+
+```bash
+cd "$REPO_ROOT"
+bash scripts/deploy.sh
+```
 
 ---
 
@@ -242,32 +333,34 @@ ssh mac-studio
 
 ### 原则
 
-| 做法 | 说明 |
-|------|------|
-| **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。 |
-| **用 schema + seed 表达「应有数据」** | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。 |
-| **Mac Studio 上只有一份「共享运行时库」** | PM2 的 `tot-api` 与大家在机器上做的联调，默认共用同一路径下的 `database.db`。需要隔离时应用**自己的分支 + 停 PM2 + 临时换库路径**（需改代码或环境，团队需额外约定）。 |
+
+| 做法                            | 说明                                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。                           |
+| **用 schema + seed 表达「应有数据」**  | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。 |
+| **Mac Studio 上只有一份「共享运行时库」**  | PM2 的 `tot-api` 与大家在机器上做的联调，默认共用同一路径下的 `database.db`。需要隔离时应用**自己的分支 + 停 PM2 + 临时换库路径**（需改代码或环境，团队需额外约定）。          |
+
 
 ### 新人或新克隆仓库后
 
 1. 拉代码后**不要**期待仓库里带有可用的 `database.db`（本地文件由运行生成）。
 2. 启动后端一次（或 `npm run dev` / PM2）会按 `schema.sql` 建表。
 3. 需要与文档一致的测试账号与规模数据时，在 `TOT_backend/server` 执行：
-   ```bash
+  ```bash
    node db/seed.js
-   ```
+  ```
    账号与密码以脚本结束时的打印为准（如 `central` / `Train2026!` 等）。
 
 ### 日常开发（在 Mac Studio 上）
 
 - **改表结构、加字段**：改 `schema.sql`（及必要的迁移逻辑，若项目中有单独迁移脚本则一并维护），提交 PR，由 reviewer 确认对现有库的影响。
 - **改种子数据**：改 `db/seed.js`（或项目规定的 seed 文档），提交 PR；合并后需要环境的成员可**在确认可丢本地数据**的前提下删库重跑 seed，或由管理员统一说明。
-- **`git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
+- `**git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
 
 ### 集成与部署（管理员）
 
 - `scripts/deploy.sh` 拉代码、装依赖、**不会**用 Git 里的二进制库覆盖机器（因库不应进仓库）。若线上/共享环境需要「回到标准演示数据」，在维护窗口内备份后删除 `database.db`（及同目录 `-wal` / `-shm` 若存在），重启服务再执行 `node db/seed.js`（具体以团队当时流程为准）。
-- 出现 **`database disk image is malformed`** 时，说明 SQLite 文件已损坏，需停服务、处理损坏文件并重建库 + seed；重要数据应事先有**业务级备份**（本仓库默认不承诺库文件级备份策略）。
+- 出现 `**database disk image is malformed`** 时，说明 SQLite 文件已损坏，需停服务、处理损坏文件并重建库 + seed；重要数据应事先有**业务级备份**（本仓库默认不承诺库文件级备份策略）。
 
 ### 不要做的事
 
@@ -290,16 +383,16 @@ ssh mac-studio
 
 1. 完成上文「管理员基线检查」，确认 `tot-api` 在 `3000` 正常。
 2. 进入前端目录并启动 Vite（需与 Funnel 指向的端口一致，默认 **8001**）：
-   ```bash
+  ```bash
    cd "$REPO_ROOT/TOT_frontend"
    # 若首屏长时间卡在 loading，使用本地覆盖配置（勿提交）：
    cp .env.development.local.example .env.development.local   # 已存在则可跳过；确保含 VITE_FUNNEL_MODE=1
    pnpm run dev
-   ```
+  ```
 3. **另开终端**，在同一台 Mac Studio 上开启 Funnel，将公网 HTTPS 转发到本机 Vite（示例为官方用法，等价于代理到 `http://127.0.0.1:8001`）：
-   ```bash
+  ```bash
    tailscale funnel 8001
-   ```
+  ```
    终端会打印 **Available on the internet:** 下的 `https://<机器名>.<tailnet>.ts.net` —— 将该 URL 发给测试设备。更多参数与排错见 [tailscale funnel CLI](https://tailscale.com/docs/reference/tailscale-cli/funnel) 与 [Funnel 文档](https://tailscale.com/kb/1223/funnel)。
 4. **环境变量**：路径 B 下请保持 `VITE_GLOB_API_URL` **为空**（与 `.env.development` 默认一致），使 API 经 **当前页面同源** 走 Vite 的 `/api/v1` 代理到 `127.0.0.1:3000`；不要写死 `http://100.x.x.x:3000`，否则蜂窝网设备无法访问 100 段地址。
 5. **验证**：用 **未连接 Tailscale** 的网络（如手机关闭 VPN、仅用蜂窝数据）在浏览器打开 Funnel URL，登录并走通主流程。公网 DNS 生效可能需要数分钟（见官方文档 Troubleshooting）。
@@ -338,12 +431,14 @@ tailscale funnel status
 
 ## 安全与运维（双路径）
 
-| 主题 | 建议 |
-|------|------|
-| **路径 A** | 仅 tailnet 内成员可达；仍应保护好 SSH 密钥与测试账号，勿在公开场合张贴 `100.x` 与密码。 |
-| **路径 B（Funnel）** | 任意知道 URL 的人可尝试访问；**仅用于联调/短时演示**，不要长期对公网暴露含真实业务数据的 SQLite；演示结束关闭 Funnel。 |
-| **ACL** | 在 [Access controls](https://login.tailscale.com/admin/acls) 中收紧 `funnel` 的 `nodeAttrs`，仅允许 Mac Studio 等指定节点；按需限制可使用 Funnel 的 tailnet 成员。 |
-| **文档同步** | `tailscale ip -4` 变化时，同步更新 README 与本文「前置信息」表。 |
+
+| 主题               | 建议                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **路径 A**         | 仅 tailnet 内成员可达；仍应保护好 SSH 密钥与测试账号，勿在公开场合张贴 `100.x` 与密码。                                                                                  |
+| **路径 B（Funnel）** | 任意知道 URL 的人可尝试访问；**仅用于联调/短时演示**，不要长期对公网暴露含真实业务数据的 SQLite；演示结束关闭 Funnel。                                                                  |
+| **ACL**          | 在 [Access controls](https://login.tailscale.com/admin/acls) 中收紧 `funnel` 的 `nodeAttrs`，仅允许 Mac Studio 等指定节点；按需限制可使用 Funnel 的 tailnet 成员。 |
+| **文档同步**         | `tailscale ip -4` 变化时，同步更新 README 与本文「前置信息」表。                                                                                            |
+
 
 ---
 
@@ -381,11 +476,13 @@ bash scripts/deploy.sh
 
 **命名规范：**
 
-| 类型 | 格式 | 示例 |
-|------|------|------|
-| 后端功能 | `feature/be-<描述>` | `feature/be-ws-nudge` |
-| 前端功能 | `feature/fe-<描述>` | `feature/fe-employee-ws` |
-| Bug 修复 | `fix/<描述>` | `fix/ws-reconnect` |
+
+| 类型     | 格式                | 示例                       |
+| ------ | ----------------- | ------------------------ |
+| 后端功能   | `feature/be-<描述>` | `feature/be-ws-nudge`    |
+| 前端功能   | `feature/fe-<描述>` | `feature/fe-employee-ws` |
+| Bug 修复 | `fix/<描述>`        | `fix/ws-reconnect`       |
+
 
 也可使用 `feature/<主题>`（如 `feature/Echat`），仍建议 **PR 目标分支选 `dev_joint`**。
 
@@ -425,3 +522,4 @@ curl http://100.65.95.128:3000/api/v1/auth/login \
   -X POST -H "Content-Type: application/json" \
   -d '{"username":"central","password":"Train2026!"}'
 ```
+
