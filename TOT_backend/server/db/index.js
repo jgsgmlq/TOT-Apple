@@ -27,8 +27,27 @@ function getDb() {
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
     ensureChatTables(_db);
+    migrateDashboardInsightCounts(_db);
   }
   return _db;
+}
+
+/** 旧库补 `dashboard_insights.up_count` / `down_count` 列（与当前 schema 一致）。 */
+function migrateDashboardInsightCounts(database) {
+  const exists = database
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_insights'")
+    .get();
+  if (!exists) return;
+
+  const names = new Set(
+    database.prepare('PRAGMA table_info(dashboard_insights)').all().map((c) => c.name)
+  );
+  if (!names.has('up_count')) {
+    database.exec('ALTER TABLE dashboard_insights ADD COLUMN up_count INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!names.has('down_count')) {
+    database.exec('ALTER TABLE dashboard_insights ADD COLUMN down_count INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 /** 已有库补列：employees.email（MyPal 按邮箱对齐） */

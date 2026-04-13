@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS users (
 | role | Y | 系统权限角色，决定前端入口和数据可见范围（见 08-PERMISSION-MODEL.md）|
 | store_id | N | 店员必填，指向所属门店；central / executive / admin 为 NULL |
 | employee_id | N | 店员必填，指向 employees 表中对应记录；UNIQUE 保证一对一；其他角色为 NULL |
-| last_login_at | N | 上次登录时间，用于任务触达率的精准计算 |
+| last_login_at | N | 上次登录时间，结合 received_at 用于任务触达率的精准计算 |
 
 > **`role` 与 DB 约束：** 当前 `server/db/schema.sql` 中 **`users.role` 未加 `CHECK` 枚举**；合法取值以应用层校验与 **`08-PERMISSION-MODEL.md`** 为准（`central` \| `employee` \| `executive` \| `admin`）。
 
@@ -582,7 +582,7 @@ nudge_records (TEXT PK: nanoid)
 
 | 范围 | 变更 | 理由 |
 |------|------|------|
-| §3 users | 新增 `last_login_at` 列 | 记录用户最后登录时间，支持精准计算看板任务触达率 |
+| §3 users | 新增 `last_login_at` 列 | 记录用户最后登录时间，结合 received_at 支持精准计算看板任务触达率 |
 | §4 tasks | 更新 `start_at` 与 `ddl_at` 规范说明 | 统一限定为无 T/Z 的 UTC `YYYY-MM-DD HH:MM:SS` |
 
 ### v2.7.0（2026-04-09）

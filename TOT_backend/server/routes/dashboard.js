@@ -20,6 +20,7 @@ const express = require('express');
 const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
+const { parseStoreDrill } = require('../utils/storeDrill');
 
 const router = express.Router();
 
@@ -41,42 +42,6 @@ function aiSuggestion(rate) {
   if (rate < 30) return '情况紧急，建议立即电话跟进并发起红色催办';
   if (rate < 50) return '建议发起红色催办';
   return '建议通过系统发送黄色催办提醒';
-}
-
-/**
- * 解析门店下钻过滤（与 stores 表 AND）
- * @param {Record<string, string>} query req.query
- * @returns {{ sql: string, params: string[], hasDrill: boolean }}
- */
-function parseStoreDrill(query) {
-  const rtm = query.rtm;
-  const format = query.format;
-  const dealerName = query.dealerName;
-  const storeId = query.storeId;
-  const conds = [];
-  const params = [];
-  if (rtm) {
-    conds.push('LOWER(TRIM(s.rtm)) = LOWER(TRIM(?))');
-    params.push(String(rtm));
-  }
-  if (format) {
-    conds.push('(s.format IS NOT NULL AND LOWER(TRIM(s.format)) = LOWER(TRIM(?)))');
-    params.push(String(format));
-  }
-  if (dealerName) {
-    conds.push('(s.dealer_name IS NOT NULL AND LOWER(TRIM(s.dealer_name)) = LOWER(TRIM(?)))');
-    params.push(String(dealerName));
-  }
-  if (storeId) {
-    conds.push('s.id = ?');
-    params.push(String(storeId));
-  }
-  const hasDrill = conds.length > 0;
-  return {
-    sql: hasDrill ? `AND ${conds.join(' AND ')}` : '',
-    params,
-    hasDrill,
-  };
 }
 
 // ─── GET /api/v1/dashboard/overview ──────────────────────────────────────────
@@ -264,15 +229,17 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const crisisP1Rate =
       total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
 
-    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达
+    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达，或者任务已经收到（ta.received_at有值），或者通过websocket收到了通知
     const reachRow = db.get(
       `SELECT COUNT(ta.id) AS reached_count
        FROM task_assignments ta
        JOIN users u ON ta.user_id = u.employee_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND u.last_login_at IS NOT NULL
-         AND u.last_login_at >= ta.created_at`,
+         AND (
+           (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
+           OR ta.received_at IS NOT NULL
+         )`,
       allParams
     );
     const reachedCount = (reachRow && reachRow.reached_count) || 0;

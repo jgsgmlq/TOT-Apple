@@ -180,3 +180,28 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
+
+-- 10. 看板智能洞察（AI 生成文案；赞/踩仅记汇总次数，不记投票人）
+CREATE TABLE IF NOT EXISTS dashboard_insights (
+  id                  TEXT PRIMARY KEY,
+  module_type         TEXT NOT NULL
+                        CHECK (module_type IN ('trend', 'heatmap_rank', 'funnel', 'warning_stats')),
+  task_id             TEXT REFERENCES tasks(id),
+  filter_rtm          TEXT,
+  filter_format       TEXT,
+  filter_dealer_name  TEXT,
+  filter_store_id     TEXT REFERENCES stores(id),
+  extra_params_json   TEXT,
+  content             TEXT NOT NULL,
+  context_json        TEXT,
+  up_count            INTEGER NOT NULL DEFAULT 0
+                        CHECK (up_count >= 0),
+  down_count          INTEGER NOT NULL DEFAULT 0
+                        CHECK (down_count >= 0),
+  created_by          INTEGER NOT NULL REFERENCES users(id),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (extra_params_json IS NULL OR (json_valid(extra_params_json) AND json_type(extra_params_json) = 'object')),
+  CHECK (context_json IS NULL OR (json_valid(context_json) AND json_type(context_json) = 'object'))
+);
+CREATE INDEX IF NOT EXISTS idx_di_module_task ON dashboard_insights(module_type, task_id);
+CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
