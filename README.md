@@ -4,7 +4,7 @@
 
 本文档记录本仓库（主线分支 **`dev_joint`**，TOT-Apple 培训任务管理系统 MVP P0）当前的前后端集成与联调状态。系统分为 **总部端 (Central)** 和 **店员端 (Employee)**，后端采用 Node.js (Express + SQLite)，前端采用 Vue 3 + Vite。更完整的文档索引见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
 
-> 更新日期：2026年4月7日
+> 更新日期：2026年4月13日
 
 ---
 
@@ -97,16 +97,18 @@ bash scripts/deploy.sh
   - 前端实现了基于后端时间戳 (`ddlAt`) 的动态倒计时与超时判定逻辑。
 - **任务详情解析**：
   - 点击具体任务卡片，成功打开弹窗读取并展示由总部 AI 润色后的长文案 (`description`) 和关联的平台 Tag。
+- **WebSocket 实时推送（开发环境已联调）**：
+  - 开发环境下通过 Vite 将 `/ws` 代理至本机后端 `3000`，店员端使用 JWT 建立 `ws://…/ws?token=` 连接；可接收 `task_assigned` / `task_updated` / `task_deleted` / `assignment_completed` / `nudge_sent` 等事件，驱动列表刷新、预警瀑布流与弹窗（详见下文「联调更新概览」2026-04-10）。
 
 ---
 
 ## 🚧 后续待完成联调的部分 (Pending / To-Do)
 
 ### 1. WebSocket 实时预警推送 (Real-time Nudge & WS)
-- **现状**：目前后端 [`TOT_backend/server/ws/manager.js`](TOT_backend/server/ws/manager.js) 已有 WebSocket 广播逻辑（HTTP 服务启动后见控制台输出的 `ws://…/ws?token=`）；前端店员端页面的“预警消息灯箱”及瀑布流使用的还是模拟数据（`employee/index.vue` 内 `mockWarnings`）。
-- **待联调**：
-  - 店员端登录后需要真实建立 WebSocket 连接（携带 JWT token）。
-  - 后端触发自动催办 (`task_assigned`, `nudge_sent` 等事件) 时，前端需要监听 `message` 并将真实的预警数据推入 `waterfallMessages` 中，并触发预警弹窗。
+- **现状（2026-04-11）**：后端 [`TOT_backend/server/ws/manager.js`](TOT_backend/server/ws/manager.js) 广播逻辑可用；开发环境下前端已建立 WebSocket（见 `TOT_frontend/vite.config.ts` 中 `/ws` 代理与 `employee/index.vue` 中 `initWebSocket`），并处理 `nudge_sent`（推入瀑布流、弹窗）、`assignment_completed`（刷新列表等）等事件。
+- **待联调 / 待加固**：
+  - 断线重连、Token 续期后重连、生产环境（HTTPS / Tailscale Funnel）下 WSS 与代理一致性。
+  - 与自动催办 Cron、全量门店压测下的推送稳定性联调验收。
 
 ### 2. 自动化催办后台服务 (Auto Nudge Cron Trigger)
 - **现状**：后端 [`TOT_backend/server/services/autoNudge.js`](TOT_backend/server/services/autoNudge.js) 具备基于预警规则（包括 48 小时临期）评估进度并生成催办文案的能力，但可能缺乏持续的全局定时触发器（Cron Job）。
@@ -120,8 +122,8 @@ bash scripts/deploy.sh
   - 对于 MyPal，在内部阶段可继续用 mock 表对齐字段；**与 MyPal 真实 HTTP 同步**（`POST /api/v1/mypal/sync`）与任务进度自动回写可在对方凭证就绪后再做端到端验收。
 
 ### 4. 总部端看板数据真实统计 (HQ Dashboard Stats)
-- **现状**：总部看板页面 (`/central/board`) 中的通过率、排名等图表数据部分处于静态/Mock状态。
-- **待联调**：需和后端的统计接口对接，根据真实 `task_assignments` 聚合数据，渲染大盘概览与门店排行。
+- **现状（2026-04-11）**：门店排名下钻、预警维度下钻等已对接 `/api/v1/dashboard/store-rank`、`/api/v1/dashboard/warnings` 等接口（见下文「联调更新概览」）；大盘部分指标仍可能为静态或需与后端继续对齐字段。
+- **待联调**：其余图表与聚合口径需按产品定义与后端统计接口持续对齐，并用真实 `task_assignments` 数据验收。
 
 ---
 
@@ -187,3 +189,41 @@ pnpm run dev         # 默认端口 8001（见 .env.development 中 VITE_PORT）
 **快速测试入口**：
 - **总部入口**：`http://localhost:8001/hq`（或同网段/Tailscale 下 `http://100.65.95.128:8001/hq`，需本机已 `pnpm run dev` 且 Vite 在跑）
 - **店员端**：`http://localhost:8001/employee/login`（账号见上方测试账号表）
+
+## 前后端联调更新概览
+
+以下为按日期的变更摘要（与仓库内 `前后端联调更新概览.md` 同步）。
+
+## 2026-04-11
+
+- **店员端已完成任务 24h 留存与庆贺体系 (纯前端方案实现)**：
+  - **任务留存逻辑 (24h Window)**：重构了店员端 (`employee/index.vue`) 的任务过滤机制。现在除了展示所有未完成任务外，还会自动筛选并保留“已完成且完成时间距今 < 24 小时”的任务。实现了在不改动后端 API 存储逻辑的前提下，提供任务完成后的即时成就感反馈。
+  - **Apple 风格庆贺横幅**：为已完成任务的卡片引入了全新的 UI 状态。卡片顶部新增带有苹果官方绿色 (`#34c759`) 风格的“恭喜你完成任务”庆贺栏，并伴有柔和的背景渐变和左侧边框变色，提升了店员完成学习目标的视觉奖励。
+  - **原生精致烟花动画 (Confetti)**：在项目中手动实现了一套高性能、零依赖的 Canvas 粒子烟花算法 (`triggerConfetti`)。当店员点击“确认完成”并收到成功响应，或者从 MyPal 小程序完成学习并经由 WebSocket 接收到 `assignment_completed` 事件时，屏幕会爆发 Apple 五色主题的电子纸屑。该动画不污染项目依赖，通过原生 Web API 确保了在移动端极高的流畅度。
+  - **上下文交互优化**：智能识别任务完成状态，自动隐藏瀑布流卡片及详情弹窗中的“去完成”行动点，并将其替换为置灰/不可点击的“任务已完成”状态，闭环了任务从“待办”到“归档”的交互路径。
+- **店员端预警增强与文案透明化**：
+  - **预警文案补全**：修复了原先预警原因会覆盖任务标题的逻辑，现在统一展示为 `【任务名称】触发了预警：[具体原因]`，让店员明确感知紧迫感来源。
+  - **强制视觉提醒**：移除了预警卡片的“叉号”关闭按钮，确保任务未完成前预警始终存在。
+  - **视觉爆闪强化**：将警示灯 ⚠️ 的呼吸动画频率从 1.2s 提升至 0.8s，并增加了 12px 的彩色外发光（Drop Shadow），显著提升了视觉权重。
+- **总部端 AI 快捷发布 (Beta)**：
+  - **智能解析面板**：在任务发布页新增 AI 解析区域，支持一句话描述或模拟语音输入，自动提取并填充平台选择、任务名称、达标分数及截止时间，大幅缩短了发布链路。
+  - **任务描述 AI 润色**：集成了基于任务上下文的 AI 描述补全逻辑，将干瘪的名称自动转化为结构化、带有表情符号的苹果风格培训说明。
+- **总部端多页签动态命名与状态隔离**：
+  - **动态标签重载**：修改了标签页（TabsView）与面包屑的渲染逻辑。系统会自动识别路由 Query，当处于编辑状态时，标签页与网页标题动态变为“编辑任务”，实现了与新建页面的视觉与逻辑共存。
+  - **KeepAlive 状态污染修复**：通过封装 `resetForm` 并在 `onActivated` 生命周期中进行强制路由校验，解决了开启组件缓存后“新建”与“编辑”模式切换导致数据残留的 Bug。
+- **总部端看板 AI 实时洞察面板**：
+  - **去按钮化升级**：注释了原有的“手动运行预警扫描”按钮，替换为极简、可折叠的“AI 实时洞察面板”，直接展示自动化扫描结果与风险建议。
+  - **自动展开与自适应对齐**：通过 `activeTask.id` 驱动面板自动重置展开状态，并优化了字体规格（16px SF Pro Semi-bold），使其与页面内其他看板卡片完美对齐。
+- **总部端看板指标深度下钻 (Drill-down) 与全链路对接**：
+  - **门店排名下钻**：对接 `/api/v1/dashboard/store-rank` 接口，在区域热力卡片头部新增 Top 20 / Bottom 20 快捷入口。点击弹出带原生 Apple 风格进度条的 🧍‍♂️ 门店明细列表。
+  - **预警详情下钻**：对接 `/api/v1/dashboard/warnings` 接口，将底部的起步异常、临期危机 (P1/P0) 指标块改造为可点击交互组件（含悬浮阴影与“点击下钻”指引），点击即可查看当前预警维度下的风险门店名单及具体逾期人数。
+- **总部端看板全屏网格排版重构 (Apple Design)**：
+  - **无缝化网格拼接**：将中间（图表与热力）和底部（链路与预警）两大核心区域的 `grid-template-columns` 统一设定为严谨的 `1fr 1fr` 绝对平分。彻底去除了卡片间松散的 `24px` 间距，通过统一的浅色外边框 (`1px solid #e5e7eb`) 将左右卡片无缝合体，呈现出高度一体化的“玻璃面板”视觉。
+  - **组件收纳与降噪**：移除了原先突兀占据整行的独立“门店执行排名”卡片，将其功能入口优雅地收纳至“区域进度”卡片的右上角，极大释放了垂直空间并保持了左右对称。
+  - **文本层级统一**：重构了漏斗链路卡片与预警卡片的 `template #header` 渲染结构，摒弃了生硬的系统原生 `title`，全面引入“16px黑体主标题 + 13px浅灰副标题”的标准组合，使得页面从上至下的阅读层级实现像素级对齐。
+
+## 2026-04-10
+
+- **全链路 WebSocket 实时同步与通信稳定性修复**：
+  - **环境配置补全**：修改 `TOT_frontend/vite.config.ts`，新增 `/ws` 路径的长连接反向代理（`target: http://127.0.0.1:3000`，`ws: true`），与 `/api/v1` 一并支持 WebSocket 升级，打通开发环境下浏览器到本机 Node `3000` 的 WS 链路，避免连接被 Vite 开发服务器误拦。
+  - **连接与事件处理**：店员端 (`employee/index.vue`) 中 `initWebSocket` 在 `apiUrl` 为空或以 `/` 开头时使用 `window.location.origin`，将 HTTP(S) 转为 `ws(s)://` 并请求 `/ws?token=<JWT>`；`onmessage` 中按 `event` 分发 `task_assigned` / `task_updated` / `task_deleted`（刷新任务列表）、`assignment_completed`（配合烟花与刷新）、`nudge_sent`（催办文案写入缓存、瀑布流与预警弹窗）等。

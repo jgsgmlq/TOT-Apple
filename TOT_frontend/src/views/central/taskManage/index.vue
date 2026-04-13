@@ -14,6 +14,44 @@
 
       <!-- 表单区域 -->
       <section class="form-section">
+        <!-- AI 快捷创建区域 -->
+        <n-card :bordered="false" class="form-card mb-4 ai-parse-card" style="margin-bottom: 24px; background: linear-gradient(145deg, #f0f7ff, #ffffff); box-shadow: 0 4px 20px rgba(0, 113, 227, 0.08);">
+          <div class="ai-parse-header" style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+            <n-icon size="24" color="#0071e3"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg></n-icon>
+            <span style="font-size: 16px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.3px;">AI 快捷发布</span>
+            <n-tag type="info" size="small" round :bordered="false" style="margin-left: auto;">Beta</n-tag>
+          </div>
+          
+          <n-input-group>
+            <n-input 
+              v-model:value="aiInputText"
+              size="large" 
+              placeholder="例如：帮我建一个下周五前完成的MacBook销售话术培训，要求80分及格，包含MyPal和直播..." 
+              :style="{ flex: 1, borderRadius: '12px 0 0 12px' }"
+              clearable
+              @keydown.enter="handleAIParse"
+            >
+              <template #prefix>
+                <n-icon size="18" color="#86868b" style="cursor: pointer; margin-right: 8px;" @click="simulateVoiceInput">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                </n-icon>
+              </template>
+            </n-input>
+            <n-button 
+              type="primary" 
+              size="large" 
+              :loading="aiParsing"
+              style="border-radius: 0 12px 12px 0; padding: 0 24px; font-weight: 600;"
+              @click="handleAIParse"
+            >
+              智能解析
+            </n-button>
+          </n-input-group>
+          <div style="margin-top: 12px; font-size: 13px; color: #86868b;">
+            💡 支持语音输入或一句话描述，系统将自动提取关键信息填充表单并润色任务说明。
+          </div>
+        </n-card>
+
         <!-- 基本信息卡片 -->
         <n-card :bordered="false" class="form-card mb-4" title="基本信息">
           <n-form
@@ -179,6 +217,81 @@
   const route = useRoute();
   const formRef = ref();
 
+  // AI 快捷输入相关的状态与逻辑
+  const aiInputText = ref('');
+  const aiParsing = ref(false);
+
+  const simulateVoiceInput = () => {
+    message.loading('正在聆听... (测试演示功能)', { duration: 1500 });
+    setTimeout(() => {
+      aiInputText.value = '帮我建一个下周五前完成的MacBook Pro销售话术培训，要求90分及格，包含MyPal和直播培训平台，全员覆盖。';
+      message.success('语音识别完成');
+    }, 1500);
+  };
+
+  const handleAIParse = async () => {
+    if (!aiInputText.value.trim()) {
+      message.warning('请输入一句话描述或使用语音输入');
+      return;
+    }
+    aiParsing.value = true;
+    const loadingMsg = message.loading('AI 正在拆解意图并自动填充表单...', { duration: 0 });
+    
+    try {
+      // 模拟后端 API 延迟
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // 模拟前端解析逻辑 (未来这里替换为调用你后端的新接口)
+      const inputText = aiInputText.value;
+      
+      // 1. 提取平台
+      const newPlatforms = [];
+      if (inputText.includes('MyPal')) newPlatforms.push('MyPal');
+      if (inputText.includes('直播')) newPlatforms.push('直播培训');
+      if (inputText.includes('Sales')) newPlatforms.push('Sales Coach');
+      if (inputText.includes('AI')) newPlatforms.push('AI Coach');
+      if (newPlatforms.length === 0) newPlatforms.push('MyPal'); // default
+      formValue.platforms = newPlatforms;
+      
+      // 2. 提取名称
+      let taskNameMatch = inputText.match(/的(.*?)培训/);
+      if (!taskNameMatch) taskNameMatch = inputText.match(/建立?(.*?)任务/);
+      formValue.taskName = taskNameMatch ? `${taskNameMatch[1]}专项培训` : 'MacBook Pro 新品销售培训';
+      
+      // 3. 提取分数
+      const scoreMatch = inputText.match(/(\d+)分/);
+      if (scoreMatch) formValue.passScore = parseInt(scoreMatch[1], 10);
+      
+      // 4. 提取时间 (模拟下周五)
+      const now = new Date();
+      formValue.startTime = now.getTime();
+      const nextFriday = new Date();
+      nextFriday.setDate(now.getDate() + ((5 - now.getDay() + 7) % 7) || 7);
+      nextFriday.setHours(23, 59, 59, 0);
+      formValue.endTime = nextFriday.getTime();
+      
+      // 5. AI 自动润色任务描述
+      formValue.description = `🎯【学习目标】
+1. 深度掌握 ${formValue.taskName.replace('专项培训', '')} 的核心卖点与技术突破。
+2. 熟练运用FABE话术，提升转化率。
+
+💡【核心知识点】
+- M3 芯片架构优势深度解析
+- 针对创作者、开发者的场景化痛点攻克
+- Apple 生态互联优势及多产品连带销售技巧
+
+⏱️【预计耗时】
+约 25-30 分钟。请务必在截止日期前完成并通过考核。`;
+
+      message.success('解析成功，表单已自动填充！');
+    } catch (e) {
+      message.error('解析失败，请重试');
+    } finally {
+      loadingMsg.destroy();
+      aiParsing.value = false;
+    }
+  };
+
   // 编辑模式状态
   const editTaskId = ref<string>('');
   const taskStatus = ref<string>('draft');
@@ -211,13 +324,29 @@
     alertRules: {
       laggingLifestyle: 3,
       laggingMono: 1,
-      startDelayPercent: 50,
-      deadlineCrisisHours: 24,
-      deadlineCrisisHoursSecondary: 48,
+      startDelayPct: 50,
+      crisisP1Hours: 48,
+      crisisP0Hours: 24,
     },
     mypalTaskWeek: '',
     mypalProductName: '',
   });
+
+  const resetForm = () => {
+    editTaskId.value = '';
+    taskStatus.value = 'draft';
+    formValue.taskName = '';
+    formValue.description = defaultDesc;
+    formValue.startTime = null;
+    formValue.passScore = 80;
+    formValue.endTime = null;
+    formValue.platforms = ['MyPal'];
+    formValue.coverage = '全员';
+    formValue.mypalTaskWeek = '';
+    formValue.mypalProductName = '';
+    aiInputText.value = '';
+    formValue.alertRules = { laggingLifestyle: 3, laggingMono: 1, startDelayPct: 50, crisisP1Hours: 48, crisisP0Hours: 24 };
+  };
 
   const loadTaskDetail = async (id: string) => {
     try {
@@ -264,44 +393,30 @@
   watch(
     () => route.query.id,
     (newId) => {
+      // 防止其他页面的 query 变更触发
+      if (route.name !== 'CentralTaskPublish') return;
+
       if (newId) {
         editTaskId.value = newId as string;
         loadTaskDetail(editTaskId.value);
       } else {
         // 重置表单
-        editTaskId.value = '';
-        taskStatus.value = 'draft';
-        formValue.taskName = '';
-        formValue.description = defaultDesc;
-        formValue.startTime = null;
-        formValue.passScore = 80;
-        formValue.endTime = null;
-        formValue.platforms = ['MyPal'];
-        formValue.coverage = '全员';
-        formValue.mypalTaskWeek = '';
-        formValue.mypalProductName = '';
+        resetForm();
       }
     },
     { immediate: true }
   );
 
   onActivated(() => {
-    // 处理 KeepAlive 模式下，切回组件时数据能够重新拉取（如在看板页面做了删除、修改等）
-    if (editTaskId.value) {
+    // 只有在当前组件可见时才触发
+    if (route.name !== 'CentralTaskPublish') return;
+
+    // 处理 KeepAlive 模式下，切回组件时数据能够重新拉取或清空
+    if (route.query.id) {
+      editTaskId.value = route.query.id as string;
       loadTaskDetail(editTaskId.value);
-    } else if (!route.query.id) {
-      // 如果没有ID参数，确保状态是干净的
-      editTaskId.value = '';
-      taskStatus.value = 'draft';
-      formValue.taskName = '';
-      formValue.description = defaultDesc;
-      formValue.startTime = null;
-      formValue.passScore = 80;
-      formValue.endTime = null;
-      formValue.platforms = ['MyPal'];
-      formValue.coverage = '全员';
-      formValue.mypalTaskWeek = '';
-      formValue.mypalProductName = '';
+    } else {
+      resetForm();
     }
   });
 

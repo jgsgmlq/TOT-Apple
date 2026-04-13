@@ -82,3 +82,51 @@ export const getDashboardTrend = (params: {
     { params, localCache: 0 }
   );
 };
+
+export interface StoreRankRow {
+  storeId: string;
+  storeName: string;
+  completionRate: number;
+  assignmentCount: number;
+  completedCount: number;
+}
+
+/** GET /api/v1/dashboard/store-rank — 门店排名下钻 */
+export const getDashboardStoreRank = (params: {
+  taskId: string;
+  type: 'top' | 'bottom';
+  limit?: number;
+  format?: string;
+}) => {
+  return Alova.Get<{ rankList: StoreRankRow[] }>('/dashboard/store-rank', {
+    params,
+    localCache: 0,
+  });
+};
+
+export interface WarningStoreRow {
+  taskId: string;
+  storeId: string;
+  storeName: string;
+  completionRate: number;
+  completedCount: number;
+  totalCount: number;
+  overdueCount: number;
+  calculatedAt: string;
+}
+
+/** GET /api/v1/dashboard/warnings — 预警门店下钻 */
+export const getDashboardWarnings = (params: {
+  taskId: string;
+  warningLevel?: 'p1' | 'p2';
+  pageNum?: number;
+  pageSize?: number;
+}) => {
+  return Alova.Get<{
+    list: WarningStoreRow[];
+    pagination: { pageNum: number; pageSize: number; total: number; totalPages: number };
+  }>('/dashboard/warnings', {
+    params,
+    localCache: 0,
+  });
+};

@@ -406,6 +406,11 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
       });
     }
 
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: { taskId: task.id, operationType: 'task_edited' }
+    });
+
     res.json({
       code: 200,
       message: 'success',
@@ -583,12 +588,32 @@ router.delete('/:id', authenticate, requireRole(['central', 'admin']), (req, res
     const task = db.get('SELECT id FROM tasks WHERE id = ?', [taskId]);
     if (!task) throw createError(404, '任务不存在', 'TASK_002');
 
+    // 记录下发的用户
+    const targets = db.all(
+      'SELECT DISTINCT user_id FROM task_assignments WHERE task_id = ?',
+      [taskId]
+    );
+
     db.transaction(() => {
       db.run('DELETE FROM notification_events WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM nudge_records WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
     });
+
+    // 通知所有看板刷新
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: { taskId, operationType: 'task_deleted' }
+    });
+
+    // 通知受影响的店员
+    if (targets && targets.length > 0) {
+      broadcastToUsers(targets.map(t => t.user_id), {
+        event: 'task_deleted',
+        data: { taskId }
+      });
+    }
 
     res.json({
       code: 200,

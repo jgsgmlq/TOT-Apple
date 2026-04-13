@@ -71,6 +71,11 @@ export function createRouterGuards(router: Router) {
   const userStore = useUser();
   const asyncRouteStore = useAsyncRoute();
   router.beforeEach(async (to, from, next) => {
+    storage.setPrefixFromPath(to.path);
+    // 跨应用导航时（例如从 /hq 切到 /employee），确保存储前缀切换后，Pinia 状态能同步最新缓存的数据
+    userStore.setToken(storage.get(ACCESS_TOKEN) || '');
+    userStore.setUserInfo(storage.get(CURRENT_USER) || {});
+
     const Loading = window['$loading'] || null;
     Loading && Loading.start();
     if (from.path === LOGIN_PATH && to.name === 'errorPage') {
