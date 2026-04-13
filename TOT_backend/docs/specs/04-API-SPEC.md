@@ -17,7 +17,7 @@
 - **AI 解析任务**：新增 `/tasks/ai-parse` 接口，支持一键根据自然语言解析任务信息并格式化返回所有任务所需的创建字段。
 - **店员任务筛选**：店员端 `/tasks` 列表新增 `status=completed` 支持，满足已完成任务的历史记录查询。
 - **通知联动**：`/events/:eventId/read` 支持点击通知时自动标记底层任务为 `received_at` 并返回 `assignmentId`，实现点开即直达“去完成”。
-- **看板触达率优化**：记录了用户最新登录时间（`last_login_at`），只把任务下发后产生登录的人算进 `taskReachRate`。
+- **看板触达率优化**：记录了用户最新登录时间（`last_login_at`）和任务接收时间（`received_at`），并且在WebSocket连接触达时也会计算在内，只把任务下发后成功触达的人算进 `taskReachRate`。
 - **时间格式**：后端涉及的 `startAt`、`ddlAt` 等出入参及大模型生成的格式规范统一变更为无 T 无 Z 的 `YYYY-MM-DD HH:MM:SS`。
 - **预警催办简化**：保留了原有的定时预警服务（`/tasks/:id/auto-nudge` 以及后台的 `autoNudgeScheduler`），但文案不再调用 AI 进行润色，直接返回设定的规则触发原文。
 

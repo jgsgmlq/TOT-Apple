@@ -229,15 +229,17 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const crisisP1Rate =
       total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
 
-    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达
+    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达，或者任务已经收到（ta.received_at有值），或者通过websocket收到了通知
     const reachRow = db.get(
       `SELECT COUNT(ta.id) AS reached_count
        FROM task_assignments ta
        JOIN users u ON ta.user_id = u.employee_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND u.last_login_at IS NOT NULL
-         AND u.last_login_at >= ta.created_at`,
+         AND (
+           (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
+           OR ta.received_at IS NOT NULL
+         )`,
       allParams
     );
     const reachedCount = (reachRow && reachRow.reached_count) || 0;

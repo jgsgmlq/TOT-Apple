@@ -70,7 +70,7 @@
 
 - **pushUserCount：** `notification_events` 中 `event_type = 'task_assigned'` 的 **去重 `target_user_id`**（带 `taskId` 时按任务过滤）。
 - **employeeReadCount / managerReadCount：** 实现上对 **`read_receipts.source = 'task_detail_open'`** 去重统计；当前两条 SQL 结构相同，一般 **`totalReadCount = employeeReadCount + managerReadCount`**（若产品需区分店长/店员，应后续在数据模型中区分用户类型后再拆口径）。
-- **taskReachRate：** 实现中「创建即触达」占位为 total>0 时 **100**。
+- **taskReachRate：** 实现中通过 `u.last_login_at >= ta.created_at`、`ta.received_at IS NOT NULL` 或者 websocket 接收等联合判断，占位为成功触达数 / total * 100（百分比点数，一位小数）。
 - **taskReadRate：** `totalReadCount / totalAssignments * 100`（一位小数）。
 - **nudgeConversionRate：** 在 **`nudge_count > 0`** 的 assignment 中，已 **`started_at` 非空或状态为 `completed`** 的比例（整数百分比）；与 PRD「提醒转化率」命名可能不完全一致，以 **`04-API-SPEC`** 字段名为准。
 
