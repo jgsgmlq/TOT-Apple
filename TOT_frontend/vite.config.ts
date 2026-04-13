@@ -78,6 +78,11 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
           changeOrigin: true,
           ws: true,
         },
+        '/ws': {
+          target: 'http://127.0.0.1:3000',
+          changeOrigin: true,
+          ws: true,
+        },
       },
       // 开发环境允许任意 Host（localhost、127.0.0.1、局域网 IP、*.ts.net Funnel、*.local 机器名等），避免误拦
       allowedHosts: true,

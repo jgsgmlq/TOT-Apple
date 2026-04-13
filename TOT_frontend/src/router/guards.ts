@@ -1,7 +1,7 @@
 import { PageEnum } from '@/enums/pageEnum';
 import { ErrorPageRoute } from '@/router/base';
 import { useAsyncRoute } from '@/store/modules/asyncRoute';
-import { useUser } from '@/store/modules/user';
+import { useUser, type UserInfoType } from '@/store/modules/user';
 import { ACCESS_TOKEN, CURRENT_USER } from '@/store/mutation-types';
 import { HQ_ENTRY_KEY } from '@/constants/entry';
 import { buildPermissionsFromRole } from '@/utils/auth/permissions';
@@ -10,57 +10,72 @@ import type { RouteRecordRaw } from 'vue-router';
 import { isNavigationFailure, Router } from 'vue-router';
 import { RedirectName } from './constant';
 import { login } from '@/api/system/user';
+import { ResultEnum } from '@/enums/httpEnum';
 
 const LOGIN_PATH = PageEnum.BASE_LOGIN;
 
 const whitePathList = [LOGIN_PATH]; // no redirect whitelist
 
+/** 静默登录成功才注册动态路由；失败返回 false，避免无 token 进入 /central 后 401 与 /hq 死循环 */
 async function bootstrapHqSession(
   router: Router,
   asyncRouteStore: ReturnType<typeof useAsyncRoute>,
   userStore: ReturnType<typeof useUser>
-) {
+): Promise<boolean> {
   try {
-    // 真实请求后端登录以获取 token，避免后续接口调用 401
-    const res = await login({ username: 'central', password: 'Train2026!' }).send();
-    if (res && res.data && res.data.token) {
-      storage.set(ACCESS_TOKEN, res.data.token, 7 * 24 * 60 * 60);
-      storage.set(CURRENT_USER, res.data.userInfo, 7 * 24 * 60 * 60);
-      userStore.setToken(res.data.token);
-      userStore.setUserInfo(res.data.userInfo);
+    const res = (await login({ username: 'central', password: 'Train2026!' }).send()) as {
+      code?: number;
+      message?: string;
+      data?: { token?: string; userInfo?: UserInfoType };
+      result?: { token?: string; userInfo?: UserInfoType };
+    };
+    if (res.code !== undefined && res.code !== ResultEnum.SUCCESS && res.code !== 201) {
+      console.error('总部静默登录失败：', res.message || res.code);
+      return false;
     }
-  } catch (err) {
-    console.error('总部访客真实静默登录失败，将使用纯前端 mock 权限:', err);
-  }
+    const payload = res?.data ?? res?.result;
+    const token = payload?.token;
+    const userInfo = payload?.userInfo;
+    if (!token || !userInfo) {
+      console.error('总部静默登录失败：未返回 token 或 userInfo');
+      return false;
+    }
 
-  const fakeUser = {
-    role: 'central',
-    permissions: buildPermissionsFromRole('central'),
-  };
-  userStore.setPermissions(fakeUser.permissions);
-  if (!userStore.getUserInfo?.username) {
-    userStore.setUserInfo({
-      username: '总部访客',
-      email: '',
-      role: 'central',
+    storage.set(ACCESS_TOKEN, token, 7 * 24 * 60 * 60);
+    storage.set(CURRENT_USER, userInfo, 7 * 24 * 60 * 60);
+    userStore.setToken(token);
+    userStore.setUserInfo(userInfo);
+
+    const role = userInfo.role || 'central';
+    const permissions = buildPermissionsFromRole(role);
+    userStore.setPermissions(permissions);
+
+    const routeUser = { ...userInfo, permissions };
+    const routes = await asyncRouteStore.generateRoutes(routeUser);
+    routes.forEach((item) => {
+      router.addRoute(item as unknown as RouteRecordRaw);
     });
+    const isErrorPage = router.getRoutes().findIndex((item) => item.name === ErrorPageRoute.name);
+    if (isErrorPage === -1) {
+      router.addRoute(ErrorPageRoute as unknown as RouteRecordRaw);
+    }
+    asyncRouteStore.setDynamicRouteAdded(true);
+    return true;
+  } catch (err) {
+    console.error('总部访客静默登录失败:', err);
+    return false;
   }
-
-  const routes = await asyncRouteStore.generateRoutes(fakeUser);
-  routes.forEach((item) => {
-    router.addRoute(item as unknown as RouteRecordRaw);
-  });
-  const isErrorPage = router.getRoutes().findIndex((item) => item.name === ErrorPageRoute.name);
-  if (isErrorPage === -1) {
-    router.addRoute(ErrorPageRoute as unknown as RouteRecordRaw);
-  }
-  asyncRouteStore.setDynamicRouteAdded(true);
 }
 
 export function createRouterGuards(router: Router) {
   const userStore = useUser();
   const asyncRouteStore = useAsyncRoute();
   router.beforeEach(async (to, from, next) => {
+    storage.setPrefixFromPath(to.path);
+    // 跨应用导航时（例如从 /hq 切到 /employee），确保存储前缀切换后，Pinia 状态能同步最新缓存的数据
+    userStore.setToken(storage.get(ACCESS_TOKEN) || '');
+    userStore.setUserInfo(storage.get(CURRENT_USER) || {});
+
     const Loading = window['$loading'] || null;
     Loading && Loading.start();
     if (from.path === LOGIN_PATH && to.name === 'errorPage') {
@@ -81,17 +96,42 @@ export function createRouterGuards(router: Router) {
     // ------------------------------------------
     const isHqQuery = to.query.entry === 'hq' || to.query.hq === '1' || to.query.hq === 'true';
 
-    // 如果是通过特权入口进入，写入标记并立刻跳去中央面板
+    const hqErr = to.query.hqError;
+    const isHqErrorPage =
+      hqErr === 'login' || hqErr === '1' || hqErr === 'true' || String(hqErr || '') === 'session';
+
+    // 静默登录失败后的停留页：勿再清空/重定向，否则会与 /central/board ↔ /hq 循环
+    if ((to.path === '/hq' || to.path === '/hq/') && isHqErrorPage) {
+      next();
+      return;
+    }
+
+    // 如果是通过特权入口进入：先静默登录成功再进中央面板，失败则留在 /hq?hqError=login
     if (
       (isHqQuery && !to.path.startsWith('/employee') && !to.path.startsWith('/executive')) ||
       to.path === '/hq' ||
       to.path === '/hq/'
     ) {
       sessionStorage.setItem(HQ_ENTRY_KEY, '1');
-      storage.clear(); // 清除可能存在的失效/店员 token
-      userStore.setToken('');
 
-      // 如果目标已经是面板，不要死循环
+      const token = storage.get(ACCESS_TOKEN);
+      const isCentralSession =
+        asyncRouteStore.getIsDynamicRouteAdded &&
+        !!token &&
+        userStore.getUserInfo?.role === 'central';
+
+      if (!isCentralSession) {
+        storage.clear();
+        userStore.setToken('');
+        sessionStorage.setItem(HQ_ENTRY_KEY, '1');
+
+        const ok = await bootstrapHqSession(router, asyncRouteStore, userStore);
+        if (!ok) {
+          next({ path: '/hq', replace: true, query: { hqError: 'login' } });
+          return;
+        }
+      }
+
       if (to.path === '/central/board') {
         next();
         return;
@@ -116,7 +156,11 @@ export function createRouterGuards(router: Router) {
       !to.path.startsWith('/executive')
     ) {
       if (!asyncRouteStore.getIsDynamicRouteAdded) {
-        await bootstrapHqSession(router, asyncRouteStore, userStore);
+        const ok = await bootstrapHqSession(router, asyncRouteStore, userStore);
+        if (!ok) {
+          next({ path: '/hq', replace: true, query: { hqError: 'login' } });
+          return;
+        }
         // 动态 addRoute 后必须重放当前导航，否则仍按「无匹配路由」解析，页面空白
         next({ ...to, replace: true });
         return;

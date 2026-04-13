@@ -9,15 +9,29 @@ const DEFAULT_CACHE_TIME = 60 * 60 * 24 * 7;
 
 export default class Storage {
   private storage: globalThis.Storage;
-  private prefixKey?: string;
+  private currentPrefix: string;
 
-  constructor(prefixKey = '', storage = localStorage) {
+  constructor(storage = localStorage) {
     this.storage = storage;
-    this.prefixKey = prefixKey;
+    this.currentPrefix = this.calculatePrefixFromPath(window.location.pathname);
+  }
+
+  private calculatePrefixFromPath(path: string) {
+    if (path.startsWith('/employee')) return 'EMP_';
+    if (path.startsWith('/executive')) return 'EXEC_';
+    return 'HQ_';
+  }
+
+  public setPrefixFromPath(path: string) {
+    this.currentPrefix = this.calculatePrefixFromPath(path);
+  }
+
+  private getDynamicPrefix() {
+    return this.currentPrefix;
   }
 
   private getKey(key: string) {
-    return `${this.prefixKey}${key}`.toUpperCase();
+    return `${this.getDynamicPrefix()}${key}`.toUpperCase();
   }
 
   /**
@@ -70,7 +84,15 @@ export default class Storage {
    * @memberOf Cache
    */
   clear(): void {
-    this.storage.clear();
+    const prefix = this.getDynamicPrefix();
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < this.storage.length; i++) {
+      const key = this.storage.key(i);
+      if (key && key.startsWith(prefix)) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => this.storage.removeItem(key));
   }
 
   /**
@@ -121,4 +143,4 @@ export default class Storage {
   }
 }
 
-export const storage = new Storage('');
+export const storage = new Storage();

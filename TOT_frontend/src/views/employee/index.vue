@@ -79,7 +79,12 @@
 
     <!-- 下半部分：信息瀑布流 -->
     <section class="emp-waterfall-section">
-      <h2 class="section-title">消息中心 📬</h2>
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding: 0 20px;">
+        <h2 class="section-title" style="margin-bottom: 0; padding: 0;">消息中心 📬</h2>
+        <n-button text type="primary" style="font-size: 13px;" @click="showHistoryModal = true">
+          已完成任务 >
+        </n-button>
+      </div>
       <div class="waterfall-list">
         <transition-group name="fade-list">
           <div
@@ -93,9 +98,16 @@
                   ? 'is-warning-red'
                   : 'is-warning-yellow'
                 : 'is-task',
+              msg.isCompleted ? 'is-completed-task' : ''
             ]"
             @click="handleViewTask(msg)"
           >
+            <!-- 若已完成，在最上方插入Apple风格的庆贺栏 -->
+            <div v-if="msg.isCompleted" class="completed-banner">
+              <n-icon size="16"><CheckCircleOutlined /></n-icon>
+              <span>恭喜你完成任务</span>
+            </div>
+
             <!-- 卡片头部：预警用红/黄警示图标区分，文案统一 -->
             <div class="card-header">
               <div class="card-header-left">
@@ -110,19 +122,6 @@
                   {{ msg.type === 'warning' ? '预警通知' : '学习任务' }}
                 </span>
               </div>
-              <!-- 仅预警信息允许被关闭 (叉掉) -->
-              <n-button
-                v-if="msg.type === 'warning'"
-                quaternary
-                circle
-                size="small"
-                class="close-btn"
-                @click.stop="closeMessage(msg.id)"
-              >
-                <template #icon>
-                  <n-icon><CloseOutlined /></n-icon>
-                </template>
-              </n-button>
             </div>
 
             <!-- 卡片主要内容 -->
@@ -133,20 +132,14 @@
             </div>
 
             <!-- 卡片底部操作按钮 -->
-            <div class="card-actions">
-              <n-button
-                class="action-btn view-btn"
-                secondary
-                @click.stop="msg.type === 'warning' ? handleMarkRead(msg) : handleMarkComplete(msg)"
-              >
-                {{ msg.type === 'warning' ? '标记已读' : '标记完成' }}
-              </n-button>
+            <div class="card-actions" v-if="msg.type === 'task' && msg.isRead && !msg.isCompleted" style="display: flex; justify-content: flex-end;">
+              
               <n-button
                 class="action-btn do-btn"
                 type="primary"
-                @click.stop="handleGoToMiniProgram"
+                @click.stop="handleMarkComplete(msg)"
               >
-                去完成
+                去完成(测试烟花)
               </n-button>
             </div>
           </div>
@@ -197,6 +190,7 @@
           v-if="currentTaskDetail"
           class="td-container custom-scroll"
           style="padding: 20px; overflow-y: auto; flex: 1"
+          @scroll="onTaskModalScroll"
         >
           <n-descriptions
             label-placement="top"
@@ -261,23 +255,16 @@
           </div>
         </div>
 
-        <!-- 固定底部：确认已读（计入总部任务读取率）+ 去完成 -->
-        <div v-if="currentTaskDetail" class="td-footer-actions">
+        <!-- 固定底部：已读状态 + 去完成 -->
+        <div v-if="currentTaskDetail && !currentTaskDetail.isCompleted" class="td-footer-actions" style="flex-direction: column; align-items: stretch; gap: 8px;">
+          <div style="text-align: center; margin-bottom: 4px;">
+            <span v-if="readConfirmDone" style="color: #10b981; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+               <n-icon><CheckCircleOutlined /></n-icon> 已读
+            </span>
+            <span v-else style="color: #9ca3af; font-size: 13px;">请下滑阅读全部内容以标记已读</span>
+          </div>
           <n-button
-            secondary
-            block
-            size="large"
-            class="td-btn td-btn-confirm-read"
-            :loading="readConfirmSending"
-            :disabled="readConfirmDone || !currentTaskModalAssignmentId"
-            @click="handleConfirmTaskRead"
-          >
-            {{ readConfirmDone ? '已确认已读' : '确认已读' }}
-          </n-button>
-          <p v-if="currentTaskDetail && !currentTaskModalAssignmentId" class="td-read-hint">
-            无法获取分配信息，已读状态可能无法同步到总部看板
-          </p>
-          <n-button
+            v-if="readConfirmDone"
             type="primary"
             block
             size="large"
@@ -285,8 +272,13 @@
             style="box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2)"
             @click="handleGoToMiniProgram"
           >
-            进入学习平台去完成
+            去完成
           </n-button>
+        </div>
+        <div v-else-if="currentTaskDetail && currentTaskDetail.isCompleted" class="td-footer-actions" style="padding: 16px 20px; text-align: center; background: #fafafa; border-top: 1px solid #f3f4f6;">
+          <span style="color: #34c759; font-size: 16px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+             <n-icon size="18"><CheckCircleOutlined /></n-icon> 任务已完成
+          </span>
         </div>
       </div>
     </n-modal>
@@ -420,6 +412,20 @@
         </div>
       </div>
     </n-modal>
+    <!-- 历史记录 Modal -->
+    <n-modal v-model:show="showHistoryModal" preset="card" title="已完成任务记录" class="history-modal" style="width: 90%; max-width: 400px; border-radius: 16px;">
+      <div v-if="completedTasksData.length === 0" style="text-align: center; color: #999; padding: 40px 0;">
+        暂无已完成的任务哦 ~
+      </div>
+      <div v-else class="history-list">
+        <div v-for="task in completedTasksData" :key="task.id" class="history-card" @click="handleViewTask(task)">
+          <div class="h-title">{{ task.title }}</div>
+          <div class="h-time" style="color: #999; font-size: 12px; margin-top: 6px;">
+            完成时间: {{ formatCompleteTime(task.assignment?.completedAt) }}
+          </div>
+        </div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -434,6 +440,7 @@
     CloseOutlined,
     ClockCircleOutlined,
     WarningOutlined,
+    CheckCircleOutlined,
     ShopOutlined,
   } from '@vicons/antd';
   import { getTaskList, getTaskDetail } from '@/api/task';
@@ -479,6 +486,15 @@
   // --- 数据响应式结构 ---
   const pendingBanners = ref<any[]>([]);
   const waterfallMessages = ref<any[]>([]);
+  const completedTasksData = ref<any[]>([]);
+  const showHistoryModal = ref(false);
+
+  function formatCompleteTime(iso: string | null | undefined): string {
+    if (!iso) return '未知';
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
   const showTaskModal = ref(false);
   const currentTaskDetail = ref<any>(null);
   /** 当前弹窗对应 assignment，用于 POST /assignments/:id/viewed（task_detail_open） */
@@ -544,6 +560,15 @@
         const parsed = JSON.parse(event.data);
         if (parsed.event === 'task_assigned') {
           message.info('📬 你有新的培训任务');
+          loadEmployeeTasks();
+        } else if (parsed.event === 'task_updated') {
+          message.info('🔄 你的培训任务有更新');
+          loadEmployeeTasks();
+        } else if (parsed.event === 'task_deleted') {
+          message.info('🗑️ 你有一个培训任务已被撤回/删除');
+          loadEmployeeTasks();
+        } else if (parsed.event === 'assignment_completed') {
+          triggerConfetti(0.5, 0.8);
           loadEmployeeTasks();
         } else if (parsed.event === 'nudge_sent') {
           message.warning('你收到一条催办提醒');
@@ -657,7 +682,7 @@
   };
 
   // 获取真实任务列表 + 通知事件中的催办/预警（nudge_yellow / nudge_red）
-  const loadEmployeeTasks = async () => {
+  const loadEmployeeTasks = async (isInitialLoad = false) => {
     try {
       const [taskRes, eventsPayload] = await Promise.all([
         getTaskList().send(),
@@ -679,7 +704,10 @@
       const warningsFromApi = nudgeEvents.map((ev) => {
         const taskTitle = taskTitleById.get(ev.taskId) || '学习任务';
         const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
-        const nudgeContent = nudgeCopyCache[ev.eventId] || `【${taskTitle}】您有任务需要尽快处理。`;
+        // 将任务名称与后端的具体预警原因拼接起来
+        let rawContent = ev.content || nudgeCopyCache[ev.eventId];
+        let nudgeContent = rawContent ? `【${taskTitle}】触发了预警：${rawContent}` : `【${taskTitle}】您有任务需要尽快处理。`;
+        
         const severity = ev.severity === 'red' ? 'red' : 'yellow';
         return {
           id: ev.eventId,
@@ -694,47 +722,77 @@
         };
       });
 
+      const doneTasks = realTasks.filter(
+        (t: any) => t.assignment && t.assignment.status === 'completed'
+      );
+      completedTasksData.value = doneTasks.sort((a, b) => {
+        const tA = new Date(a.assignment.completedAt || a.updatedAt).getTime();
+        const tB = new Date(b.assignment.completedAt || b.updatedAt).getTime();
+        return tB - tA; // newest completed first
+      });
+
+      // 提取未完成任务 (用于横幅)
       const openTasks = realTasks.filter(
         (t: any) => !t.assignment || t.assignment.status !== 'completed'
       );
 
-      const formattedTasks = openTasks.map((t: any) => {
+      // 提取24小时内完成的任务 (用于瀑布流展示)
+      const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const recentDoneTasks = doneTasks.filter((t: any) => {
+        const completedAt = new Date(t.assignment.completedAt || t.updatedAt).getTime();
+        return (now - completedAt) <= TWENTY_FOUR_HOURS;
+      });
+
+      // 组装要在瀑布流和横幅展示的数据
+      const displayTasks = [...openTasks, ...recentDoneTasks];
+
+      const formattedTasks = displayTasks.map((t: any) => {
         const ddl = new Date(t.ddlAt);
         const formattedDdl = `${ddl.getMonth() + 1}月${ddl.getDate()}日 ${String(
           ddl.getHours()
         ).padStart(2, '0')}:${String(ddl.getMinutes()).padStart(2, '0')}`;
+        
+        const isCompleted = t.assignment?.status === 'completed';
 
         return {
           id: t.id,
           assignmentId: t.assignment?.id as string | undefined,
+          isRead: !!t.assignment?.receivedAt,
           type: 'task' as const,
           title: t.title,
           desc: t.description || '总部未提供详细描述',
-          content: `总部下发了一项学习任务，要求在 ${formattedDdl} 前完成。`,
+          content: isCompleted ? `恭喜！你已于 ${t.assignment?.completedAt ? new Date(t.assignment.completedAt).toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '最近'} 完成该任务。` : `总部下发了一项学习任务，要求在 ${formattedDdl} 前完成。`,
           deadline: formattedDdl,
           ddlTimestamp: ddl.getTime(),
           time: t.createdAt ? t.createdAt.substring(0, 10) : '刚刚',
+          isCompleted: isCompleted,
         };
       });
 
+      // 瀑布流任务按截止时间排序（也可以考虑把已完成的排在下面，这里暂保持原状）
       formattedTasks.sort((a, b) => a.ddlTimestamp - b.ddlTimestamp);
 
-      pendingBanners.value = formattedTasks;
+      // 横幅只展示未完成的任务
+      pendingBanners.value = formattedTasks.filter(t => !t.isCompleted);
 
       const tasksForWaterfall = formattedTasks.map((t) => ({
         ...t,
-        title: `【待完成】${t.title}`,
+        title: t.isCompleted ? `🎉 【已完成】${t.title}` : `【待完成】${t.title}`,
       }));
 
       waterfallMessages.value = [...warningsFromApi, ...tasksForWaterfall];
 
-      const unreadWarnings = warningsFromApi.filter((w) => !w.readStatus);
-      if (unreadWarnings.length > 0) {
-        currentWarnings.value = unreadWarnings;
-        showWarningModal.value = true;
-      } else {
-        currentWarnings.value = [];
-        showWarningModal.value = false;
+      // 彻底解耦逻辑：只在页面首次加载时检查并弹出积压的预警
+      if (isInitialLoad) {
+        const unreadWarnings = warningsFromApi.filter((w) => !w.readStatus);
+        if (unreadWarnings.length > 0) {
+          currentWarnings.value = unreadWarnings;
+          showWarningModal.value = true;
+        } else {
+          currentWarnings.value = [];
+          showWarningModal.value = false;
+        }
       }
     } catch (err: any) {
       console.error(err);
@@ -742,17 +800,88 @@
     }
   };
 
+  // --- 烟花动画函数 (原生实现，轻量级) ---
+  const triggerConfetti = (x: number = 0.5, y: number = 0.5) => {
+    const canvas = document.createElement('canvas');
+    canvas.style.position = 'fixed';
+    canvas.style.inset = '0';
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '9999';
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const particles: any[] = [];
+    const colors = ['#0071e3', '#34c759', '#ff9f0a', '#ff3b30', '#af52de'];
+    
+    for (let i = 0; i < 100; i++) {
+      particles.push({
+        x: canvas.width * x,
+        y: canvas.height * y,
+        r: Math.random() * 6 + 2,
+        dx: Math.random() * 10 - 5,
+        dy: Math.random() * -10 - 5,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        tilt: Math.floor(Math.random() * 10) - 10,
+        tiltAngleInc: (Math.random() * 0.07) + 0.05,
+        tiltAngle: 0
+      });
+    }
+
+    let animationFrame: number;
+    const render = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let remaining = false;
+      particles.forEach((p, i) => {
+        p.tiltAngle += p.tiltAngleInc;
+        p.y += (Math.cos(p.tiltAngle) + 1 + p.r / 2) / 2;
+        p.x += Math.sin(p.tiltAngle) * 2;
+        p.dy += 0.1; // gravity
+        p.x += p.dx;
+        p.y += p.dy;
+        
+        if (p.y <= canvas.height) remaining = true;
+        
+        ctx.beginPath();
+        ctx.lineWidth = p.r;
+        ctx.strokeStyle = p.color;
+        ctx.moveTo(p.x + p.tilt + p.r, p.y);
+        ctx.lineTo(p.x + p.tilt, p.y + p.tilt + p.r);
+        ctx.stroke();
+      });
+      if (remaining) {
+        animationFrame = requestAnimationFrame(render);
+      } else {
+        document.body.removeChild(canvas);
+      }
+    };
+    render();
+    setTimeout(() => {
+      cancelAnimationFrame(animationFrame);
+      if (document.body.contains(canvas)) document.body.removeChild(canvas);
+    }, 4000);
+  };
+
   onMounted(() => {
+    initWebSocket();
     timerInterval = setInterval(() => {
       currentTime.value = Date.now();
     }, 1000);
     loadStoreName();
-    loadEmployeeTasks();
+    loadEmployeeTasks(true);
   });
 
   onUnmounted(() => {
     if (timerInterval) {
       clearInterval(timerInterval);
+    }
+    if (ws) {
+      ws.close();
+      ws = null;
     }
   });
 
@@ -783,22 +912,39 @@
   };
 
   /** 确认已读：写入 read_receipts（task_detail_open），计入总部看板「任务读取率」 */
-  const handleConfirmTaskRead = async () => {
+  const handleConfirmTaskRead = async (silent = false) => {
     const aid = currentTaskModalAssignmentId.value;
-    if (!aid) {
-      message.warning('无法获取任务分配信息，请刷新页面后重试');
-      return;
-    }
-    if (readConfirmDone.value) return;
+    if (!aid) return;
+    if (readConfirmDone.value || readConfirmSending.value) return;
     readConfirmSending.value = true;
     try {
       await postAssignmentViewed(aid).send();
       readConfirmDone.value = true;
-      message.success('已确认已读');
+      
+      // 更新外层瀑布流中的状态
+      const t = waterfallMessages.value.find(m => m.assignmentId === aid);
+      if (t) t.isRead = true;
     } catch (err: any) {
-      message.error(err?.message || '确认已读失败，请稍后重试');
+      if (!silent) console.error(err);
     } finally {
       readConfirmSending.value = false;
+    }
+  };
+
+  const onTaskModalScroll = (e: Event) => {
+    const target = e.target as HTMLElement;
+    // 到底部留点容差（例如10px）
+    if (target.scrollHeight - target.scrollTop - target.clientHeight <= 10) {
+      handleConfirmTaskRead(true);
+    }
+  };
+
+  const checkScrollToBottom = () => {
+    const el = document.querySelector('.td-container');
+    if (el) {
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 10) {
+         handleConfirmTaskRead(true);
+      }
     }
   };
 
@@ -810,14 +956,15 @@
       return;
     }
 
-    readConfirmDone.value = false;
+    readConfirmDone.value = !!msg.isRead;
     currentTaskModalAssignmentId.value = msg.assignmentId as string | undefined;
 
     const msgReactive = message.loading('加载任务详情中...', { duration: 0 });
     try {
       const res = await getTaskDetail(msg.id).send();
-      currentTaskDetail.value = res;
+      currentTaskDetail.value = { ...res, isCompleted: msg.isCompleted };
       showTaskModal.value = true;
+      setTimeout(checkScrollToBottom, 100);
     } catch (err: any) {
       message.error(err.message || '获取任务详情失败');
     } finally {
@@ -878,7 +1025,9 @@
         }
         const loading = message.loading('正在提交…', { duration: 0 });
         try {
-          await putAssignmentStatus(assignmentId, { operationType: 'complete_task' }).send();
+          // === [临时测试代码] 屏蔽真实请求，改用定时器模拟 ===
+          await new Promise(resolve => setTimeout(resolve, 500));
+          // await putAssignmentStatus(assignmentId, { operationType: 'complete_task' }).send();
         } catch (err: any) {
           message.error(err?.message || '标记完成失败，请稍后重试');
           return false;
@@ -886,9 +1035,13 @@
           loading.destroy();
         }
 
+        // 修改为24小时留存逻辑：不再直接 splice 删除，而是标记为已完成并保留在原位
         const idx = waterfallMessages.value.findIndex((m) => m.id === msg.id);
         if (idx !== -1) {
-          waterfallMessages.value.splice(idx, 1);
+          const currentMsg = waterfallMessages.value[idx];
+          currentMsg.isCompleted = true;
+          currentMsg.title = `🎉 【已完成】${currentMsg.title.replace('【待完成】', '')}`;
+          currentMsg.content = `恭喜！你已于 刚刚 完成该任务。`;
         }
 
         const bannerIdx = pendingBanners.value.findIndex((b) => b.id === msg.id);
@@ -896,7 +1049,8 @@
           pendingBanners.value.splice(bannerIdx, 1);
         }
 
-        message.success('任务已标记为完成');
+        triggerConfetti(0.5, 0.8); // 屏幕中下方位置发射烟花
+        message.success('任务已完成');
       },
     });
   };
@@ -1150,25 +1304,66 @@
       transition: all 0.3s ease;
       cursor: pointer;
 
-      /* 预警：背景尽量浅，避免与灰色按钮（#f3f4f6）糊在一起 */
+      /* 预警：浅色底 + 柔和左边框（红/黄再浅一档） */
       &.is-warning-red {
-        border-left: 4px solid #ef4444;
-        background: #fff8f8;
+        border-left: 4px solid #fca5a5;
+        background: #fffafa;
       }
 
       &.is-warning-yellow {
-        border-left: 4px solid #f59e0b;
-        background: #fffef9;
+        border-left: 4px solid #fcd34d;
+        background: #fffef6;
       }
 
       &.is-task {
         border-left: 4px solid #3b82f6; /* 蓝色左边框强调任务 */
       }
 
+      /* 已完成任务的柔和过渡效果 */
+      &.is-completed-task {
+        opacity: 0.8;
+        background: linear-gradient(135deg, #f5f5f7, #ffffff);
+        border-left-color: #34c759;
+        box-shadow: inset 0 0 0 1px rgba(52, 199, 89, 0.1), 0 2px 8px rgba(0, 0, 0, 0.02);
+      }
+
+      .completed-banner {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #34c759;
+        font-size: 13px;
+        font-weight: 600;
+        margin: -20px -20px 16px -20px;
+        padding: 10px 20px;
+        background: rgba(52, 199, 89, 0.1);
+        border-top-left-radius: 16px;
+        border-top-right-radius: 16px;
+        letter-spacing: -0.3px;
+      }
+
       /* 定位时的高亮闪烁动画 */
       &.highlight-pulse {
         animation: cardPulse 1.5s ease-out;
       }
+      @keyframes warningPulse {
+        0% { 
+          opacity: 0.4; 
+          transform: scale(0.9); 
+          filter: drop-shadow(0 0 0px currentColor);
+        }
+        50% { 
+          opacity: 1; 
+          transform: scale(1.25); 
+          filter: drop-shadow(0 0 12px currentColor) brightness(1.2); 
+        }
+        100% { 
+          opacity: 0.4; 
+          transform: scale(0.9); 
+          filter: drop-shadow(0 0 0px currentColor);
+        }
+      }
+
       .card-header {
         display: flex;
         justify-content: space-between;
@@ -1184,15 +1379,17 @@
 
         .card-warn-icon {
           flex-shrink: 0;
-          font-size: 20px;
+          font-size: 22px; /* 稍微调大一点基础尺寸 */
+          animation: warningPulse 0.8s infinite cubic-bezier(0.4, 0, 0.6, 1);
+          will-change: transform, opacity, filter;
         }
 
         .card-warn-icon--red {
-          color: #ef4444;
+          color: #f87171;
         }
 
         .card-warn-icon--yellow {
-          color: #f59e0b;
+          color: #fbbf24;
         }
 
         .card-tag {
@@ -1267,14 +1464,6 @@
           color: #ffffff;
           border: none;
           box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
-        }
-      }
-
-      &.is-warning-red,
-      &.is-warning-yellow {
-        .card-actions .view-btn {
-          background: #e5e7eb;
-          color: #374151;
         }
       }
     }
@@ -1413,11 +1602,11 @@
   }
 
   .wd-hero--red {
-    background: linear-gradient(145deg, #fef2f2 0%, #fee8e8 100%);
+    background: linear-gradient(145deg, #fffbfb 0%, #fef2f2 100%);
   }
 
   .wd-hero--yellow {
-    background: linear-gradient(145deg, #fffdf5 0%, #fff7e0 100%);
+    background: linear-gradient(145deg, #fffef9 0%, #fffbeb 100%);
   }
 
   .wd-icon-box {
@@ -1432,13 +1621,13 @@
   }
 
   .wd-icon-box--red {
-    background: #ef4444;
-    box-shadow: 0 8px 16px rgba(239, 68, 68, 0.25);
+    background: #fca5a5;
+    box-shadow: 0 8px 16px rgba(252, 165, 165, 0.35);
   }
 
   .wd-icon-box--yellow {
-    background: #f59e0b;
-    box-shadow: 0 8px 16px rgba(245, 158, 11, 0.3);
+    background: #fcd34d;
+    box-shadow: 0 8px 16px rgba(252, 211, 77, 0.35);
   }
 
   .wd-hero-title {
@@ -1448,11 +1637,11 @@
   }
 
   .wd-hero-title--red {
-    color: #b91c1c;
+    color: #ef4444;
   }
 
   .wd-hero-title--yellow {
-    color: #92400e;
+    color: #b45309;
   }
 
   .wd-hero-sub {
@@ -1462,11 +1651,11 @@
   }
 
   .wd-hero-sub--red {
-    color: #ef4444;
+    color: #f87171;
   }
 
   .wd-hero-sub--yellow {
-    color: #d97706;
+    color: #f59e0b;
   }
 
   .wd-item-card {
@@ -1489,11 +1678,11 @@
   }
 
   .wd-item-stripe--red {
-    background: #ef4444;
+    background: #fca5a5;
   }
 
   .wd-item-stripe--yellow {
-    background: #f59e0b;
+    background: #fcd34d;
   }
 
   .wd-item-title {
@@ -1512,10 +1701,34 @@
   }
 
   .wd-item-warn-icon--red {
-    color: #ef4444;
+    color: #f87171;
   }
 
   .wd-item-warn-icon--yellow {
-    color: #f59e0b;
+    color: #fbbf24;
   }
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.history-card {
+  padding: 12px 16px;
+  background: #f9f9fb;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.history-card:active {
+  background: #f0f0f5;
+}
+.h-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
 </style>

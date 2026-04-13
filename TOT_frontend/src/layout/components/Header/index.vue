@@ -178,7 +178,18 @@
       };
 
       const breadcrumbList = computed(() => {
-        return generator(route.matched);
+        const list = generator(route.matched);
+        // 动态识别是否为“编辑任务”页面以修改面包屑
+        if (route.name === 'CentralTaskPublish' && route.query.id) {
+          const lastItem = list[list.length - 1];
+          if (lastItem) {
+            lastItem.label = '编辑任务';
+            if (lastItem.meta) {
+              lastItem.meta = { ...lastItem.meta, title: '编辑任务' };
+            }
+          }
+        }
+        return list;
       });
 
       const dropdownSelect = (key) => {
