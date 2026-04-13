@@ -214,7 +214,7 @@ ssh mac-studio
 
 ## Step 6：后端开发者工作方式
 
-后端开发者**必须在 Mac Studio 上工作**（SQLite 数据库文件在那里，不能分布）。
+后端开发者**必须在 Mac Studio 上工作**（SQLite 数据库文件在那里，不能分布）。**数据如何协作维护、是否进 Git、何时跑 seed**，见下文「团队协作：如何维护数据（SQLite）」。
 
 1. Cursor Remote SSH 连接 Mac Studio
 2. 切到自己的功能分支：
@@ -233,6 +233,46 @@ ssh mac-studio
    ```bash
    bash "$REPO_ROOT/scripts/deploy.sh"
    ```
+
+---
+
+## 团队协作：如何维护数据（SQLite）
+
+后端使用 **单文件 SQLite**（默认路径：`TOT_backend/server/database.db`）。协作时请遵守下面约定，避免 `git pull` 冲突、库损坏或「各端数据对不上」。
+
+### 原则
+
+| 做法 | 说明 |
+|------|------|
+| **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。 |
+| **用 schema + seed 表达「应有数据」** | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。 |
+| **Mac Studio 上只有一份「共享运行时库」** | PM2 的 `tot-api` 与大家在机器上做的联调，默认共用同一路径下的 `database.db`。需要隔离时应用**自己的分支 + 停 PM2 + 临时换库路径**（需改代码或环境，团队需额外约定）。 |
+
+### 新人或新克隆仓库后
+
+1. 拉代码后**不要**期待仓库里带有可用的 `database.db`（本地文件由运行生成）。
+2. 启动后端一次（或 `npm run dev` / PM2）会按 `schema.sql` 建表。
+3. 需要与文档一致的测试账号与规模数据时，在 `TOT_backend/server` 执行：
+   ```bash
+   node db/seed.js
+   ```
+   账号与密码以脚本结束时的打印为准（如 `central` / `Train2026!` 等）。
+
+### 日常开发（在 Mac Studio 上）
+
+- **改表结构、加字段**：改 `schema.sql`（及必要的迁移逻辑，若项目中有单独迁移脚本则一并维护），提交 PR，由 reviewer 确认对现有库的影响。
+- **改种子数据**：改 `db/seed.js`（或项目规定的 seed 文档），提交 PR；合并后需要环境的成员可**在确认可丢本地数据**的前提下删库重跑 seed，或由管理员统一说明。
+- **`git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
+
+### 集成与部署（管理员）
+
+- `scripts/deploy.sh` 拉代码、装依赖、**不会**用 Git 里的二进制库覆盖机器（因库不应进仓库）。若线上/共享环境需要「回到标准演示数据」，在维护窗口内备份后删除 `database.db`（及同目录 `-wal` / `-shm` 若存在），重启服务再执行 `node db/seed.js`（具体以团队当时流程为准）。
+- 出现 **`database disk image is malformed`** 时，说明 SQLite 文件已损坏，需停服务、处理损坏文件并重建库 + seed；重要数据应事先有**业务级备份**（本仓库默认不承诺库文件级备份策略）。
+
+### 不要做的事
+
+- 不要把 `database.db` 或 `*.db-wal` / `*.db-shm` 加进提交。
+- 不要在多台机器各放一份「正式联调库」又互不同步，却假设行为一致；**以 Mac Studio 上实际文件为准**。
 
 ---
 
