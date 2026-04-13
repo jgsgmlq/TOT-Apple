@@ -2,10 +2,27 @@
 
 const { db } = require('../db');
 const { nanoid } = require('nanoid');
-const mainAgent = require('../agent');
 const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 
 const systemUserId = 1; // 系统执行账号（写入 initiator_id）
+
+/** 自动预警固定文案（前缀由任务名称拼接） */
+const AUTO_NUDGE_COPY = {
+  progressLag:
+    '叮~最近辛苦啦！你的培训进度不小心被小伙伴超车咯，抽个空隙冲刺通关，轻松追平不掉队！💪✨',
+  startDelay:
+    '任务时间悄悄过半啦，你的学习进度条还在沉睡，趁现在抽空唤醒它，轻松起步无压力哦！🌱✨',
+  deadlineCrisisP1:
+    '距离课程截止不到48小时啦！知道你最近辛苦，快趁休息间隙一鼓作气收个尾，轻松拿下不留遗憾！☕💪',
+  deadlineCrisisP0:
+    '最后24小时倒计时！任务即将超时，进度条全面告急啦，时间紧迫，请速速上线冲刺收尾！🚨⚡',
+};
+
+function formatAutoNudgeContent(taskName, ruleType) {
+  const name = (taskName && String(taskName).trim()) || '培训任务';
+  const body = AUTO_NUDGE_COPY[ruleType] || '你有未完成的培训任务，请抓紧时间！';
+  return `【${name}】${body}`;
+}
 
 /**
  * 扫描并排队自动预警：同步阶段只做规则命中与去重，AI 与落库在 setImmediate 异步中执行。
@@ -91,7 +108,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
       }
     } else if (hoursLeft <= p1Hours) {
       for (const a of assignments) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP1', threshold: p1Hours });
+        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'deadlineCrisisP1', threshold: p1Hours });
       }
     }
   }
@@ -142,26 +159,18 @@ async function evaluateAndTriggerAutoNudges(taskId) {
 
 /**
  * 异步：逐人产生预警消息，写入 notification_events.content 并广播。
- * （已移除 AI 生成逻辑，固化为展示触发的规则原文）
+ * 文案为规则对应的固定话术，前缀拼接任务名称。
  */
 async function processAutoNudgeTargetsAsync(taskId, targets) {
+  const taskRow = db.get('SELECT name FROM tasks WHERE id = ?', [taskId]);
+  const taskName = taskRow && taskRow.name;
+
   for (const target of targets) {
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
     const exists = db.get('SELECT id FROM notification_events WHERE dedupe_key = ?', [dedupeKey]);
     if (exists) continue;
 
-    let content = '你有未完成的培训任务，请抓紧时间！';
-    
-    // 固化业务规则，预警文案直接展示触发的规则原文
-    if (target.ruleType === 'progressLag') {
-      content = `个人任务完成率处于门店最后${target.threshold}位`;
-    } else if (target.ruleType === 'startDelay') {
-      content = `期限达到${target.threshold}%但进度为0`;
-    } else if (target.ruleType === 'deadlineCrisisP0') {
-      content = `距离deadline<${target.threshold}h但未完成课程(p0)`;
-    } else if (target.ruleType === 'deadlineCrisisP1') {
-      content = `距离deadline<${target.threshold}h但未完成课程(p1)`;
-    }
+    const content = formatAutoNudgeContent(taskName, target.ruleType);
 
     const eventId = nanoid();
     const eventType = target.severity === 'red' ? 'nudge_red' : 'nudge_yellow';
