@@ -595,6 +595,9 @@ router.delete('/:id', authenticate, requireRole(['central', 'admin']), (req, res
     );
 
     db.transaction(() => {
+      // 必须先删除被通知引用的已读回执
+      db.run('DELETE FROM read_receipts WHERE event_id IN (SELECT id FROM notification_events WHERE task_id = ?)', [taskId]);
+      // 然后再删除通知本身
       db.run('DELETE FROM notification_events WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM nudge_records WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
