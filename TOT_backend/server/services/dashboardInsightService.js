@@ -6,13 +6,20 @@ const { parseStoreDrill } = require('../utils/storeDrill');
 const { generateText, generateTextDeepSeek } = require('../utils/ai');
 const { createError } = require('../middleware/errorHandler');
 
-const MODULE_TYPES = ['trend', 'heatmap_rank', 'funnel', 'warning_stats'];
-
-const SYSTEM_PROMPT =
-  '你是 Apple 零售培训督导助手，面向总部管理者。根据下方结构化数据输出一段「智能洞察」：\n' +
-  '1) 用 2～4 句中文，语气专业、可执行；\n' +
-  '2) 只依据给定数据推断，无数据则说「数据不足」勿编造；\n' +
-  '3) 不要 Markdown 标题符号，不要列出原始 JSON。';
+const MODULE_TYPES = [
+  'north_star',
+  'completion_weekly',
+  'completion_daily',
+  'channel_north_star',
+  'funnel_alerts',
+];
+const INSIGHT_TYPES = [
+  'north_star',
+  'completion_weekly',
+  'completion_daily',
+  'channel_north_star',
+  'funnel_alerts',
+];
 
 function normalizeQuery(body) {
   return {
@@ -21,6 +28,19 @@ function normalizeQuery(body) {
     dealerName: body.dealerName,
     storeId: body.storeId,
   };
+}
+
+function toPct(numerator, denominator, digits = 2) {
+  if (!denominator || denominator <= 0) return 0;
+  return Number(((100 * numerator) / denominator).toFixed(digits));
+}
+
+function toMedian(nums) {
+  if (!nums || nums.length === 0) return 0;
+  const arr = nums.slice().sort((a, b) => a - b);
+  const mid = Math.floor(arr.length / 2);
+  if (arr.length % 2 === 0) return Number(((arr[mid - 1] + arr[mid]) / 2).toFixed(2));
+  return Number(arr[mid].toFixed(2));
 }
 
 function taScope(taskId, drill) {
@@ -36,20 +56,20 @@ function taScope(taskId, drill) {
   return { taConditions, joinStore, storeWhere, allParams };
 }
 
-async function generateInsightText(userPrompt) {
+async function generateInsightText(userPrompt, systemPrompt, options = {}) {
   try {
     return await generateTextDeepSeek(userPrompt, {
-      system: SYSTEM_PROMPT,
-      temperature: 0.25,
-      maxTokens: 900,
+      system: systemPrompt,
+      temperature: options.temperature == null ? 0.25 : options.temperature,
+      maxTokens: options.maxTokens || 900,
     });
   } catch (err) {
     console.warn('[dashboardInsight] DeepSeek failed, fallback Gemini:', err.message);
-    return generateText(`${SYSTEM_PROMPT}\n\n---\n\n${userPrompt}`);
+    return generateText(`${systemPrompt}\n\n---\n\n${userPrompt}`);
   }
 }
 
-function buildFunnelFacts(body) {
+function buildNorthStarFacts(body) {
   const taskId = body.taskId || null;
   const drill = parseStoreDrill(normalizeQuery(body));
   const { taConditions, joinStore, storeWhere, allParams } = taScope(taskId, drill);
@@ -57,6 +77,8 @@ function buildFunnelFacts(body) {
   const base = db.get(
     `SELECT
        COUNT(*) AS total,
+       SUM(CASE WHEN ta.status = 'pending' THEN 1 ELSE 0 END) AS not_started_count,
+       SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
        SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
        SUM(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL
              AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS on_time_count,
@@ -71,11 +93,37 @@ function buildFunnelFacts(body) {
   );
 
   const total = base.total || 0;
+  const notStarted = base.not_started_count || 0;
+  const inProgress = base.in_progress_count || 0;
   const completed = base.completed_count || 0;
   const onTime = base.on_time_count || 0;
-  const completionRate = total > 0 ? Math.round((100 * completed) / total) : 0;
-  const onTimeRate = total > 0 ? Math.round((100 * onTime) / total) : 0;
+  const completionRate = toPct(completed, total);
+  const onTimeRate = toPct(onTime, total);
   const avgH = base.avg_hours != null ? Number(base.avg_hours.toFixed(1)) : 0;
+  const task = taskId ? db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]) : null;
+
+  return {
+    scope: taskId ? `taskId=${taskId}` : '全任务汇总',
+    taskId: taskId || null,
+    taskName: task ? task.title : null,
+    drill: drill.hasDrill ? normalizeQuery(body) : null,
+    totalCount: total,
+    notStartedCount: notStarted,
+    inProgressCount: inProgress,
+    completedCount: completed,
+    overdueCount: base.overdue || 0,
+    completionRate,
+    onTimeRate,
+    avgCompletionHours: avgH,
+  };
+}
+
+function buildFunnelFacts(body) {
+  const baseFacts = buildNorthStarFacts(body);
+  const taskId = body.taskId || null;
+  const drill = parseStoreDrill(normalizeQuery(body));
+  const { taConditions, joinStore, storeWhere, allParams } = taScope(taskId, drill);
+  const total = baseFacts.totalCount;
 
   let push = 0;
   let reads = 0;
@@ -111,60 +159,147 @@ function buildFunnelFacts(body) {
     reads = rr && rr.c ? rr.c : 0;
   }
 
-  const facts = {
-    scope: taskId ? `taskId=${taskId}` : '全任务汇总',
-    drill: drill.hasDrill ? normalizeQuery(body) : null,
+  const reachRow = db.get(
+    `SELECT COUNT(ta.id) AS reached_count
+     FROM task_assignments ta
+     JOIN users u ON ta.user_id = u.employee_id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}
+       AND (
+         (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
+         OR ta.received_at IS NOT NULL
+       )`,
+    allParams
+  );
+
+  const nudgeRow = db.get(
+    `SELECT
+       COUNT(ta.id) AS total_nudged,
+       SUM(CASE WHEN ta.started_at IS NOT NULL OR ta.status = 'completed' THEN 1 ELSE 0 END) AS converted_nudged
+     FROM task_assignments ta
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere} AND ta.nudge_count > 0`,
+    allParams
+  );
+
+  const warnStatsRow = db.get(
+    `SELECT
+       SUM(CASE WHEN ne.dedupe_key LIKE '%startDelay%' THEN 1 ELSE 0 END) AS start_delay_cnt,
+       SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP0%' THEN 1 ELSE 0 END) AS p0_cnt,
+       SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP1%' THEN 1 ELSE 0 END) AS p1_cnt
+     FROM notification_events ne
+     JOIN task_assignments ta ON ne.assignment_id = ta.id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
+    allParams
+  ) || {};
+
+  return {
+    scope: baseFacts.scope,
+    taskId: baseFacts.taskId,
+    taskName: baseFacts.taskName,
+    drill: baseFacts.drill,
     totalAssignments: total,
-    completionRate,
-    onTimeCompletionRate: onTimeRate,
-    avgCompletionTimeHours: avgH,
-    overdueCount: base.overdue || 0,
+    taskReachRate: toPct((reachRow && reachRow.reached_count) || 0, total),
+    taskReadRate: toPct(reads, total),
+    nudgeConversionRate: toPct(
+      (nudgeRow && nudgeRow.converted_nudged) || 0,
+      (nudgeRow && nudgeRow.total_nudged) || 0
+    ),
+    startDelayRate: toPct(warnStatsRow.start_delay_cnt || 0, total),
+    crisisP1Rate: toPct(warnStatsRow.p1_cnt || 0, total),
+    crisisP0Rate: toPct(warnStatsRow.p0_cnt || 0, total),
     pushUserCount: push,
     readUserDistinct: reads,
   };
-  return facts;
 }
 
-function buildTrendFacts(body) {
+function buildWeeklyCompletionFacts(body) {
   const taskId = body.taskId;
-  if (!taskId) throw createError(400, 'trend 模块需要 taskId', 'INSIGHT_001');
-  const trendType = body.trendType === 'hourly' ? 'hourly' : 'daily';
-  const date = body.date || new Date().toISOString().slice(0, 10);
+  if (!taskId) throw createError(400, 'completion_weekly 需要 taskId', 'INSIGHT_001');
   const drill = parseStoreDrill(normalizeQuery(body));
   const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
   const storeWhere = drill.hasDrill ? drill.sql : '';
+  const task = db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]);
+  if (!task) throw createError(404, '任务不存在', 'TASK_002');
+  const totalRow = db.get(
+    `SELECT COUNT(*) AS total FROM task_assignments ta ${joinStore}
+     WHERE ta.task_id = ? ${storeWhere}`,
+    [taskId, ...drill.params]
+  );
+  const rows = db.all(
+    `SELECT date(ta.completed_at) AS k, COUNT(ta.id) AS n
+     FROM task_assignments ta ${joinStore}
+     WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL ${storeWhere}
+     GROUP BY date(ta.completed_at) ORDER BY date(ta.completed_at) ASC`,
+    [taskId, ...drill.params]
+  );
+  const latestRows = rows.slice(-7);
+  let cumulative = 0;
+  const progressData = latestRows.map((r, idx) => {
+    cumulative += r.n || 0;
+    return {
+      day: `第${idx + 1}天`,
+      new_completions: r.n || 0,
+      cumulative_completions: cumulative,
+    };
+  });
+  return {
+    taskName: task.title,
+    taskId,
+    totalUsers: (totalRow && totalRow.total) || 0,
+    currentDay: progressData.length,
+    drill: drill.hasDrill ? normalizeQuery(body) : null,
+    progressData,
+  };
+}
 
-  let rows;
-  if (trendType === 'daily') {
-    rows = db.all(
-      `SELECT date(ta.completed_at) AS k, COUNT(ta.id) AS n
-       FROM task_assignments ta ${joinStore}
-       WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL ${storeWhere}
-       GROUP BY date(ta.completed_at) ORDER BY date(ta.completed_at) ASC`,
-      [taskId, ...drill.params]
-    );
-  } else {
-    rows = db.all(
-      `SELECT strftime('%H', ta.completed_at) AS k, COUNT(ta.id) AS n
-       FROM task_assignments ta ${joinStore}
-       WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL
-         AND date(ta.completed_at) = ? ${storeWhere}
-       GROUP BY strftime('%H', ta.completed_at) ORDER BY strftime('%H', ta.completed_at) ASC`,
-      [taskId, date, ...drill.params]
-    );
+function buildDailyCompletionFacts(body) {
+  const taskId = body.taskId;
+  if (!taskId) throw createError(400, 'completion_daily 需要 taskId', 'INSIGHT_001');
+  const targetDate = body.date || new Date().toISOString().slice(0, 10);
+  const drill = parseStoreDrill(normalizeQuery(body));
+  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+  const storeWhere = drill.hasDrill ? drill.sql : '';
+  const task = db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]);
+  if (!task) throw createError(404, '任务不存在', 'TASK_002');
+  const totalRow = db.get(
+    `SELECT COUNT(*) AS total FROM task_assignments ta ${joinStore}
+     WHERE ta.task_id = ? ${storeWhere}`,
+    [taskId, ...drill.params]
+  );
+  const rows = db.all(
+    `SELECT strftime('%H', ta.completed_at) AS hour_key, COUNT(ta.id) AS n
+     FROM task_assignments ta ${joinStore}
+     WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL
+       AND date(ta.completed_at) = ? ${storeWhere}
+     GROUP BY strftime('%H', ta.completed_at) ORDER BY strftime('%H', ta.completed_at) ASC`,
+    [taskId, targetDate, ...drill.params]
+  );
+  const byHour = {};
+  for (const r of rows) byHour[Number(r.hour_key)] = r.n || 0;
+
+  let cumulative = 0;
+  const progressData = [];
+  for (let h = 0; h < 24; h += 2) {
+    const n = (byHour[h] || 0) + (byHour[h + 1] || 0);
+    cumulative += n;
+    const pad = (v) => String(v).padStart(2, '0');
+    progressData.push({
+      time_slot: `${pad(h)}:00-${pad(h + 2)}:00`,
+      new_completions: n,
+      cumulative_completions: cumulative,
+    });
   }
 
-  const totalCompleted = rows.reduce((a, r) => a + (r.n || 0), 0);
-  const facts = {
-    module: 'trend',
+  return {
+    taskName: task.title,
     taskId,
-    trendType,
-    date: trendType === 'hourly' ? date : null,
+    totalUsers: (totalRow && totalRow.total) || 0,
+    targetDate,
     drill: drill.hasDrill ? normalizeQuery(body) : null,
-    series: rows.map((r) => ({ timeKey: r.k, newCompleted: r.n })),
-    totalCompletedInSeries: totalCompleted,
+    intradayProgressData: progressData,
   };
-  return facts;
 }
 
 function buildHeatmapRankFacts(body) {
@@ -308,8 +443,122 @@ function buildWarningStatsFacts(body) {
   };
 }
 
-function factsToPrompt(module, facts) {
-  return `【模块】${module}\n【数据】\n${JSON.stringify(facts, null, 2)}`;
+function buildChannelNorthStarFacts(body) {
+  const taskId = body.taskId;
+  if (!taskId) throw createError(400, 'channel_north_star 需要 taskId', 'INSIGHT_001');
+  const drill = parseStoreDrill(normalizeQuery(body));
+  const channelRows = db.all(
+    `SELECT
+       s.rtm AS channel,
+       COUNT(ta.id) AS total_count,
+       SUM(CASE WHEN ta.status='completed' AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS on_time_count,
+       AVG(CASE WHEN ta.status='completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL
+                THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 * 60 END) AS avg_minutes
+     FROM task_assignments ta
+     JOIN stores s ON s.id = ta.store_id
+     JOIN tasks t ON t.id = ta.task_id
+     WHERE ta.task_id = ? ${drill.sql}
+     GROUP BY s.rtm`,
+    [taskId, ...drill.params]
+  );
+
+  const channels = ['Multibrand', 'Monobrand', 'Enterprise', 'Education', 'Carrier'];
+  const channelData = {};
+  const rates = [];
+  const mins = [];
+  for (const ch of channels) {
+    const row = channelRows.find((r) => (r.channel || '') === ch);
+    const rate = row ? toPct(row.on_time_count || 0, row.total_count || 0, 1) : 0;
+    const avgMin = row && row.avg_minutes != null ? Number(row.avg_minutes.toFixed(1)) : 0;
+    channelData[ch] = {
+      completion_rate: `${rate.toFixed(1)}%`,
+      completion_time_minutes: avgMin,
+      sample_size: row ? row.total_count : 0,
+    };
+    rates.push(rate);
+    mins.push(avgMin);
+  }
+
+  const meanRate = rates.length ? Number((rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1)) : 0;
+  const meanMin = mins.length ? Number((mins.reduce((a, b) => a + b, 0) / mins.length).toFixed(1)) : 0;
+
+  return {
+    taskId,
+    drill: drill.hasDrill ? normalizeQuery(body) : null,
+    overall_statistics: {
+      completion_rate: {
+        mean: `${meanRate.toFixed(1)}%`,
+        median: `${toMedian(rates).toFixed(1)}%`,
+      },
+      completion_time_minutes: {
+        mean: meanMin,
+        median: toMedian(mins),
+      },
+    },
+    channel_data: channelData,
+  };
+}
+
+function resolveInsightType(body) {
+  const raw = (body.insightType || '').trim();
+  if (INSIGHT_TYPES.includes(raw)) return raw;
+  if (body.module === 'funnel') return 'north_star';
+  if (body.module === 'trend') {
+    return body.trendType === 'hourly' ? 'completion_daily' : 'completion_weekly';
+  }
+  if (body.module === 'heatmap_rank') return 'channel_north_star';
+  if (body.module === 'warning_stats') return 'funnel_alerts';
+  return '';
+}
+
+function buildPromptByInsightType(insightType, facts) {
+  if (insightType === 'north_star') {
+    return {
+      system: '你是资深零售培训运营专家。只基于输入数据输出客观洞察；禁止建议、禁止行动方案、禁止编造数据。',
+      user: `请围绕“按时完成率、人均完成耗时”输出结构化洞察，150字以内，含少量 emoji。\n数据：${JSON.stringify(facts, null, 2)}`,
+      options: { maxTokens: 500, temperature: 0.25 },
+    };
+  }
+  if (insightType === 'completion_weekly') {
+    return {
+      system: '你是资深零售数据分析师。只做现状分析与归因诊断，禁止任何建议、优化策略、行动指导。',
+      user:
+        `请按以下结构输出：\n` +
+        `### 📊 进度健康度诊断\n### 📈 数据趋势特征解析\n### 🔍 深层业务归因推测\n` +
+        `数据：${JSON.stringify(facts, null, 2)}`,
+      options: { maxTokens: 1100, temperature: 0.2 },
+    };
+  }
+  if (insightType === 'completion_daily') {
+    return {
+      system: '你是资深零售数据分析师。只做时段分布与归因诊断，禁止建议，禁止评估催办效果。',
+      user:
+        `请按以下结构输出：\n` +
+        `### 📊 时段分布与集中度特征\n### 🔍 深层业务归因推测\n` +
+        `数据：${JSON.stringify(facts, null, 2)}`,
+      options: { maxTokens: 900, temperature: 0.2 },
+    };
+  }
+  if (insightType === 'channel_north_star') {
+    return {
+      system: '你是资深B端业务分析专家。基于中位数与均值相对比较做归因；禁止建议、禁止催办分析。',
+      user:
+        `请严格按结构输出：\n` +
+        `## 📊 核心业务洞察 (Business Insights)\n` +
+        `## 🔍 深度现象归因 (Deep Attribution)\n` +
+        `数据：${JSON.stringify(facts, null, 2)}`,
+      options: { maxTokens: 1200, temperature: 0.2 },
+    };
+  }
+
+  return {
+    system: '你是资深零售链路分析师。只输出客观洞察与归因，禁止建议、禁止行动方案、禁止评估催办时间点。',
+    user:
+      `请严格按结构输出：\n` +
+      `### 📊一、 全局链路健康度洞察\n### 🔍二、 核心数据洞察与深度归因\n` +
+      `数据：${JSON.stringify(facts, null, 2)}`,
+    options: { maxTokens: 1100, temperature: 0.2 },
+  };
 }
 
 /**
@@ -317,25 +566,34 @@ function factsToPrompt(module, facts) {
  * @param {number} userId
  */
 async function createInsight(body, userId) {
-  const module = body.module;
-  if (!module || !MODULE_TYPES.includes(module)) {
-    throw createError(400, `module 必填且为: ${MODULE_TYPES.join(', ')}`, 'INSIGHT_002');
+  const insightType = resolveInsightType(body);
+  if (!insightType) {
+    throw createError(
+      400,
+      `insightType 必填且为: ${INSIGHT_TYPES.join(', ')}（或使用旧 module 兼容入参）`,
+      'INSIGHT_002'
+    );
   }
+  const module = insightType;
 
   let facts;
-  if (module === 'funnel') facts = buildFunnelFacts(body);
-  else if (module === 'trend') facts = buildTrendFacts(body);
-  else if (module === 'heatmap_rank') facts = buildHeatmapRankFacts(body);
-  else facts = buildWarningStatsFacts(body);
+  if (insightType === 'north_star') facts = buildNorthStarFacts(body);
+  else if (insightType === 'completion_weekly') facts = buildWeeklyCompletionFacts(body);
+  else if (insightType === 'completion_daily') facts = buildDailyCompletionFacts(body);
+  else if (insightType === 'channel_north_star') facts = buildChannelNorthStarFacts(body);
+  else facts = buildFunnelFacts(body);
 
-  const userPrompt = factsToPrompt(module, facts);
-  const content = (await generateInsightText(userPrompt)).trim();
+  const promptPack = buildPromptByInsightType(insightType, facts);
+  const content = (
+    await generateInsightText(promptPack.user, promptPack.system, promptPack.options)
+  ).trim();
   if (!content) throw createError(503, '智能洞察生成失败，请稍后重试', 'INSIGHT_503');
 
   const id = nanoid();
   const taskId = body.taskId || null;
   const q = normalizeQuery(body);
   const extra = {
+    insightType,
     trendType: body.trendType,
     date: body.date,
     rtmLevel: body.rtmLevel,
@@ -370,6 +628,7 @@ async function createInsight(body, userId) {
 
   return {
     insightId: id,
+    insightType,
     module,
     taskId,
     filters: q,
@@ -406,6 +665,7 @@ function recordVote(insightId, voteStr) {
 
 module.exports = {
   MODULE_TYPES,
+  INSIGHT_TYPES,
   createInsight,
   recordVote,
 };

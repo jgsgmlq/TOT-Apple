@@ -28,6 +28,7 @@ function getDb() {
     migrateUsersLastLoginAt(_db);
     ensureChatTables(_db);
     migrateDashboardInsightCounts(_db);
+    migrateDashboardInsightModuleTypes(_db);
   }
   return _db;
 }
@@ -47,6 +48,75 @@ function migrateDashboardInsightCounts(database) {
   }
   if (!names.has('down_count')) {
     database.exec('ALTER TABLE dashboard_insights ADD COLUMN down_count INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
+/** 已有库将 dashboard_insights.module_type 口径迁移为新 insightType 枚举。 */
+function migrateDashboardInsightModuleTypes(database) {
+  const row = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='dashboard_insights'")
+    .get();
+  const ddl = (row && row.sql) || '';
+  const isNewEnum = ddl.includes(
+    "CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts'))"
+  );
+  if (isNewEnum) return;
+
+  database.exec('BEGIN');
+  try {
+    database.exec('ALTER TABLE dashboard_insights RENAME TO dashboard_insights_old');
+    database.exec(`
+      CREATE TABLE dashboard_insights (
+        id                  TEXT PRIMARY KEY,
+        module_type         TEXT NOT NULL
+                              CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts')),
+        task_id             TEXT REFERENCES tasks(id),
+        filter_rtm          TEXT,
+        filter_format       TEXT,
+        filter_dealer_name  TEXT,
+        filter_store_id     TEXT REFERENCES stores(id),
+        extra_params_json   TEXT,
+        content             TEXT NOT NULL,
+        context_json        TEXT,
+        up_count            INTEGER NOT NULL DEFAULT 0 CHECK (up_count >= 0),
+        down_count          INTEGER NOT NULL DEFAULT 0 CHECK (down_count >= 0),
+        created_by          INTEGER NOT NULL REFERENCES users(id),
+        created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (extra_params_json IS NULL OR (json_valid(extra_params_json) AND json_type(extra_params_json) = 'object')),
+        CHECK (context_json IS NULL OR (json_valid(context_json) AND json_type(context_json) = 'object'))
+      )
+    `);
+    database.exec(`
+      INSERT INTO dashboard_insights (
+        id, module_type, task_id, filter_rtm, filter_format, filter_dealer_name, filter_store_id,
+        extra_params_json, content, context_json, up_count, down_count, created_by, created_at
+      )
+      SELECT
+        id,
+        CASE module_type
+          WHEN 'funnel' THEN 'north_star'
+          WHEN 'trend' THEN
+            CASE
+              WHEN json_extract(COALESCE(extra_params_json, '{}'), '$.trendType') = 'hourly'
+                THEN 'completion_daily'
+              ELSE 'completion_weekly'
+            END
+          WHEN 'heatmap_rank' THEN 'channel_north_star'
+          WHEN 'warning_stats' THEN 'funnel_alerts'
+          ELSE 'north_star'
+        END AS module_type,
+        task_id, filter_rtm, filter_format, filter_dealer_name, filter_store_id,
+        extra_params_json, content, context_json,
+        COALESCE(up_count, 0), COALESCE(down_count, 0), created_by, created_at
+      FROM dashboard_insights_old
+    `);
+    database.exec('DROP TABLE dashboard_insights_old');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_di_module_task ON dashboard_insights(module_type, task_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at)');
+    database.exec('COMMIT');
+  } catch (err) {
+    database.exec('ROLLBACK');
+    throw err;
   }
 }
 
