@@ -1,12 +1,18 @@
 # ToT API 接口定义文档
 
+### v1.4.14（2026-04-13）
+
+- **看板智能洞察类型重构**：`POST /dashboard/insights` 由旧 `module` 升级为 `insightType` 分发，支持：`north_star`（北极星）、`completion_weekly`（完成人数周趋势）、`completion_daily`（完成人数日内时段）、`channel_north_star`（分渠道北极星下钻）、`funnel_alerts`（链路数据 + 预警率合并）。服务端仍兼容旧 `module` 入参并自动映射。
+- **洞察存储口径对齐**：`dashboard_insights.module_type` 枚举同步改为上述 5 类洞察类型；旧数据通过迁移函数自动映射到新枚举（见 `server/db/index.js#migrateDashboardInsightModuleTypes`）。
+- **产品与接口命名对齐**：§5.7.1 增补「北极星 / 完成人数趋势 / 区域进度与门店排行 / 漏斗链路数据 / 预警率统计」五个前端模块与 `insightType`、`module_type`、Prompt 数据口径的对照表；`03-DATABASE.md` §12 同步简表。
+
 ### v1.4.13（2026-04-13）
 
 - **看板智能洞察投票**：赞/踩仅累加 **`dashboard_insights.up_count` / `down_count`**，不记录投票人。
 
 ### v1.4.12（2026-04-13）
 
-- **看板智能洞察**：新增 **`POST /dashboard/insights`**（`module`：`trend` | `heatmap_rank` | `funnel` | `warning_stats`），基于看板同源聚合数据调用 LLM 生成短文案，落库表 **`dashboard_insights`**；**`POST /dashboard/insights/{insightId}/vote`** 提交点赞/点踩（`vote`: `up` | `down`）。详见 §5.7。
+- **看板智能洞察**：新增 **`POST /dashboard/insights`**（后续已升级为 `insightType` 分发；详见 v1.4.14 与 §5.7），基于看板同源聚合数据调用 LLM 生成短文案，落库表 **`dashboard_insights`**；**`POST /dashboard/insights/{insightId}/vote`** 提交点赞/点踩（`vote`: `up` | `down`）。详见 §5.7。
 
 ### v1.4.11（2026-04-01）
 
@@ -1753,15 +1759,29 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 #### 5.7.1 生成洞察 `POST /dashboard/insights`
 
+**与前端看板五个模块名称对齐（产品名 → `insightType` → 业务含义）**
+
+总部看板侧五个模块与后端 **`insightType`**、LLM Prompt 数据口径对应关系如下（调用时请传 **`insightType`**；`module` 仅为旧版兼容字段）。
+
+| 前端模块名称 | `insightType` | 说明 |
+|--------------|---------------|------|
+| **北极星** | `north_star` | 聚焦 **按时完成率** 与 **人均完成耗时（小时）**，并辅以总人数、待开始/进行中/已完成/逾期等分布，用于判断任务整体健康度与节奏（对应 Prompt：北极星模块）。 |
+| **完成人数趋势** | `completion_weekly` 或 `completion_daily` | 同一前端模块下的两种时间粒度：**周趋势** 取最近有完成记录的自然日序列（最多 7 段）形成「第 N 天 + 新增/累计完成」；**日内趋势** 取指定 `date` 当天按 2 小时桶的完成分布（对应 Prompt：完成人数模块-周 / 完成人数模块-日）。传 `completion_daily` 时建议带 **`date`**（`YYYY-MM-DD`），默认当天。 |
+| **区域进度与门店排行** | `channel_north_star` | 按门店所属 **`stores.rtm` 渠道**（Multibrand、Monobrand、Enterprise、Education、Carrier）聚合 **按时完成率** 与 **人均完成时长（分钟）**，并给出大盘均值/中位数与各渠道对比，用于「区域/渠道侧」执行差异与归因（与 §5.2 热力、§5.3 门店排行同源任务数据域；对应 Prompt：分渠道北极星下钻）。 |
+| **漏斗链路数据** + **预警率统计** | `funnel_alerts` | **后端合并为同一洞察类型**：一次生成同时覆盖 **链路漏斗**（触达率、读取率、提醒转化率等）与 **预警占比**（起步异常、P1/P0 临期危机等占 assignment 总数的比例）；对应原「漏斗」与「预警」两块能力合并后的 Prompt（链路数据 + 预警率）。 |
+
+> **存储说明**：落库字段仍为 `dashboard_insights.module_type`，取值与上表 **`insightType`** 一致（见 `docs/backend/03-DATABASE.md` §12）。
+
 - **请求体（JSON）**：
   | 字段 | 类型 | 必选 | 说明 |
   |------|------|------|------|
-  | module | string | 是 | `trend`（完成人数趋势）、`heatmap_rank`（区域/热力 + 门店排行摘要）、`funnel`（漏斗/链路类 KPI）、`warning_stats`（预警相关统计） |
-  | taskId | string | 条件 | `trend`、`heatmap_rank` **必填**；`funnel`、`warning_stats` 可选（不传则按全任务范围） |
+  | insightType | string | 是 | 见上表「前端模块名称 ↔ insightType」；枚举：`north_star`、`completion_weekly`、`completion_daily`、`channel_north_star`、`funnel_alerts` |
+  | taskId | string | 条件 | `completion_weekly`、`completion_daily`、`channel_north_star` **必填**；`north_star`、`funnel_alerts` 可选（不传则按全任务范围） |
   | rtm / format / dealerName / storeId | string | 否 | 与 §5.1 下钻一致，可组合 AND |
-  | trendType | string | 否 | 仅 `module=trend`：`daily`（默认）或 `hourly` |
-  | date | string | 否 | 仅 `trendType=hourly` 时建议传 `YYYY-MM-DD`，默认当天 |
-  | rtmLevel | string | 否 | 仅 `heatmap_rank`：与 §5.2 热力图维度一致，默认 `rtm` |
+  | date | string | 否 | `completion_daily` 建议传 `YYYY-MM-DD`，默认当天 |
+  | trendType | string | 否 | 兼容旧入参：仅旧 `module=trend` 生效（`daily`/`hourly`） |
+  | rtmLevel | string | 否 | 兼容旧入参：仅旧 `module=heatmap_rank` 生效 |
+  | module | string | 否 | **兼容旧客户端**：`trend` / `heatmap_rank` / `funnel` / `warning_stats`（服务端会自动映射到 `insightType`） |
 
 - **响应体（成功）**：
   ```json
@@ -1770,7 +1790,8 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "message": "success",
     "data": {
       "insightId": "string",
-      "module": "funnel",
+      "insightType": "north_star",
+      "module": "north_star",
       "taskId": "string|null",
       "filters": { "rtm": null, "format": null, "dealerName": null, "storeId": null },
       "content": "string",
@@ -1783,7 +1804,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 - **接口说明**：服务端将当前模块相关的**聚合事实**（写入 `context_json`）送入 LLM（优先 DeepSeek，失败时可回退 Floodgate/Gemini，以部署环境为准），生成 2～4 句中文洞察，持久化至 **`dashboard_insights`**。
 - **权限要求**：`central` / `executive` / `admin`
-- **异常场景**：400（`module` 非法、缺 `taskId` 等，`INSIGHT_001` / `INSIGHT_002`）；404/503 见实现
+- **异常场景**：400（`insightType` 非法、缺 `taskId` 等，`INSIGHT_001` / `INSIGHT_002`）；404/503 见实现
 
 #### 5.7.2 点赞/点踩 `POST /dashboard/insights/{insightId}/vote`
 

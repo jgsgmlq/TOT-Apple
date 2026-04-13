@@ -19,7 +19,7 @@
 | `mypal_learning_mock` | 开发联调表，生产环境需替换为真实 MyPal 同步层 |
 | `chat_sessions` | EChat 会话表，含 `user_id`、`role_scope`、`regions`、`rtm` |
 | `chat_messages` | EChat 消息表，含 `role`、`content`（JSON）、`intent_type` |
-| `dashboard_insights` | 看板智能洞察：模块类型、`task_id`、下钻筛选、`content`、`context_json`、**`up_count`/`down_count`（赞/踩次数，不记投票人）**、创建人 |
+| `dashboard_insights` | 看板智能洞察：洞察类型（已对齐 `insightType`）、`task_id`、下钻筛选、`content`、`context_json`、**`up_count`/`down_count`（赞/踩次数，不记投票人）**、创建人 |
 
 ---
 
@@ -271,6 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_mypal_mock_task_week ON mypal_learning_mock(task_
 | `migrateNudgeRecordsConstraints` | 旧库重建 `nudge_records` 以补齐 CHECK 约束 |
 | `ensureMypalLearningMockIndexes` | 补齐 `mypal_learning_mock` 索引 |
 | `migrateDashboardInsightCounts` | 旧库补 `dashboard_insights.up_count` / `down_count` 列 |
+| `migrateDashboardInsightModuleTypes` | 旧库将 `dashboard_insights.module_type` 从旧枚举迁移为 `insightType` 新枚举 |
 
 ---
 
@@ -337,7 +338,7 @@ CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 CREATE TABLE IF NOT EXISTS dashboard_insights (
   id                  TEXT PRIMARY KEY,
   module_type         TEXT NOT NULL
-                        CHECK (module_type IN ('trend', 'heatmap_rank', 'funnel', 'warning_stats')),
+                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts')),
   task_id             TEXT REFERENCES tasks(id),
   filter_rtm          TEXT,
   filter_format       TEXT,
@@ -359,6 +360,16 @@ CREATE INDEX IF NOT EXISTS idx_di_module_task ON dashboard_insights(module_type,
 CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
 ```
 
-**字段说明：** `module_type` 枚举：`trend`、`heatmap_rank`、`funnel`、`warning_stats`。`context_json` 存生成洞察时使用的聚合事实（便于审计）；`extra_params_json` 存 `trendType`、`date`、`rtmLevel` 等。**`up_count` / `down_count`** 为赞、踩累计次数，不存投票人。
+**字段说明：** `module_type` 已与 API `insightType` 一致（与前端看板五个模块一一对应，详见 `docs/specs/04-API-SPEC.md` §5.7.1 对照表）。枚举与产品名简表：
 
-**迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列。
+| `module_type` | 前端模块名称 |
+|---------------|--------------|
+| `north_star` | 北极星 |
+| `completion_weekly` | 完成人数趋势（周） |
+| `completion_daily` | 完成人数趋势（日内时段） |
+| `channel_north_star` | 区域进度与门店排行（按 RTM 渠道聚合） |
+| `funnel_alerts` | 漏斗链路数据 + 预警率统计（后端合并为一条类型） |
+
+`context_json` 存生成洞察时使用的聚合事实（便于审计）；`extra_params_json` 存 `insightType`、`trendType`、`date`、`rtmLevel` 等。**`up_count` / `down_count`** 为赞、踩累计次数，不存投票人。
+
+**迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列；旧枚举（`trend`/`heatmap_rank`/`funnel`/`warning_stats`）由 `migrateDashboardInsightModuleTypes` 自动映射迁移到新枚举。
