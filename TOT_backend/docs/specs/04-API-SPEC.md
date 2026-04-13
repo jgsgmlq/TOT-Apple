@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.4.11（2026-04-01）
+
+- **看板门店下钻（可选）**：`GET /dashboard/overview`、`/heatmap`、`/store-rank`、`/warnings`、`/trend` 支持可选查询参数 **`rtm`、`format`、`dealerName`、`storeId`**（可组合，AND，对应 `stores` 表：`rtm` → `format` → `dealer_name` → `id`）。不传参时与旧行为一致。概览中 **推送人数 / 已读人数** 在下钻且带 **`taskId`** 时与 assignment 口径一致（经 `notification_events`/`read_receipts` 与 `stores` 关联过滤）。**热力图** `rtmLevel` 新增 **`dealer` / `dealer_name` / `dealername`**（按经销商名聚合）、**`store`**（按门店聚合，`rtmValue` 为店名）。
+
 ### v1.4.10（2026-04-10）
 
 - **AI 解析任务**：新增 `/tasks/ai-parse` 接口，支持一键根据自然语言解析任务信息并格式化返回所有任务所需的创建字段。
@@ -72,8 +76,8 @@
 
 | 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.9 |
-| 更新时间 | 2026-04-09 |
+| 文档版本 | 1.4.11 |
+| 更新时间 | 2026-04-01 |
 | 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
@@ -1385,9 +1389,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有任务 |
-  | dimension | string | 否 | 聚合维度：store/dealer/format/employee（默认store） |
-  | rtm | string | 否 | 筛选RTM |
-  | format | string | 否 | 筛选业态 |
+  | dimension | string | 否 | 聚合维度：store/dealer/format/employee（默认store）；**实现以代码为准** |
+  | rtm | string | 否 | 门店下钻：与 `stores.rtm` 比对（忽略大小写、首尾空格） |
+  | format | string | 否 | 门店下钻：与 `stores.format` 比对 |
+  | dealerName | string | 否 | 门店下钻：与 `stores.dealer_name` 比对 |
+  | storeId | string | 否 | 门店下钻：等于 `stores.id` |
+  > 下钻参数可组合，逻辑为 **AND**。均不传时全量（与旧版一致）。若需 **推送/已读** 与下钻范围一致，请同时传 **`taskId`**。
 - **响应体（成功）**：
   ```json
   {
@@ -1443,7 +1450,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
   | taskId | string | 是 | 任务ID |
-  | rtmLevel | string | 否 | RTM层级：rtm/subRtm/format（默认rtm） |
+  | rtmLevel | string | 否 | 聚合维度，默认 `rtm`。支持：`rtm`、`region`、`format`、`subRtm`（同 `rtm`）、**`dealer`** / **`dealer_name`** / **`dealername`**（按 `stores.dealer_name`）、**`store`**（按门店，`rtmValue` 为店名） |
+  | rtm | string | 否 | 可选门店下钻，同 §5.1 |
+  | format | string | 否 | 同上 |
+  | dealerName | string | 否 | 同上 |
+  | storeId | string | 否 | 同上 |
+  > 下钻参数可组合（AND）；不传则全任务维度内全部门店（与旧版一致）。
 - **响应体（成功）**：
   ```json
   {
@@ -1482,7 +1494,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 是 | 任务ID |
   | type | string | 是 | 排行类型：top/bottom |
   | limit | int | 否 | 数量，默认5 |
-  | format | string | 否 | 筛选业态（可选） |
+  | rtm | string | 否 | 可选门店下钻，同 §5.1（含原「仅 format」能力，见 `format`） |
+  | format | string | 否 | 门店下钻 |
+  | dealerName | string | 否 | 门店下钻 |
+  | storeId | string | 否 | 门店下钻 |
 - **响应体（成功）**：
   ```json
   {
@@ -1573,6 +1588,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 是 | 任务ID |
   | type | string | 否 | `daily`（按天，默认）或 `hourly`（按小时） |
   | date | string | 否 | 查询具体日期的 `hourly` 数据时传入（格式 `YYYY-MM-DD`），默认当天 |
+  | rtm | string | 否 | 可选门店下钻，同 §5.1（仅统计该范围内 assignment 的完成时间） |
+  | format | string | 否 | 同上 |
+  | dealerName | string | 否 | 同上 |
+  | storeId | string | 否 | 同上 |
 - **响应体（成功）**：
   ```json
   {
@@ -1609,6 +1628,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | warningLevel | string | 否 | 预警级别：p1/p2（默认全部） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
+  | rtm | string | 否 | 可选门店下钻，同 §5.1 |
+  | format | string | 否 | 同上 |
+  | dealerName | string | 否 | 同上 |
+  | storeId | string | 否 | 同上 |
 - **响应体（成功）**：
   ```json
   {
