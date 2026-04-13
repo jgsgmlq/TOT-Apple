@@ -166,7 +166,14 @@
       // 获取简易的路由对象
       const getSimpleRoute = (route): RouteItem => {
         const { fullPath, hash, meta, name, params, path, query } = route;
-        return { fullPath, hash, meta, name, params, path, query };
+        const newMeta = { ...meta }; // Clone to avoid modifying the original route meta
+
+        // 动态识别是否为“编辑任务”页面
+        if (name === 'CentralTaskPublish' && query.id) {
+          newMeta.title = '编辑任务';
+        }
+
+        return { fullPath, hash, meta: newMeta, name, params, path, query };
       };
 
       const isMixMenuNoneSub = computed(() => {
@@ -294,7 +301,16 @@
         (to) => {
           if (whiteList.includes(route.name as string)) return;
           state.activeKey = to;
-          tabsViewStore.addTab(getSimpleRoute(route));
+          
+          // 获取格式化后的路由，处理“编辑任务”动态标题
+          const simpleRoute = getSimpleRoute(route);
+          tabsViewStore.addTab(simpleRoute);
+          
+          // 同步更新网页 title 以符合动态改名
+          if (simpleRoute.meta && simpleRoute.meta.title) {
+            document.title = simpleRoute.meta.title as string;
+          }
+          
           updateNavScroll(true);
         },
         { immediate: true }

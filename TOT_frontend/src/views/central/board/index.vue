@@ -18,7 +18,7 @@
             <template #icon>
               <n-icon><AlertOutlined /></n-icon>
             </template>
-            任务预警规则
+            统一预警规则
           </n-button>
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -265,97 +265,113 @@
       </div>
     </n-modal>
 
-    <!-- 各任务预警规则（与「已布置的任务」同交互：卡片展开） -->
+    <!-- 统一任务预警规则 -->
     <n-modal
       v-model:show="showAlertRulesModal"
       preset="card"
-      title="任务预警规则"
-      :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
+      title="统一预警规则"
+      :style="{ width: 'min(480px, 90vw)', maxHeight: '80vh' }"
       :segmented="{ content: 'soft', footer: 'soft' }"
       class="hq-rules-modal"
     >
-      <div class="hq-dispatched-body">
-        <n-spin :show="alertRulesListLoading">
-          <n-empty v-if="!alertRulesListLoading && taskList.length === 0" description="暂无任务" />
-          <div v-else class="hq-waterfall-list">
-            <div
-              v-for="task in taskList"
-              :key="'rules-' + task.id"
-              class="hq-waterfall-card hq-rules-card"
-              :class="{ 'is-expanded': expandedRulesTaskId === task.id }"
+      <div class="hq-rules-body static-rules" style="padding: 16px 8px; font-size: 14px; color: #374151; line-height: 1.6;">
+        <p style="margin-bottom: 24px; color: #6b7280; font-size: 13px;">
+          总部已针对所有培训任务应用以下统一预警标准，暂不支持针对单个任务进行修改。
+        </p>
+
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">
+            进度掉队预警 <n-tag size="small" type="info" :bordered="false" style="margin-left: 6px; font-weight: normal;">仅 Monobrand</n-tag>
+          </div>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f59e0b; font-size: 18px;">•</span> Lifestyle：个人完成率处于门店最后 <strong>3</strong> 位
+          </p>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f59e0b; font-size: 18px;">•</span> Mono：个人完成率处于门店最后 <strong>1</strong> 位
+          </p>
+        </div>
+
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">起步异常预警</div>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #ef4444; font-size: 18px;">•</span> 任务期限已度过 <strong>50</strong>%，但个人进度仍为 0%
+          </p>
+        </div>
+
+        <div class="hq-rule-block" style="margin-bottom: 20px;">
+          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">临期危机预警 (Deadline)</div>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #ef4444; font-size: 18px;">•</span> 距 Deadline 不足 <strong>24</strong> 小时，仍未完成 (P0 级)
+          </p>
+          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: #f97316; font-size: 18px;">•</span> 距 Deadline 不足 <strong>48</strong> 小时，仍未完成 (P1 级)
+          </p>
+        </div>
+      </div>
+    </n-modal>
+
+    <!-- 下钻详情列表弹窗 (门店明细) -->
+    <n-modal
+      v-model:show="showDrillDownModal"
+      preset="card"
+      :title="drillDownTitle"
+      :style="{ width: 'min(640px, 94vw)', maxHeight: '80vh' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal"
+    >
+      <n-spin :show="drillDownLoading">
+        <div class="drilldown-body custom-scroll" style="max-height: 60vh; overflow-y: auto; padding: 4px;">
+          <n-empty v-if="!drillDownLoading && drillDownList.length === 0" description="暂无符合条件的门店记录" />
+          
+          <div v-else class="drilldown-list">
+            <!-- 列表项：每一行代表一个门店 -->
+            <div 
+              v-for="item in drillDownList" 
+              :key="item.storeId" 
+              class="dd-item"
+              style="display: flex; align-items: center; padding: 16px; border-bottom: 1px solid #f3f4f6; transition: background 0.2s;"
             >
-              <div class="hq-wf-summary" @click="toggleAlertRulesExpand(task.id)">
-                <div class="hq-wf-head">
-                  <n-tag :type="task.statusType" size="small" :bordered="false">{{
-                    task.statusText
-                  }}</n-tag>
-                  <n-icon
-                    class="hq-wf-chevron"
-                    :class="{ 'is-open': expandedRulesTaskId === task.id }"
-                  >
-                    <DownOutlined />
-                  </n-icon>
+              <!-- 1. 🧍‍♂️ 图标与门店名称 -->
+              <div class="dd-col-info" style="flex: 1; display: flex; align-items: center; gap: 12px;">
+                <div class="dd-avatar" style="background: #f5f5f7; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #86868b;">
+                  <n-icon size="20"><UserOutlined /></n-icon>
                 </div>
-                <h3 class="hq-wf-title">{{ task.name }}</h3>
-                <p class="hq-wf-meta">截止：{{ task.deadline }}</p>
-                <p class="hq-wf-hint">
-                  {{ expandedRulesTaskId === task.id ? '点击收起' : '点击展开查看预警规则' }}
-                </p>
+                <div style="display: flex; flex-direction: column;">
+                  <span style="font-weight: 600; color: #1d1d1f; font-size: 14px;">{{ item.storeName }}</span>
+                  <span style="font-size: 12px; color: #86868b;">ID: {{ item.storeId }}</span>
+                </div>
               </div>
 
-              <div
-                v-show="expandedRulesTaskId === task.id"
-                class="hq-wf-expand hq-rules-expand"
-                @click.stop
-              >
-                <div v-if="hasAutoNudgeRulesConfigured(task.autoNudgeRules)" class="hq-rules-body">
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">进度掉队预警</div>
-                    <p class="hq-rule-line">
-                      Lifestyle：个人完成率处于门店最后
-                      <strong>{{ hqRulesDisplay(task).laggingLifestyle ?? '—' }}</strong> 位
-                    </p>
-                    <p class="hq-rule-line">
-                      Mono：个人完成率处于门店最后
-                      <strong>{{ hqRulesDisplay(task).laggingMono ?? '—' }}</strong> 位
-                    </p>
-                  </div>
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">起步异常预警</div>
-                    <p class="hq-rule-line">
-                      任务期限已度过
-                      <strong>{{ hqRulesDisplay(task).startDelayPercent ?? '—' }}</strong> %
-                      ，但个人进度仍为 0%
-                    </p>
-                  </div>
-                  <div class="hq-rule-block">
-                    <div class="hq-rule-block-title">临期危机（Deadline）</div>
-                    <p class="hq-rule-line">
-                      距 Deadline 不足
-                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHours ?? '—' }}</strong>
-                      小时（P0）
-                    </p>
-                    <p class="hq-rule-line">
-                      距 Deadline 不足
-                      <strong>{{ hqRulesDisplay(task).deadlineCrisisHoursSecondary ?? '—' }}</strong>
-                      小时（P1）
-                    </p>
-                  </div>
+              <!-- 2. 进度信息 -->
+              <div class="dd-col-progress" style="width: 240px; text-align: right;">
+                <div style="margin-bottom: 4px; display: flex; justify-content: space-between; align-items: baseline;">
+                  <span style="font-size: 12px; color: #6b7280;">
+                    已完成: <strong>{{ item.completedCount }}</strong> / {{ item.assignmentCount || item.totalCount }}
+                  </span>
+                  <span style="font-weight: 700; color: #0071e3; font-size: 15px;">{{ formatPct2(item.completionRate) }}%</span>
                 </div>
-                <n-empty v-else description="未配置预警规则" size="small" class="hq-rules-empty" />
-                <n-button
-                  type="primary"
-                  block
-                  class="hq-detail-edit-btn"
-                  @click.stop="goEditRulesTask(task.id)"
-                >
-                  前往任务管理编辑
-                </n-button>
+                <n-progress
+                  type="line"
+                  :percentage="pctForBar(item.completionRate)"
+                  :indicator-placement="'hide'"
+                  :color="item.completionRate >= 100 ? '#34c759' : '#0071e3'"
+                  processing
+                  style="height: 8px;"
+                />
+                <!-- 预警模式下额外显示逾期数 -->
+                <div v-if="drillDownType === 'warning' && item.overdueCount > 0" style="margin-top: 4px; font-size: 11px; color: #ef4444;">
+                  ⚠️ {{ item.overdueCount }} 人已逾期
+                </div>
               </div>
             </div>
           </div>
-        </n-spin>
-      </div>
+        </div>
+      </n-spin>
+      <template #footer>
+        <div style="text-align: right; color: #86868b; font-size: 12px;">
+          * 数据更新于 {{ formatOverviewTime(activeTask?.overviewSummary?.updatedAt) }}
+        </div>
+      </template>
     </n-modal>
 
     <!-- 任务导航栏 -->
@@ -415,7 +431,23 @@
       </n-empty>
     </div>
 
-    <!-- 已下发任务：手动触发预警扫描（与任务管理里配置的规则一致） -->
+    <!-- 替换原“运行预警扫描”：新增页面级别的自动 AI 洞察框 -->
+    <section v-if="taskList.length > 0 && activeTask?.dispatched" class="ai-auto-insight-bar" style="margin: 0 0px 16px;">
+      <n-collapse :default-expanded-names="['1']" :key="activeTask.id">
+        <n-collapse-item name="1" style="border-top: none;">
+          <template #header>
+            <div style="font-size: 14px; font-weight: 400; color:rgb(62, 64, 66); letter-spacing: -0.3px; padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+              AI洞察
+            </div>
+          </template>
+          <div style="white-space: pre-wrap; line-height: 1.6; font-size: 14px; color: #4b5563; background: #f5f5f7; padding: 16px 20px; border-radius: 12px; margin-top: 4px; margin-bottom: 8px;">
+            {{ autoAiInsightContent }}
+          </div>
+        </n-collapse-item>
+      </n-collapse>
+    </section>
+
+    <!-- [原功能已注释] 手动触发预警扫描
     <section v-if="taskList.length > 0 && activeTask?.dispatched" class="auto-nudge-bar">
       <div class="auto-nudge-inner">
         <span class="auto-nudge-hint">
@@ -435,20 +467,13 @@
         </n-button>
       </div>
     </section>
+    -->
 
     <!-- 核心看板内容区（统计接口加载中） -->
     <section class="dashboard-content" v-if="activeTask">
       <n-spin :show="boardStatsLoading" class="board-stats-spin">
         <!-- 1. 概览 KPI（/dashboard/overview） -->
         <div class="north-star-container">
-          <div class="ns-card">
-            <div class="ns-label">整体完成率</div>
-            <div class="ns-value highlight"
-              >{{ formatPct2(activeTask.northStar.overallRate) }}<span class="unit">%</span></div
-            >
-            <div class="ns-sub">已完成人数 / 应完成总人数</div>
-          </div>
-          <div class="divider"></div>
           <div class="ns-card">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
@@ -555,9 +580,31 @@
           <!-- RTM L3 拆解 -->
           <n-card :bordered="false" class="rtm-card">
             <template #header>
-              <div>
-                <div class="chart-title">区域热力 · 进度拆解</div>
-                <div class="chart-sub">按门店 RTM 分组，含完成率与人均完成耗时（小时）</div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div class="chart-title">区域进度与门店排行</div>
+                  <div class="chart-sub">按区域/业态热力拆解及各门店具体排行明细</div>
+                </div>
+                <n-space :size="8">
+                  <n-button
+                    type="primary"
+                    secondary
+                    size="small"
+                    @click="openStoreRankDrillDown('top')"
+                    style="font-weight: 600; padding: 0 10px;"
+                  >
+                    Top 20 门店
+                  </n-button>
+                  <n-button
+                    type="error"
+                    secondary
+                    size="small"
+                    @click="openStoreRankDrillDown('bottom')"
+                    style="font-weight: 600; padding: 0 10px;"
+                  >
+                    Bottom 20 门店
+                  </n-button>
+                </n-space>
               </div>
             </template>
             <div class="rtm-list">
@@ -590,7 +637,13 @@
         <!-- 3. 链路与预警数据 -->
         <div class="bottom-section">
           <!-- 链路数据 -->
-          <n-card :bordered="false" class="metrics-card link-card" title="漏斗链路数据">
+          <n-card :bordered="false" class="metrics-card link-card">
+            <template #header>
+              <div>
+                <div class="chart-title">漏斗链路数据</div>
+                <div class="chart-sub">全链路统计触达、读取与催办转化效率</div>
+              </div>
+            </template>
             <div class="metrics-grid funnel-grid">
               <div class="metric-box info-style">
                 <div class="m-label"
@@ -643,10 +696,15 @@
           <n-card
             :bordered="false"
             class="metrics-card warning-card"
-            title="预警率（自动预警事件）"
           >
+            <template #header>
+              <div>
+                <div class="chart-title">预警率统计</div>
+                <div class="chart-sub">点击下方具体预警指标可查看风险门店名单</div>
+              </div>
+            </template>
             <div class="metrics-grid">
-              <div class="metric-box warn-style">
+              <div class="metric-box warn-style is-clickable" @click="openWarningDrillDown('p2', '起步异常')">
                 <div class="m-label"
                   >起步异常
                   <n-tooltip trigger="hover"
@@ -655,8 +713,9 @@
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
                 <div class="m-value">{{ formatPct2(activeTask.warningData.startAbnormal) }}%</div>
+                <div class="m-click-hint">点击下钻</div>
               </div>
-              <div class="metric-box danger-style">
+              <div class="metric-box danger-style is-clickable" @click="openWarningDrillDown('p2', '临期危机 (P1)')">
                 <div class="m-label"
                   >临期危机 (P1)
                   <n-tooltip trigger="hover"
@@ -665,8 +724,9 @@
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
                 <div class="m-value">{{ formatPct2(activeTask.warningData.p1Crisis) }}%</div>
+                <div class="m-click-hint">点击下钻</div>
               </div>
-              <div class="metric-box fatal-style">
+              <div class="metric-box fatal-style is-clickable" @click="openWarningDrillDown('p1', '临期危机 (P0)')">
                 <div class="m-label"
                   >临期危机 (P0)
                   <n-tooltip trigger="hover"
@@ -675,6 +735,7 @@
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
                 <div class="m-value">{{ formatPct2(activeTask.warningData.p0Crisis) }}%</div>
+                <div class="m-click-hint">点击下钻</div>
               </div>
             </div>
           </n-card>
@@ -714,6 +775,7 @@
     DownOutlined,
     AlertOutlined,
     RobotOutlined,
+    UserOutlined,
   } from '@vicons/antd';
   import aiWatchIcon from '@/assets/icons/AI_watch.png';
   import executiveAIIcon from '@/assets/images/ExecutiveAI.png';
@@ -722,6 +784,8 @@
     getDashboardOverview,
     getDashboardHeatmap,
     getDashboardTrend,
+    getDashboardStoreRank,
+    getDashboardWarnings,
     type TrendPoint,
   } from '@/api/dashboard';
   import { useMessage, useDialog } from 'naive-ui';
@@ -737,6 +801,55 @@
   const router = useRouter();
   const userStore = useUserStore();
   const { apiUrl } = useGlobSetting();
+
+  // --- 下钻弹窗相关状态 ---
+  const showDrillDownModal = ref(false);
+  const drillDownTitle = ref('');
+  const drillDownLoading = ref(false);
+  const drillDownList = ref<any[]>([]);
+  const drillDownType = ref<'rank' | 'warning'>('rank');
+
+  /** 打开门店排名下钻 (Top/Bottom) */
+  async function openStoreRankDrillDown(type: 'top' | 'bottom') {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+    
+    drillDownType.value = 'rank';
+    drillDownTitle.value = type === 'top' ? '门店完成率排行 (Top 20)' : '门店完成率排行 (Bottom 20)';
+    showDrillDownModal.value = true;
+    drillDownLoading.value = true;
+    drillDownList.value = [];
+    
+    try {
+      const res = await getDashboardStoreRank({ taskId, type, limit: 20 }).send();
+      drillDownList.value = res.rankList || [];
+    } catch (err: any) {
+      message.error('获取排名详情失败');
+    } finally {
+      drillDownLoading.value = false;
+    }
+  }
+
+  /** 打开预警门店下钻 */
+  async function openWarningDrillDown(level: 'p1' | 'p2', title: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+
+    drillDownType.value = 'warning';
+    drillDownTitle.value = `${title} - 风险门店名单`;
+    showDrillDownModal.value = true;
+    drillDownLoading.value = true;
+    drillDownList.value = [];
+
+    try {
+      const res = await getDashboardWarnings({ taskId, warningLevel: level, pageSize: 50 }).send();
+      drillDownList.value = res.list || [];
+    } catch (err: any) {
+      message.error('获取预警详情失败');
+    } finally {
+      drillDownLoading.value = false;
+    }
+  }
 
   const showAiInsightDrawer = ref(false);
   const aiInsightInput = ref('');
@@ -851,6 +964,11 @@
 
 如需更详细分析，可直接追问，如「哪些门店最落后？」或「导出逾期名单」等。`;
   }
+
+  /** 页面上自动显示的 AI 洞察计算属性 */
+  const autoAiInsightContent = computed(() => {
+    return generateMockTaskAnalysis();
+  });
 
   /** 打开 AI 洞察并自动生成分析报告 */
   function openAiInsightWithAnalysis() {
@@ -1047,9 +1165,21 @@
           applyTaskUpdatedFromWs(parsed.data);
           const tid = parsed.data.taskId;
           const row = taskList.value.find((t) => t.id === tid);
-          if (row?.dispatched) {
+          if (row?.dispatched && activeTaskId.value === tid) {
             void loadDashboardForTask(tid);
           }
+        } else if (parsed.event === 'dashboard_updated') {
+          void loadTasks().then(() => {
+            if (activeTaskId.value) {
+              const stillExists = taskList.value.find(t => t.id === activeTaskId.value);
+              if (stillExists) {
+                void loadDashboardForTask(activeTaskId.value);
+              } else {
+                activeTaskId.value = taskList.value.length > 0 ? taskList.value[0].id : '';
+                if (activeTaskId.value) void loadDashboardForTask(activeTaskId.value);
+              }
+            }
+          });
         }
       } catch (e) {
         console.error('HQ board WebSocket message error', e);
@@ -1136,14 +1266,8 @@
   const alertRulesListLoading = ref(false);
   const expandedRulesTaskId = ref<string | null>(null);
 
-  const openAlertRulesDialog = async () => {
-    alertRulesListLoading.value = true;
-    try {
-      await loadTasks();
-      showAlertRulesModal.value = true;
-    } finally {
-      alertRulesListLoading.value = false;
-    }
+  const openAlertRulesDialog = () => {
+    showAlertRulesModal.value = true;
   };
 
   watch(showAlertRulesModal, (open) => {
@@ -2620,9 +2744,24 @@
   /* 2. 中间图表区 */
   .middle-section {
     display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 24px;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
 
+    :deep(.n-card) {
+      border: none !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+    }
+
+    .chart-card {
+      border-right: 1px solid #e5e7eb !important;
+    }
+    
     .chart-container {
       height: 320px;
       width: 100%;
@@ -2712,7 +2851,22 @@
   .bottom-section {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 24px;
+    gap: 0;
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+
+    :deep(.n-card) {
+      border: none !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+    }
+    
+    .link-card {
+      border-right: 1px solid #e5e7eb !important;
+    }
   }
 
   .metrics-grid {
@@ -2816,5 +2970,95 @@
   }
   .chart-card :deep(.n-radio-group .n-radio-button::before) {
     display: none !important; /* Hide the separator lines between buttons */
+  }
+
+  /* 门店排名下钻卡片 */
+  .drilldown-entry-card {
+    .de-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 8px 0;
+    }
+    .de-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: #f5f5f7;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid transparent;
+
+      &:hover {
+        background: #ffffff;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        border-color: rgba(0, 113, 227, 0.1);
+        transform: translateY(-1px);
+      }
+
+      .de-icon {
+        width: 44px;
+        height: 44px;
+        background: #ffffff;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #0071e3;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+      }
+
+      .de-label {
+        font-weight: 600;
+        font-size: 15px;
+        color: #1d1d1f;
+        margin-bottom: 2px;
+      }
+      .de-desc {
+        font-size: 12px;
+        color: #86868b;
+      }
+
+      &.top .de-icon { color: #34c759; }
+      &.bottom .de-icon { color: #ff3b30; }
+    }
+  }
+
+  /* 指标卡片点击下钻样式 */
+  .metric-box.is-clickable {
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: #ffffff !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      transform: translateY(-2px);
+      z-index: 1;
+    }
+
+    .m-click-hint {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.25);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    &:hover .m-click-hint {
+      opacity: 1;
+    }
+  }
+
+  .dd-item:hover {
+    background: #f9f9fb;
   }
 </style>
