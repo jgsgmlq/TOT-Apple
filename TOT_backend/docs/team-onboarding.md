@@ -1,7 +1,7 @@
 # TOT 团队接入指南
 
-本文档帮助新成员从零开始接入共享开发服务器。  
-完成后你可以：在家/公司/任何网络 → Cursor 打开远程目录 → 写代码直连后端。
+本文档帮助新成员从零开始接入共享开发环境（Tailscale / SSH / 集成后端）。  
+完成后你可以：在家/公司/任何网络访问 **Mac Studio 上的集成后端**；**日常后端开发推荐在本机克隆仓库运行 `npm run dev`**，合并进 `dev_joint` 后由管理员执行 `deploy.sh` 更新 PM2（集成态），无需每人占用共享 `:3000`。
 
 ---
 
@@ -17,6 +17,7 @@
 | 前端开发端口                       | `8001`                                       |
 | Git 仓库                       | GitHub（问管理员要链接）                              |
 | 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）         |
+| 后端日常调试 | **各人本机** `TOT_backend/server` +本机 `database.db`；Mac Studio PM2 仅表示 **已部署的集成实例** |
 | Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明                          |
 
 
@@ -129,8 +130,9 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 | ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | API           | `curl` 见上文「第四步」登录接口                                                                    | 返回含 `token` 的 JSON                                                                       |
 | 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000`                                                   | 与后端联调正常                                                                                  |
-| 完整前端（可选）      | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到本机 `:3000` |
+| 完整前端（可选）      | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到 **Mac Studio 本机** `:3000`（即 PM2 集成后端） |
 
+> 若后端在你**自己的电脑**上运行，请用 Step 5 选项 B 将 `VITE_GLOB_API_URL` 指向你本机的 API 地址，而不是依赖上表中的远程 `:8001` 默认代理。
 
 ---
 
@@ -190,7 +192,7 @@ ssh mac-studio
 3. 第一次连接会在 Mac Studio 安装 VS Code Server，等待约 1 分钟
 4. 连接成功后：`File → Open Folder` → 选择 `**REPO_ROOT**`（仓库根目录，路径由管理员提供；须包含 `TOT_frontend`、`TOT_backend`）
 
-现在你在 Mac Studio 上写代码，本地 Cursor 只是显示界面。
+连接后，你在 **Mac Studio 的文件系统**上编辑（适合前端在远程跑 Vite、或需要统一环境时）。**后端日常开发**仍推荐在本机克隆中进行（见 Step 6），不必为改后端而长期 SSH 占用 Mac Studio。
 
 ---
 
@@ -209,24 +211,57 @@ ssh mac-studio
 - 浏览器访问：`http://100.65.95.128:8001`（用 Tailscale IP）
 - 无需在本机安装任何 Node.js 环境
 
-### 选项 B：本地开发（适合只改 UI、不依赖后端实时数据时）
+### 选项 B：本机开发前端
 
 - 本机 `pnpm run dev`
-- 在 `TOT_frontend` 下新建（或修改）`.env.development.local`，覆盖 API 地址（该文件已被忽略，不会提交）：
-  ```
-  VITE_GLOB_API_URL = http://100.65.95.128:3000
-  ```
-  > ⚠️ 不要改动已跟踪的 `.env.development`，每人仅维护本地 `.env.development.local`
+- 在 `TOT_frontend` 下新建（或修改）`.env.development.local`，覆盖 API 地址（该文件已被忽略，不会提交）。常用写法：
+  - **本机同时跑后端**（与 Step 6 一致）：`VITE_GLOB_API_URL=http://127.0.0.1:3000`
+  - **后端用 Mac Studio 集成实例**：`VITE_GLOB_API_URL=http://100.65.95.128:3000`（IP 以「前置信息」表为准）
+
+> 不要改动已跟踪的 `.env.development`，每人仅维护本地 `.env.development.local`。
 
 ---
 
 ## Step 6：后端开发者工作方式
 
-后端须在 **Mac Studio** 上开发（SQLite 单文件在同一台机器，不能当「每人一份远程库」用）。`**database.db` 不进 Git、何时跑 seed** 见下文「团队协作：如何维护数据（SQLite）」。
+### 心智模型（推荐）
 
-**Git（集成分支：`dev_joint`）**
+| 场景 | 做法 |
+| ---- | ---- |
+| **日常写代码、反复调试** | 在**自己电脑**上克隆仓库，于 `TOT_backend/server` 执行 `npm run dev`，使用**本机** `database.db`（文件不进 Git）。多人并行互不抢端口，**不要**为自测去停 Mac Studio 上的 PM2。 |
+| **全员对齐的 API / 演示 / 前端默认联调** | 使用 Tailscale 访问 Mac Studio 上 PM2 守护的 `tot-api`（`:3000`）。该进程对应 **已合并进 `dev_joint` 且已由 `deploy.sh` 部署的代码**。 |
+| **PM2** | 表示 **集成态**，不是每个人的调试终端；无运维需要时不要 `pm2 stop tot-api`。 |
 
-以下命令均在 **REPO_ROOT** 下执行；`feature/be-你的功能名` 可换成 `feature/EChat` 等团队约定命名。  
+`**database.db` 不进 Git、何时跑 seed** 见下文「团队协作：如何维护数据（SQLite）」。
+
+### 本机首次运行后端
+
+1. 安装 **Node.js ≥ 18**（与 `TOT_backend/server/package.json` 中 `engines` 一致）。
+2. 克隆仓库并进入服务端目录（路径按你的本机习惯，不必等于 Mac Studio 的 `REPO_ROOT`）：
+
+```bash
+cd path/to/your/MVP/TOT_backend/server
+npm install
+npm run dev
+# 默认监听 http://127.0.0.1:3000（仅占用你本机）
+```
+
+3. 首次需要与文档一致的账号与演示数据时，在同一目录执行：
+
+```bash
+node db/seed.js
+```
+
+4. 自测 API：例如 `curl http://127.0.0.1:3000/api/v1/...`（登录示例见 Step 1-B）。
+
+### 与前端联调（本机后端）
+
+- 前端也在本机时：在 `TOT_frontend` 使用 **未跟踪** 的 `.env.development.local`，设置 `VITE_GLOB_API_URL=http://127.0.0.1:3000`（或你本机局域网 / Tailscale IP + 端口）。勿改已提交的 `.env.development`。
+- 前端本机、后端暂时用 **共享集成**：`VITE_GLOB_API_URL=http://<Tailscale IP>:3000`（与 Step 5「选项 B」一致）。
+
+### Git（集成分支：`dev_joint`）
+
+以下命令在**你正在开发的那台机器**上、于**仓库根目录**执行即可（本机克隆与 Mac Studio 上克隆同理）；`feature/be-你的功能名` 可换成 `feature/EChat` 等团队约定命名。  
 代码块里以 `#` 开头的行是 Shell 注释，复制整段执行时会被忽略；也可只复制没有 `#` 的命令行。
 
 **1）每个新功能：从最新主干开分支并推到远程**
@@ -299,37 +334,37 @@ git branch -d feature/be-你的功能名
 git push origin --delete feature/be-你的功能名
 ```
 
-**本地运行**
+### 可选：在 Mac Studio（SSH）上跑 `npm run dev`
 
-1. Cursor Remote SSH 打开 **REPO_ROOT**。
-2. 开发用 `npm run dev` 会占用 `3000`，与 PM2 的 `tot-api` 冲突时需先停 PM2。
-3. 可整段复制执行：
+默认仍推荐**本机**开发。若你只在 Mac Studio 上改代码，又不想停 PM2：
+
+1. **换端口**（推荐），与 PM2 的 `:3000` 并存：
 
 ```bash
-# 释放 3000 端口，避免与 PM2 守护进程冲突
-pm2 stop tot-api
-# 进入后端目录；REPO_ROOT 见本文「前置信息」
 cd "$REPO_ROOT/TOT_backend/server"
-# 开发模式：改代码自动重启（node --watch）
-npm run dev
+PORT=3001 npm run dev
 ```
 
-调试结束后若要恢复共享环境，由管理员或本人执行 `pm2 start tot-api`（具体以本机 PM2 配置为准）。
+自测时使用 `http://127.0.0.1:3001`（或 Mac Studio 的 Tailscale IP `:3001`，视防火墙而定）。当前服务端默认仍使用**该机器上** `TOT_backend/server/database.db`，与 PM2 进程**同时写同一库**可能产生 SQLite 锁竞争；重写入场景请优先在本机开发，或团队协调短时间停 PM2。
 
-**部署**
+2. **必须占用 `3000`**（少用）：需与团队打招呼后执行 `pm2 stop tot-api`，结束后由管理员或操作人立即 `pm2 start tot-api`（以本机 PM2 配置为准）。
 
-PR 合并进 `dev_joint` 后，由管理员在仓库根目录执行拉代码、安装依赖并 reload PM2：
+### 部署（更新唯一共享实例）
+
+PR 合并进 `dev_joint` 后，由管理员在 **Mac Studio** 的仓库根目录执行（拉代码、安装依赖、`pm2 reload` 等以 `scripts/deploy.sh` 为准）：
 
 ```bash
 cd "$REPO_ROOT"
 bash scripts/deploy.sh
 ```
 
+个人日常无需登录 Mac Studio 即可开发；合并后由上述流程更新集成环境。
+
 ---
 
 ## 团队协作：如何维护数据（SQLite）
 
-后端使用 **单文件 SQLite**（默认路径：`TOT_backend/server/database.db`）。协作时请遵守下面约定，避免 `git pull` 冲突、库损坏或「各端数据对不上」。
+后端使用 **单文件 SQLite**（默认路径：`TOT_backend/server/database.db`）。**每个克隆 / 每台机器各自生成一份本地文件**（不进 Git）；**Mac Studio 上 PM2 使用的那一份**是全员默认联调与演示的「集成库」。协作时请遵守下面约定，避免 `git pull` 冲突、库损坏或「各端数据对不上」。
 
 ### 原则
 
@@ -338,7 +373,8 @@ bash scripts/deploy.sh
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。                           |
 | **用 schema + seed 表达「应有数据」**  | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。 |
-| **Mac Studio 上只有一份「共享运行时库」**  | PM2 的 `tot-api` 与大家在机器上做的联调，默认共用同一路径下的 `database.db`。需要隔离时应用**自己的分支 + 停 PM2 + 临时换库路径**（需改代码或环境，团队需额外约定）。          |
+| **集成库在 Mac Studio**  | PM2 的 `tot-api` 使用 Mac Studio 上 `TOT_backend/server/database.db`，作为 **dev_joint 部署后的共享联调数据**。各人本机另有独立 `database.db`，仅用于个人调试，**不假设**与集成库内容一致。 |
+| **需要与集成库隔离**  | 日常优先在**本机**开发；若必须在 Mac Studio 双进程并行，见 Step 6「换端口」并注意共库锁竞争；临时换库路径需改代码或环境变量，由团队另行约定。 |
 
 
 ### 新人或新克隆仓库后
@@ -351,11 +387,11 @@ bash scripts/deploy.sh
   ```
    账号与密码以脚本结束时的打印为准（如 `central` / `Train2026!` 等）。
 
-### 日常开发（在 Mac Studio 上）
+### 日常开发
 
 - **改表结构、加字段**：改 `schema.sql`（及必要的迁移逻辑，若项目中有单独迁移脚本则一并维护），提交 PR，由 reviewer 确认对现有库的影响。
-- **改种子数据**：改 `db/seed.js`（或项目规定的 seed 文档），提交 PR；合并后需要环境的成员可**在确认可丢本地数据**的前提下删库重跑 seed，或由管理员统一说明。
-- `**git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
+- **改种子数据**：改 `db/seed.js`（或项目规定的 seed 文档），提交 PR；合并后各成员可在**本机**确认可丢数据后删 `database.db` 重跑 seed；**Mac Studio 集成库**由管理员在维护窗口内按「集成与部署」处理。
+- **`git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
 
 ### 集成与部署（管理员）
 
@@ -365,7 +401,7 @@ bash scripts/deploy.sh
 ### 不要做的事
 
 - 不要把 `database.db` 或 `*.db-wal` / `*.db-shm` 加进提交。
-- 不要在多台机器各放一份「正式联调库」又互不同步，却假设行为一致；**以 Mac Studio 上实际文件为准**。
+- 不要假设各人本机 `database.db` 与 Mac Studio 集成库内容一致；**演示与全员默认联调以 Mac Studio 上实际文件为准**，个人调试以本机为准。
 
 ---
 
@@ -444,7 +480,7 @@ tailscale funnel status
 
 ## Git 分支规范
 
-**稳定与集成以 `dev_joint` 为准：** 日常开发、联调、Mac Studio 上 PM2 运行的代码均以此分支为基准。仓库若仍存在 `main` / `master` 等分支，可能用于历史或后续发布流程，**团队默认仍以 `dev_joint` 为 PR 目标与部署源**。
+**稳定与集成以 `dev_joint` 为准：** 各人**本机**日常开发与 Mac Studio 上 **PM2（`deploy.sh` 部署）** 均以该分支为集成基准。仓库若仍存在 `main` / `master` 等分支，可能用于历史或后续发布流程，**团队默认仍以 `dev_joint` 为 PR 目标与部署源**。
 
 ```
 dev_joint         ← 稳定集成分支；Mac Studio 始终运行此分支（PM2 守护）
@@ -514,7 +550,13 @@ cat ~/.ssh/authorized_keys
 
 # === 在自己电脑上执行 ===
 
-# SSH 连接
+# 本机跑后端（日常调试；路径换成你的克隆目录）
+cd /path/to/MVP/TOT_backend/server
+npm install
+npm run dev
+# 首次需要演示数据：node db/seed.js
+
+# SSH 连接 Mac Studio（可选）
 ssh mac-studio
 
 # 测试后端是否可访问
