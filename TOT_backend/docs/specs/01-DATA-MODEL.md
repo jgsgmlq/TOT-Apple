@@ -1,6 +1,6 @@
 # 数据模型规格
 
-**版本:** 2.7.0 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-09
+**版本:** 2.9.0 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-10
 
 ---
 
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS users (
 | role | Y | 系统权限角色，决定前端入口和数据可见范围（见 08-PERMISSION-MODEL.md）|
 | store_id | N | 店员必填，指向所属门店；central / executive / admin 为 NULL |
 | employee_id | N | 店员必填，指向 employees 表中对应记录；UNIQUE 保证一对一；其他角色为 NULL |
-| last_login_at | N | 上次登录时间，用于任务触达率的精准计算 |
+| last_login_at | N | 上次登录时间，结合 received_at 用于任务触达率的精准计算 |
 
 > **`role` 与 DB 约束：** 当前 `server/db/schema.sql` 中 **`users.role` 未加 `CHECK` 枚举**；合法取值以应用层校验与 **`08-PERMISSION-MODEL.md`** 为准（`central` \| `employee` \| `executive` \| `admin`）。
 
@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS users (
 | admin | `admin` | admin | NULL | NULL |
 
 > **v2.1.0 变更:** `employee_id` 加了 `UNIQUE` 约束——防止同一个 employee 被创建两个 user 账号（一对一关系）。
+
+> **Executive Chat（P1）可选扩展：** 若采用 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md) **策略 A** 绑定大区辖区，可在 `users` 增加 **`executive_regions TEXT`**（JSON 数组，元素为 **`stores.region`** 同源大区名）。当前 `server/db/schema.sql` 未包含该列时，可使用创建会话时的 **`regions[]`**（策略 B）或 seed 映射（策略 C）。
 
 **测试账号:**
 
@@ -324,6 +326,7 @@ CREATE TABLE IF NOT EXISTS notification_events (
   event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red', 'task_updated')),
   severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'red')),  -- yellow | red（仅 nudge_* 必填）
   dedupe_key     TEXT,             -- 幂等键（task_assigned 类型必填）
+  content        TEXT,             -- 提醒类展示文案（nudge_*）；任务类可为空，由前端关联 task 或后续扩展
   initiator_id   INTEGER REFERENCES users(id),  -- 发起人 users.id；系统触发时为 NULL
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (
@@ -356,6 +359,7 @@ CREATE UNIQUE INDEX idx_ne_dedupe ON notification_events(dedupe_key)
 | event_type | Y | 事件类型，决定通知的展示样式和行为（见 event_type 枚举表）|
 | severity | N | 紧急程度：yellow / red；仅 `nudge_*` 事件填写 |
 | dedupe_key | N | 幂等键；task_assigned 必填（格式 `task:{id}:user:{id}`），PARTIAL UNIQUE INDEX 在 DB 层防重 |
+| content | N | 提醒类通知展示文案（`nudge_*` 类型填写，每人可不同）；`task_assigned` / `task_updated` 可为空 |
 | initiator_id | N | 发起人 `users.id`；系统自动触发（如 task_assigned）时为 NULL |
 
 | 值 | 触发时机 | severity | assignment_id |
@@ -489,7 +493,26 @@ CREATE INDEX idx_nr_initiator_id ON nudge_records(initiator_id);
 
 ### 9.2.1 本地开发表字段映射（`mypal_learning_mock`）
 
-开发联调使用 SQLite 的开发专用表 `mypal_learning_mock` 存储同形态字段；其物理列名与 MyPal 输出字段名存在命名差异，映射关系如下：
+开发联调使用 SQLite 的开发专用表 `mypal_learning_mock` 存储同形态字段；DDL 如下：
+
+```sql
+CREATE TABLE IF NOT EXISTS mypal_learning_mock (
+  seed_id          TEXT NOT NULL,
+  product_name     TEXT NOT NULL,
+  first_use_time   TEXT,
+  task_week        TEXT NOT NULL,
+  progress         INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
+  passed_week      TEXT,
+  passed_time      TEXT,
+  required         INTEGER NOT NULL CHECK (required IN (0, 1)),
+  week_start_time  TEXT,
+  PRIMARY KEY (seed_id, product_name, task_week)
+);
+CREATE INDEX IF NOT EXISTS idx_mypal_mock_seed_id   ON mypal_learning_mock(seed_id);
+CREATE INDEX IF NOT EXISTS idx_mypal_mock_task_week ON mypal_learning_mock(task_week);
+```
+
+物理列名与 MyPal 输出字段名存在命名差异，映射关系如下：
 
 - `seed_id` → `seedId`
 - `product_name` → `productName`
@@ -547,11 +570,19 @@ nudge_records (TEXT PK: nanoid)
 
 ## 变更记录
 
+### v2.9.0（2026-04-10）
+
+| 范围 | 变更 | 理由 |
+|------|------|------|
+| §6 notification_events | DDL 补充 `content TEXT` 列（dedupe_key 之后） | v2.1.0 changelog 已记录该列，但 DDL 未更新；与 `server/db/schema.sql` 对齐 |
+| §6 notification_events | 字段说明表补充 `content` 行 | 同上 |
+| §9.2.1 mypal_learning_mock | 补充完整 DDL（CREATE TABLE + 索引） | 该表已存在于 `server/db/schema.sql`，spec 仅有字段映射表，缺少建表语句 |
+
 ### v2.8.0（2026-04-10）
 
 | 范围 | 变更 | 理由 |
 |------|------|------|
-| §3 users | 新增 `last_login_at` 列 | 记录用户最后登录时间，支持精准计算看板任务触达率 |
+| §3 users | 新增 `last_login_at` 列 | 记录用户最后登录时间，结合 received_at 支持精准计算看板任务触达率 |
 | §4 tasks | 更新 `start_at` 与 `ddl_at` 规范说明 | 统一限定为无 T/Z 的 UTC `YYYY-MM-DD HH:MM:SS` |
 
 ### v2.7.0（2026-04-09）
@@ -715,3 +746,10 @@ nudge_records (TEXT PK: nanoid)
 | notification_events | 任务数 × ~300 + 提醒类事件次数 |
 | read_receipts | ≤ notification_events 数 |
 | nudge_records | < 200 |
+
+---
+
+## 10. chat_sessions / chat_messages（Executive Chat）
+
+见 `docs/backend/03-DATABASE.md §10-11`。
+迁移函数：`migrateUsersExecutiveScope`（补 `users.executive_regions` / `executive_rtm`）、`ensureChatTables`。

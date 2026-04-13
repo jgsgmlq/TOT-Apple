@@ -85,6 +85,20 @@ function broadcastToUser(employeeId, payload) {
       try { ws.send(msg); } catch (_) { /* ignore */ }
     }
   }
+
+  // Update received_at for task_assigned events if we successfully found a connected client
+  if (payload.event === 'task_assigned' && payload.data && payload.data.taskId) {
+    try {
+      const { db } = require('../db');
+      const now = new Date().toISOString();
+      db.run(
+        'UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE task_id = ? AND user_id = ? AND received_at IS NULL',
+        [now, now, payload.data.taskId, employeeId]
+      );
+    } catch (err) {
+      console.error('Error updating received_at via websocket broadcast:', err);
+    }
+  }
 }
 
 /**

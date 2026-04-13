@@ -8,7 +8,9 @@
 
 - [功能概览](#features)
 - [技术栈](#tech-stack)
+- [运行前准备](#prerequisites)
 - [快速启动](#quick-start)
+- [环境变量](#env)
 - [测试账号](#test-accounts)
 - [项目结构](#project-structure)
 - [数据模型](#data-model)
@@ -47,6 +49,22 @@
 | 实时 | WebSocket（`ws` 库）主推送 + REST 轮询降级 |
 | ID 生成 | nanoid |
 | 密码 | bcrypt，10 rounds |
+| 外部集成 | MyPal（Mock/真实 HTTP 二选一） |
+| 可选 AI 能力 | DeepSeek（OpenAI 兼容 API） |
+
+---
+
+<a name="prerequisites"></a>
+## 运行前准备
+
+- Node.js `>= 18`（推荐 LTS 版本）
+- npm（随 Node.js 安装）
+- 可写本地磁盘（SQLite 会创建 `server/database.db`）
+
+可选能力：
+- MyPal 本地 Mock：`MYPAL_MOCK=1`
+- MyPal 真实联调：`MYPAL_ENABLED=1` + 一组 MyPal 凭证
+- Agent AI 能力：`DEEPSEEK_API_KEY`
 
 ---
 
@@ -54,21 +72,24 @@
 ## 快速启动
 
 ```bash
-# 1. 安装依赖
+# 1. 从仓库根目录进入后端目录
 cd server
-npm install --registry https://registry.npmjs.org
+npm install
 
-# 2. 初始化数据库（50 店 / 300 员工 / 303 用户）
-node db/seed.js
+# 2. 初始化数据库（10 店 / 100 员工；3 个预置任务 + 300 条分配 + MyPal Mock；详见 db/seed.js）
+npm run seed
 
-# 3. 开启 MyPal Mock（开发联调用）
-#   - 根目录 `.env` 里设置 `MYPAL_MOCK=1`
-#   - 不开启时，`GET /api/v1/mypal/mock/learning` 将返回 404
+# 3. 配置环境变量（在仓库根目录）
+# cp .env.example .env
 #
-# 4. 自动预警定时调度（可选，见根目录 .env.example）
+# 4. 开启 MyPal Mock（开发联调用）
+#    根目录 `.env` 里设置 `MYPAL_MOCK=1`
+#    不开启时，`GET /api/v1/mypal/mock/learning` 将返回 404
+#
+# 5. 自动预警定时调度（可选，见根目录 .env.example）
 #    AUTO_NUDGE_SCHEDULER=0 关闭；AUTO_NUDGE_INTERVAL_MS 调整间隔（毫秒），默认 1 小时
 #
-# 5. 启动服务（默认 PORT=3000）
+# 6. 启动服务（默认 PORT=3000）
 npm start
 
 # 开发模式（文件变更自动重启）
@@ -82,7 +103,40 @@ npm run dev
 | REST API | `http://localhost:3000/api/v1` |
 | WebSocket | `ws://localhost:3000/ws?token=<JWT>` |
 
-> **重置数据库：** 删除 `server/database.db`（及同名 `-shm`、`-wal` 文件）后重新执行 `node db/seed.js`。
+> **重置数据库：** 删除 `server/database.db`（及同名 `-shm`、`-wal` 文件）后重新执行 `npm run seed`（或 `node db/seed.js`）。  
+> **重复执行 seed：** 会清空任务分配、通知、MyPal Mock 等并删除非脚本内的门店/员工/任务，再写入当前种子；详见仓库根目录 `README.md`「Seed 数据库」。
+
+---
+
+<a name="env"></a>
+## 环境变量
+
+后端会在 `server/app.js` 中从仓库根目录加载 `.env`：
+
+```js
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+```
+
+建议初始化：
+
+```bash
+cp .env.example .env
+```
+
+关键变量：
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `PORT` | 否 | 服务端口，默认 `3000` |
+| `JWT_SECRET` | 建议 | JWT 签名密钥；生产环境必须设置高强度随机值 |
+| `MYPAL_MOCK` | 否 | `1` 启用 `GET /api/v1/mypal/mock/learning` |
+| `MYPAL_ENABLED` | 否 | `1` 启用真实 MyPal HTTP 集成 |
+| `MYPAL_API_BASE` | 真实联调时必填 | MyPal 基础地址 |
+| `MYPAL_APP_ID` / `MYPAL_APP_SECRET` | 真实联调时必填 | MyPal 认证凭证 |
+| `MYPAL_REQUEST_TIMEOUT_MS` | 否 | MyPal 请求超时，默认 `3000` |
+| `AUTO_NUDGE_SCHEDULER` | 否 | `0` 关闭自动预警定时任务 |
+| `AUTO_NUDGE_INTERVAL_MS` | 否 | 自动预警扫描间隔（毫秒），默认 `3600000` |
+| `DEEPSEEK_API_KEY` | 否 | Agent 技能调用 DeepSeek 时需要 |
 
 ---
 
@@ -92,11 +146,12 @@ npm run dev
 | 用户名 | 密码 | 角色 | 说明 |
 |--------|------|------|------|
 | `central` | `Train2026!` | central | 总部，全量读写权限 |
-| `emp_E001` | `Train2026!` | employee | S001 门店员工（查看/操作本人 assignment） |
-| `executive` | `Train2026!` | executive | 只读看板 |
+| `executive` | `Train2026!` | executive | 只读看板（全国视角） |
+| `executive_huadong` | `Train2026!` | executive | 只读看板，`executive_regions` 预置华东 |
 | `admin` | `Admin2026!` | admin | 管理员 |
+| `emp_E001` | `Train2026!` | employee | S001 店员（示例；共 E001–E100） |
 
-Seed 还生成了所有员工账号：用户名形如 `emp_E{员工编号}`（共 300 个），密码均为 `Train2026!`。
+Seed 生成所有店员登录：`emp_E001`～`emp_E100`（对应 `employees.id`），密码均为 `Train2026!`。亦可用邮箱登录：`e001@mypal.seed.local`～`e100@mypal.seed.local`（与 MyPal `seedId` 对齐）。推荐联调画像见 `npm run seed` 控制台末尾说明（如 `emp_E010`、`emp_E091`）。
 
 ---
 
@@ -104,7 +159,7 @@ Seed 还生成了所有员工账号：用户名形如 `emp_E{员工编号}`（�
 ## 项目结构
 
 ```
-MVP2.0/
+TOT_backend/
 ├── server/                      # 后端（唯一交付物）
 │   ├── app.js                   # 入口：Express + HTTP + WebSocket
 │   ├── package.json
@@ -196,6 +251,7 @@ nudge_records       催办记录（审计用）
 | GET | `/tasks/:id` | 全角色 | 任务详情 |
 | PATCH | `/tasks/:id` | central | 更新任务（dispatched 后仅可改 ddlAt）|
 | POST | `/tasks/:id/dispatch` | central/admin | RTM 筛选 + 批量下发 |
+| POST | `/tasks/:id/auto-nudge` | central/admin | 手动执行自动预警评估 |
 
 ### Assignments
 | 方法 | 路径 | 权限 | 说明 |
@@ -234,6 +290,12 @@ nudge_records       催办记录（审计用）
 - 仅当根目录 `.env` 配置 `MYPAL_MOCK=1` 时生效；否则会返回 `404`
 - 请求参数（Query）：`taskWeek`（优先）或 `queryDate`；可选 `storeId` / `employeeId`
 - 返回字段（camelCase）：`seedId`, `productName`, `firstUseTime`, `taskWeek`, `progress`, `passedWeek`, `passedTime`, `required`, `weekStartTime`
+
+### MyPal（真实接口）
+- `POST /api/v1/mypal/sync`
+- 权限：`central` / `admin`
+- 启用条件：`MYPAL_ENABLED=1` 且 MyPal 凭证配置完整
+- 请求体：`mode`（`batch` 或 `weekly`）、可选 `taskId`、`queryDate`
 
 ---
 

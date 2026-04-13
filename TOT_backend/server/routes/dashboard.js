@@ -9,6 +9,9 @@
  *   GET /api/v1/dashboard/store-rank §5.3 Top/Bottom N 门店排行
  *   GET /api/v1/dashboard/warnings   §5.5 预警列表（P0，实时聚合，无独立存储表）
  *
+ * 门店层级下钻（可选 query，可组合，AND）：rtm、format、dealerName、storeId
+ * 对应 stores：rtm → format → dealer_name → id。不传则与旧行为一致。
+ *
  * completionRate / avgProgress 统一为整数 0-100。
  * 数据全部实时从 task_assignments 聚合，无缓存表。
  */
@@ -17,6 +20,7 @@ const express = require('express');
 const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
+const { parseStoreDrill } = require('../utils/storeDrill');
 
 const router = express.Router();
 
@@ -45,26 +49,16 @@ function aiSuggestion(rate) {
 
 router.get('/overview', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
   try {
-    const { taskId, rtm, format } = req.query;
+    const { taskId } = req.query;
+    const drill = parseStoreDrill(req.query);
 
-    // 构建 WHERE 条件（可同时按 taskId / rtm / format 过滤）
     const taConditions = ['1=1'];
     const taParams = [];
-    const sConditions = [];
-    const sParams = [];
-
     if (taskId) { taConditions.push('ta.task_id = ?'); taParams.push(taskId); }
-    if (rtm)    { sConditions.push('LOWER(s.rtm) = LOWER(?)'); sParams.push(rtm); }
-    if (format) { sConditions.push('LOWER(s.format) = LOWER(?)'); sParams.push(format); }
 
-    let joinStore = '';
-    let storeWhere = '';
-    if (sConditions.length > 0) {
-      joinStore = 'JOIN stores s ON s.id = ta.store_id';
-      storeWhere = 'AND ' + sConditions.join(' AND ');
-    }
-
-    const allParams = [...taParams, ...sParams];
+    const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+    const storeWhere = drill.hasDrill ? drill.sql : '';
+    const allParams = [...taParams, ...drill.params];
 
     // ─ assignment 基础聚合 ──
     const base = db.get(
@@ -110,42 +104,67 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const overdueCount = (overdueRow && overdueRow.cnt) || 0;
 
     // ─ 推送人数（task_assigned 通知去重）──
-    const pushRow = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
-       FROM notification_events ne
-       ${taskId ? 'WHERE ne.task_id = ? AND ne.event_type = \'task_assigned\'' : 'WHERE ne.event_type = \'task_assigned\''}`,
-      taskId ? [taskId] : []
-    );
-    const pushUserCount = (pushRow && pushRow.cnt) || 0;
+    let pushUserCount = 0;
+    if (drill.hasDrill && taskId) {
+      const pr = db.get(
+        `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+         FROM notification_events ne
+         JOIN stores s ON s.id = ne.store_id
+         WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
+        [taskId, ...drill.params]
+      );
+      pushUserCount = (pr && pr.cnt) || 0;
+    } else {
+      const pushRow = db.get(
+        `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+         FROM notification_events ne
+         ${taskId ? 'WHERE ne.task_id = ? AND ne.event_type = \'task_assigned\'' : 'WHERE ne.event_type = \'task_assigned\''}`,
+        taskId ? [taskId] : []
+      );
+      pushUserCount = (pushRow && pushRow.cnt) || 0;
+    }
 
     // ─ 已读人数（task_detail_open 去重）──
     const baseNeCond = taskId ? 'ne.task_id = ?' : '1=1';
     const baseNeParam = taskId ? [taskId] : [];
 
-    const empReadRow = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS cnt
-       FROM read_receipts rr
-       JOIN notification_events ne ON ne.id = rr.event_id
-       WHERE ${baseNeCond}
-         AND rr.source = 'task_detail_open'`,
-      baseNeParam
-    );
-    const employeeReadCount = (empReadRow && empReadRow.cnt) || 0;
-
-    const mgrReadRow = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS cnt
-       FROM read_receipts rr
-       JOIN notification_events ne ON ne.id = rr.event_id
-       WHERE ${baseNeCond}
-
-         AND rr.source = 'task_detail_open'`,
-      baseNeParam
-    );
-    const managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
+    let employeeReadCount = 0;
+    let managerReadCount = 0;
+    if (drill.hasDrill && taskId) {
+      const readRow = db.get(
+        `SELECT COUNT(DISTINCT rr.user_id) AS cnt
+         FROM read_receipts rr
+         JOIN notification_events ne ON ne.id = rr.event_id
+         JOIN stores s ON s.id = ne.store_id
+         WHERE ne.task_id = ? AND rr.source = 'task_detail_open' ${drill.sql}`,
+        [taskId, ...drill.params]
+      );
+      employeeReadCount = (readRow && readRow.cnt) || 0;
+      managerReadCount = employeeReadCount;
+    } else {
+      const empReadRow = db.get(
+        `SELECT COUNT(DISTINCT rr.user_id) AS cnt
+         FROM read_receipts rr
+         JOIN notification_events ne ON ne.id = rr.event_id
+         WHERE ${baseNeCond}
+           AND rr.source = 'task_detail_open'`,
+        baseNeParam
+      );
+      employeeReadCount = (empReadRow && empReadRow.cnt) || 0;
+      const mgrReadRow = db.get(
+        `SELECT COUNT(DISTINCT rr.user_id) AS cnt
+         FROM read_receipts rr
+         JOIN notification_events ne ON ne.id = rr.event_id
+         WHERE ${baseNeCond}
+           AND rr.source = 'task_detail_open'`,
+        baseNeParam
+      );
+      managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
+    }
     const totalReadCount   = employeeReadCount + managerReadCount;
     const realDeliveryRate = total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0;
 
-    // ─ 预警数（门店维度实时聚合）──
+    // ─ 预警数（门店维度实时聚合）；无 stores 下钻时仍按店聚合（与旧版一致）
     const storeStats = db.all(
       `SELECT
          ta.store_id,
@@ -210,15 +229,17 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const crisisP1Rate =
       total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
 
-    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达
+    // 任务触达率：晚于下发时间(ta.created_at)登录就算触达，或者任务已经收到（ta.received_at有值），或者通过websocket收到了通知
     const reachRow = db.get(
       `SELECT COUNT(ta.id) AS reached_count
        FROM task_assignments ta
        JOIN users u ON ta.user_id = u.employee_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND u.last_login_at IS NOT NULL
-         AND u.last_login_at >= ta.created_at`,
+         AND (
+           (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
+           OR ta.received_at IS NOT NULL
+         )`,
       allParams
     );
     const reachedCount = (reachRow && reachRow.reached_count) || 0;
@@ -271,15 +292,38 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     const { taskId, rtmLevel = 'rtm' } = req.query;
     if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
 
-    // 支持 rtm / region / format / subRtm（subRtm 同 rtm）
-    const colMap = {
-      rtm: 's.rtm', region: 's.region', format: 's.format', subrtm: 's.rtm',
-    };
-    const groupCol = colMap[rtmLevel.toLowerCase()] || 's.rtm';
+    const drill = parseStoreDrill(req.query);
+    const level = String(rtmLevel).toLowerCase();
 
+    // rtm / region / format / subRtm；dealer(dealer_name) / store 为下钻维度
+    const colMap = {
+      rtm: 's.rtm',
+      region: 's.region',
+      format: 's.format',
+      subrtm: 's.rtm',
+      dealer: 's.dealer_name',
+      dealer_name: 's.dealer_name',
+      dealername: 's.dealer_name',
+    };
+
+    let selectDim;
+    let groupByDim;
+    if (level === 'store') {
+      selectDim = 'MAX(s.name) AS rtm_value';
+      groupByDim = 's.id';
+    } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
+      selectDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'(未知)\') AS rtm_value';
+      groupByDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'\')';
+    } else {
+      const col = colMap[level] || 's.rtm';
+      selectDim = `${col} AS rtm_value`;
+      groupByDim = col;
+    }
+
+    const heatParams = [taskId, ...drill.params];
     const rows = db.all(
       `SELECT
-         ${groupCol} AS rtm_value,
+         ${selectDim},
          COUNT(ta.id) AS assignment_count,
          SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
          ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
@@ -288,10 +332,10 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
        JOIN tasks t ON t.id = ta.task_id
-       WHERE ta.task_id = ?
-       GROUP BY ${groupCol}
+       WHERE ta.task_id = ? ${drill.sql}
+       GROUP BY ${groupByDim}
        ORDER BY completion_rate DESC`,
-      [taskId]
+      heatParams
     );
 
     const heatmapData = rows.map(r => ({
@@ -323,8 +367,8 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
 
 router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
   try {
-    const { taskId, type, limit = 5, format } = req.query;
-    const { role, storeId } = req.user;
+    const { taskId, type, limit = 5 } = req.query;
+    const drill = parseStoreDrill(req.query);
 
     if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
     if (!type || !['top', 'bottom'].includes(type)) {
@@ -334,8 +378,10 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 
     const conditions = ['ta.task_id = ?'];
     const params = [taskId];
-
-    if (format) { conditions.push('LOWER(s.format) = LOWER(?)'); params.push(format); }
+    if (drill.hasDrill) {
+      conditions.push(drill.sql.replace(/^\s*AND\s+/, ''));
+      params.push(...drill.params);
+    }
 
     const whereClause = conditions.join(' AND ');
 
@@ -388,6 +434,7 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
   try {
     const { taskId, warningLevel, pageNum = 1, pageSize = 20 } = req.query;
+    const drill = parseStoreDrill(req.query);
 
     if (warningLevel && !['p1', 'p2'].includes(warningLevel)) {
       throw createError(400, 'warningLevel 非法（p1/p2）', 'DASH_003');
@@ -400,6 +447,10 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const conditions = ['1=1'];
     const params = [];
     if (taskId) { conditions.push('ta.task_id = ?'); params.push(taskId); }
+    if (drill.hasDrill) {
+      conditions.push(drill.sql.replace(/^\s*AND\s+/, ''));
+      params.push(...drill.params);
+    }
 
     // warningLevel 转为 completion_rate 上界（p1 < 50，p2 在 [50,80)）
     let rateHaving = 'completion_rate < 80';
@@ -565,38 +616,45 @@ router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (re
 router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
   try {
     const { taskId, type = 'daily', date } = req.query;
+    const drill = parseStoreDrill(req.query);
     if (!taskId) throw createError(400, 'taskId 不能为空', 'DASH_001');
     if (!['daily', 'hourly'].includes(type)) {
       throw createError(400, 'type 必须是 daily 或 hourly', 'DASH_005');
     }
 
     const targetDate = date || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+    const storeWhere = drill.hasDrill ? drill.sql : '';
+    const trendParamsDaily = [taskId, ...drill.params];
+    const trendParamsHourly = [taskId, targetDate, ...drill.params];
 
     let rows;
     if (type === 'daily') {
       // 每日新增
       rows = db.all(
         `SELECT
-           date(completed_at) AS time_key,
-           COUNT(id) AS new_completed
-         FROM task_assignments
-         WHERE task_id = ? AND status = 'completed' AND completed_at IS NOT NULL
-         GROUP BY date(completed_at)
-         ORDER BY date(completed_at) ASC`,
-        [taskId]
+           date(ta.completed_at) AS time_key,
+           COUNT(ta.id) AS new_completed
+         FROM task_assignments ta
+         ${joinStore}
+         WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL ${storeWhere}
+         GROUP BY date(ta.completed_at)
+         ORDER BY date(ta.completed_at) ASC`,
+        trendParamsDaily
       );
     } else {
-      // 分小时新增 (指定日期)
+      // 分小时新增 (指定日期)；占位符顺序：task_id、date(当天)、下钻条件
       rows = db.all(
         `SELECT
-           strftime('%H', completed_at) AS time_key,
-           COUNT(id) AS new_completed
-         FROM task_assignments
-         WHERE task_id = ? AND status = 'completed' AND completed_at IS NOT NULL
-           AND date(completed_at) = ?
-         GROUP BY strftime('%H', completed_at)
-         ORDER BY strftime('%H', completed_at) ASC`,
-        [taskId, targetDate]
+           strftime('%H', ta.completed_at) AS time_key,
+           COUNT(ta.id) AS new_completed
+         FROM task_assignments ta
+         ${joinStore}
+         WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL
+           AND date(ta.completed_at) = ? ${storeWhere}
+         GROUP BY strftime('%H', ta.completed_at)
+         ORDER BY strftime('%H', ta.completed_at) ASC`,
+        trendParamsHourly
       );
     }
 

@@ -789,20 +789,7 @@
         title: t.isCompleted ? `🎉 【已完成】${t.title}` : `【待完成】${t.title}`,
       }));
 
-      // === [临时测试代码] 注入一条已经完成的假数据 ===
-      const mockCompletedTask = {
-        id: 'mock-999',
-        type: 'task',
-        title: '🎉 【已完成】苹果生态产品基础规范 (UI测试)',
-        content: '恭喜！你已于 刚刚 完成该任务。',
-        deadline: '今天 23:59',
-        time: '刚刚',
-        isCompleted: true,
-        isRead: true
-      };
-
-      waterfallMessages.value = [...warningsFromApi, mockCompletedTask, ...tasksForWaterfall];
-      // === [临时测试代码结束] ===
+      waterfallMessages.value = [...warningsFromApi, ...tasksForWaterfall];
 
       // 彻底解耦逻辑：只在页面首次加载时检查并弹出积压的预警
       if (isInitialLoad) {
