@@ -255,8 +255,9 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
     [sessionId]
   );
   
-  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {  throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
-}
+  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
+    throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
+  }
 
 // To regenerate, we need the history *before* this assistant message
 // and the user message that prompted it. We'll just fetch the last 7 messages,

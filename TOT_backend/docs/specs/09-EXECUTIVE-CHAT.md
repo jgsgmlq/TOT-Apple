@@ -1,14 +1,20 @@
 # Executive Chat 规格
 
-**版本:** 2.0.0 | **PRD 4.0.5**（§5.7、§5.7.1、§8.5、§14.6）| **优先级:** P1（任务管理闭环跑通后实现）
+**版本:** 2.1.0 | **PRD 4.0.5**（§5.7、§5.7.1、§8.5、§14.6）| **优先级:** P1（任务管理闭环跑通后实现）
 
-**HTTP 契约正本：**请求/响应字段级定义以 [04-API-SPEC.md](./04-API-SPEC.md) **§6 Executive Chat Agent API** 为准；本文描述产品行为、意图、权限口径、数据溯源与 LLM 架构，避免与 04 重复维护两套 JSON。
+**HTTP 契约正本：**请求/响应字段级定义以 [04-API-SPEC.md](./04-API-SPEC.md) **§6 Executive Chat Agent API**（含 §6.6 / §6.7 反馈与重新生成）为准；本文描述产品行为、意图、权限口径、数据溯源与 LLM 架构，避免与 04 重复维护两套 JSON。
 
 ---
 
 ## 实现状态（与工程对齐）
 
-与 [04-API-SPEC.md](./04-API-SPEC.md) §6 声明一致：当前仓库 **`server/app.js` 未挂载** `/api/v1/chat/*`；本节为 **P1 产品/集成约定**。已实现的其他 AI 能力见04 文首（如 `POST /api/v1/tasks/ai-generate-description` 等）。
+与 [04-API-SPEC.md](./04-API-SPEC.md) §6 声明一致：**当前仓库已在** `server/app.js` **挂载** `app.use('/api/v1/chat', …)`，Executive Chat HTTP 路径为 **`/api/v1/chat/...`**。
+
+- **Agent 模式（MVP）：**默认 `intent_routing`（意图路由 → 同步数据工具 → 格式化回答）；可通过环境变量 `CHAT_AGENT_MODE=function_calling` 切换至 Function Calling 模式（详见 04 §6 文首说明与实现代码）。
+- **持久化：** 会话与消息见 [01-DATA-MODEL.md](./01-DATA-MODEL.md) §10（`chat_sessions` / `chat_messages`）；用户对 assistant 消息的点赞/点踩见 **`chat_message_feedback`**（与 04 §6.6、数据库文档一致）。
+- **其他 AI 能力（非 Chat 路由）：** 见 04 文首（如 `POST /api/v1/tasks/ai-generate-description` 等）。
+
+若本文某句与 **04 §6 或当前 `app.js` 挂载** 冲突，**以 04 与代码为准**，并应回头修订本节。
 
 ---
 
@@ -22,8 +28,9 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 
 | 内容 | 文档 |
 |------|------|
-| 路径、请求/响应 JSON、`code` / `message` / `data` / `requestId` | [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.4 |
-| 意图列表、权限裁剪、`stores.region`、溯源、LLM 可插拔、验收口径 | **本文** |
+| 路径、请求/响应 JSON、`code` / `message` / `data` / `requestId` | [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.4、§6.6–6.7 |
+| DeepSeek / 上游 LLM 代理与环境变量（§6.5） | [04-API-SPEC.md](./04-API-SPEC.md) §6.5 |
+| 意图列表、权限裁剪、`stores.region`、溯源、LLM 可插拔、验收口径；反馈/重新生成的**产品语义** | **本文** |
 
 **完整 URL 前缀：** 与全站一致，均为 **`/api/v1`**（例如 `POST /api/v1/chat/executive/sessions`）。
 
@@ -62,9 +69,9 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 
 ## 入口
 
-- 独立 H5 页面：`executive.html`（局域网 URL 直接访问，无需安装）
-- 扫码或点击链接打开，Token 鉴权后创建/恢复会话并加载权限内数据
-- 与其他角色页面完全独立，不共享路由
+- **当前工程：** 独立 Executive 端页面在 **`TOT_frontend`**（如 `src/views/executive/`），与总部/店员端路由分离；具体路由与构建方式以根目录 README 与前端代码为准。
+- **产品形态：** 仍为独立 H5/Web 端体验；历史文档中的 `executive.html` 指「独立 Executive 页」而非与 central/employee 混用同一套页面路由。
+- 扫码或点击链接打开，Token 鉴权后创建/恢复会话并加载权限内数据。
 
 ---
 
@@ -158,7 +165,7 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 
 ## HTTP API（摘要）
 
-**正本：** [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.3、§6.2.1。
+**正本：** [04-API-SPEC.md](./04-API-SPEC.md) §6.1–6.4、§6.2.1、§6.6–6.7。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -166,8 +173,24 @@ Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，
 | POST | `/api/v1/chat/executive/sessions/{sessionId}/messages` | 发送消息，返回结构化 `replyContent` |
 | DELETE | `/api/v1/chat/executive/sessions/{sessionId}` | 删除会话及其全部消息（仅所属 executive） |
 | GET | `/api/v1/chat/executive/sessions/{sessionId}/history` | 分页历史 |
+| POST | `/api/v1/chat/executive/sessions/{sessionId}/messages/{messageId}/feedback` | 点赞 / 点踩 / 取消（`like` / `dislike` / `none`），见 §6.6 |
+| POST | `/api/v1/chat/executive/sessions/{sessionId}/messages/{messageId}/regenerate` | 基于上下文重新生成 assistant 回复，见 §6.7 |
 
 **已废弃（非正本）：** ~~`POST /api/executive/chat`~~ — 不得作为新实现依据。
+
+---
+
+## 用户对 AI 回复的反馈与重新生成（产品口径）
+
+**HTTP 字段与错误码**以 [04-API-SPEC.md](./04-API-SPEC.md) §6.6、§6.7 为准。以下为**行为约定**（便于产品、前端与数据同学对齐）：
+
+| 能力 | 产品规则 |
+|------|----------|
+| **喜欢 / 不喜欢** | 仅针对 **`role === assistant`** 的消息；同一用户同一消息**仅保留一个**最终态（`like` / `dislike`）；可在二者间切换；再次点击同一态度可视为 **取消**（`none`，服务端可落库为删除该条反馈）。 |
+| **重新生成** | **仅允许**针对当前会话中 **最后一条 assistant 消息**；生成**新的** assistant 消息落库，**保留**原回复（多版本并存），便于审计与对比。 |
+| **权限** | 仅会话所属 `executive` 可操作；越权与资源不存在见 04 中 `CHAT_*` / `AUTH_*` 约定。 |
+
+反馈数据用于质量评估与后续优化时，应遵守 PRD / 公司隐私与留存策略（不在本文展开字段级埋点）。
 
 ---
 
@@ -241,6 +264,7 @@ function buildExecutiveDataScope(session) {
 | 多轮追问 | ≥ 3 轮，上下文连贯 |
 | 权限隔离 | 全国 vs 大区 vs RTM 裁剪正确；越权 **AUTH_003** |
 | 首屏引导 | 示例问题可用（04 §6.1 或首屏固定文案） |
+| 反馈与重新生成 | 符合 §6.6 / §6.7 与上节产品口径；仅末条 assistant 可 regenerate；反馈仅 assistant 消息 |
 | EC-P0（PRD §10.2） | 分位数、分布、相关性能力可测、口径可追溯 |
 | EC-P1 | 渠道方差、外推预测、截尾均值按批次交付 |
 
@@ -252,3 +276,4 @@ function buildExecutiveDataScope(session) {
 |------|------|------|
 | 1.0.1 | — | 初版单接口草案 |
 | 2.0.0 | 2026-04-10 | 对齐 PRD 4.0.5 §5.7/§5.7.1；HTTP 以 04 §6 为正本；`stores.region` 权限；溯源表；LLM 可插拔；废弃 `/api/executive/chat` 正本地位 |
+| 2.1.0 | 2026-04-13 | 实现状态与工程对齐：`/api/v1/chat` 已挂载；补充 Agent 模式与 `CHAT_AGENT_MODE`；入口对齐 Vue 前端路径；HTTP摘要增加 §6.6 / §6.7；新增「反馈与重新生成」产品口径与验收行 |

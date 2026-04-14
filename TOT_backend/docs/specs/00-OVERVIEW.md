@@ -1,8 +1,10 @@
 # Specs Overview — MVP 培训管理系统
 
 **PRD 来源:** `docs/product/PRODUCT_REQUIREMENTS.md`（产品口径以仓库内该文件为准，此处不锁版本号）  
-**Spec 版本:** 1.2.1（2026-04-09）  
-**状态:** Spec-ready，可直接驱动前后端开发
+**Spec 版本:** 1.3.0（2026-04-13）  
+**状态:** Spec-ready，可直接驱动前后端开发  
+
+**角色与权限摘要:** 四类角色（`central` / `employee` / `admin` / `executive`）及 API 矩阵以 **[08-PERMISSION-MODEL.md](./08-PERMISSION-MODEL.md)**（v1.3.0）为准。
 
 ### 与 PRD 的用语说明（必读）
 
@@ -23,8 +25,8 @@
 | [05-NOTIFICATION-NUDGE.md](./05-NOTIFICATION-NUDGE.md) | 通知系统与催办系统规格 | 5 |
 | [06-DASHBOARD-KPI.md](./06-DASHBOARD-KPI.md) | 看板指标口径与计算规则 | 6 |
 | [07-RTM-FILTER.md](./07-RTM-FILTER.md) | RTM 下发筛选逻辑与 SQL 实现 | 7 |
-| [08-PERMISSION-MODEL.md](./08-PERMISSION-MODEL.md) | 角色权限矩阵与数据可见性规则 | 8 |
-| [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md) | Executive Chat P1 规格（自然语言查询）| 9 |
+| [08-PERMISSION-MODEL.md](./08-PERMISSION-MODEL.md) | 四类角色权限矩阵、看板子集、与后端中间件对齐的可见性规则 | 8 |
+| [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md) | Executive Chat：意图、辖区裁剪、反馈/重生成、验收（HTTP 正本见 04 §6）| 9 |
 
 ---
 
@@ -43,14 +45,16 @@
 
 ## 用户角色与入口
 
-| 角色 | 数量（Mock） | 前端入口 | 典型账号 |
-|------|------------|---------|---------|
-| 总部（central） | 1 | `central.html` | central / Train2026! |
-| 店员（employee） | 300 | `employee.html` | emp_E002 / Train2026! |
-| Executive（P1） | 若干 | `executive.html` | — |
-| Admin | 1 | `admin.html` | admin / Admin2026! |
+前端均为 **Vue 3 + Vite**（`TOT_frontend`）；下列为常用路径与种子账号（详见 `TOT_backend/server/db/seed.js`）。
 
-> **账号说明:** 员工 username 格式为 `emp_E{employeeId}`（如 `emp_E002`）。
+| 角色 | 数量（Mock） | 前端路径（示例） | 典型账号 |
+|------|------------|-----------------|---------|
+| 总部（central） | 1 | `/hq` → `/central/board`（总部壳静默登录后进入看板/任务） | central / Train2026! |
+| 店员（employee） | 300 | `/employee`（`/employee/login`） | emp_E002 / Train2026! |
+| Executive | 若干 | `/executive`（`/executive/login`） | executive / Train2026!；区域示例 executive_huadong / Train2026! |
+| Admin | 1 | 与总部同源入口 **`/hq`**，以 JWT `role === 'admin'` 区分 | admin / Admin2026! |
+
+> **账号说明:** 员工 username 格式为 `emp_E{employeeId}`（如 `emp_E002`），亦支持邮箱登录（见 `auth` 路由）。
 
 **终端形态：** 总部使用 PC，店员使用手机（iPhone 为主）
 
@@ -79,11 +83,12 @@ Task (1:N)
 - [x] 总部实时看板（完成率、区域热力图、Top/Bottom 5 门店、预警列表）
 - [x] 催办系统（总部催全网/门店/地区）
 - [x] 催办通知（铃铛显示未读数，任务完成后自动消失）
-- [x] 角色权限隔离（central/employee 数据可见性）
+- [x] 角色权限隔离（**central / employee / admin / executive** 数据可见性与路由白名单，见 **08**）
+- [x] Executive 只读聚合看板子集（`overview` / `heatmap` / `store-rank` / `trend`；不含 `warnings` / `store-detail`，见 **08**）
 
-## P1 功能（本期设计框架，不要求实现）
+## P1 功能（设计与迭代）
 
-- [ ] Executive Chat（自然语言查询，≤5s 响应，3 轮追问，VP/区域总监权限隔离）— 见 09-EXECUTIVE-CHAT.md
+- [~] **Executive Chat** —后端已挂载 **`/api/v1/chat/...`**，前端 **`/executive`**；会话持久化、反馈/重生成见 **09**、**04 §6**。PRD 中的 **EC-P0 / EC-P1** 高阶统计与 5s P95 等以 **09** 验收表为准，按批次补齐。
 - [ ] 下发预览与历史
 - [ ] 完整消息中心
 
@@ -102,3 +107,13 @@ Task (1:N)
 | 催办终止 | 任务完成后前端自动隐藏催办通知 | 05-NOTIFICATION-NUDGE |
 | RTM 筛选 | 条件内 AND，条件间 OR，大小写不敏感 | 07-RTM-FILTER |
 | 落队等级 | ≥80% 快完成，50-79% 中等，<50% 严重落队 | 06-DASHBOARD-KPI |
+| 角色与 API | 四类角色矩阵、Executive 看板子集、Chat 仅 executive | 08-PERMISSION-MODEL |
+
+---
+
+## 文档修订记录
+
+| 版本 | 日期 | 摘要 |
+|------|------|------|
+| 1.3.0 | 2026-04-13 | 对齐 Vue 路由与种子账号；四类角色与 08 v1.3.0；Executive 看板子集纳入 MVP 勾选；Executive Chat 标为部分落地（09 / 04 §6）；索引与速查表更新 |
+| 1.2.1 | 2026-04-09 | 前一版总览 |
