@@ -385,6 +385,7 @@
 
           <!-- 底部操作按钮 -->
           <n-button
+            v-if="currentWarnings.length === 1"
             type="primary"
             block
             size="large"
@@ -395,19 +396,26 @@
               font-weight: 600;
               box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
             "
-            @click="handleGoToMiniProgram"
+            @click="handleWarningAction"
           >
-            进入学习平台处理
+            {{ currentWarnings[0].readStatus ? '去完成' : '查看任务详情' }}
           </n-button>
+          
           <n-button
-            quaternary
+            v-else
+            type="primary"
             block
             size="large"
             round
-            style="margin-top: 8px; font-size: 15px; color: #9ca3af; font-weight: 500"
+            style="
+              height: 48px;
+              font-size: 16px;
+              font-weight: 600;
+              box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+            "
             @click="showWarningModal = false"
           >
-            稍后再说
+            我知道了
           </n-button>
         </div>
       </div>
@@ -900,6 +908,36 @@
     }, 100);
 
     message.loading('正在尝试唤起微信小程序...', { duration: 1500 });
+  };
+
+  const handleWarningAction = () => {
+    const allRead = currentWarnings.value.every(w => w.readStatus);
+    
+    if (allRead) {
+      handleGoToMiniProgram();
+    } else {
+      // 找到第一条预警对应的任务详情并打开
+      if (currentWarnings.value.length > 0) {
+        const warning = currentWarnings.value[0];
+        showWarningModal.value = false; // 关闭预警弹窗
+        
+        // 从现有消息流中找出对应的真实任务卡片数据，获取 assignmentId
+        const realTaskMsg = waterfallMessages.value.find(m => m.type === 'task' && m.id === warning.taskId);
+
+        // 构造一个临时的 msg 对象传给 handleViewTask (模拟点击真实任务卡片)
+        const mockTaskMsg = {
+          id: warning.taskId, // 任务 ID
+          type: 'task', // 伪装成任务卡片点击
+          isRead: realTaskMsg ? realTaskMsg.isRead : false,
+          isCompleted: realTaskMsg ? realTaskMsg.isCompleted : false,
+          assignmentId: realTaskMsg ? realTaskMsg.assignmentId : undefined
+        };
+        handleViewTask(mockTaskMsg);
+        
+        // 顺便把该预警消息设为已读
+        closeMessage(warning.id);
+      }
+    }
   };
 
   const onTaskModalShowChange = (show: boolean) => {
