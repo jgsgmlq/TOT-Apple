@@ -2,7 +2,33 @@
 
 const { execSync, exec } = require('child_process');
 const util = require('util');
+const fs = require('fs');
+const path = require('path');
 const execAsync = util.promisify(exec);
+
+const LOG_DIR = path.join(__dirname, '..', 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'ai_debug.log');
+
+/**
+ * Ensures the logs directory exists.
+ */
+function ensureLogDir() {
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+  }
+}
+
+/**
+ * Appends a debug log entry to the log file.
+ */
+function appendDebugLog(logObject) {
+  try {
+    ensureLogDir();
+    fs.appendFileSync(LOG_FILE, JSON.stringify(logObject) + '\n');
+  } catch (err) {
+    console.error('[AI Debug Log Error]', err.message);
+  }
+}
 
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -98,6 +124,9 @@ async function generateTextDeepSeek(prompt, options = {}) {
     stream: false
   };
 
+  const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
+  const startTime = isDebugEnabled ? Date.now() : 0;
+
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: {
@@ -110,12 +139,35 @@ async function generateTextDeepSeek(prompt, options = {}) {
 
   if (!response.ok) {
     const errorText = await response.text();
+    if (isDebugEnabled) {
+      appendDebugLog({
+        timestamp: new Date().toISOString(),
+        action: 'generateTextDeepSeek',
+        request: body,
+        error: { status: response.status, text: errorText },
+        latencyMs: Date.now() - startTime
+      });
+    }
     console.error(`DeepSeek API Error: ${response.status} ${response.statusText}`, errorText);
     throw new Error(`DeepSeek API Failed: ${response.statusText}`);
   }
 
   const data = await response.json();
-  return data.choices?.[0]?.message?.content || "";
+  const rawContent = data.choices?.[0]?.message?.content || "";
+
+  if (isDebugEnabled) {
+    appendDebugLog({
+      timestamp: new Date().toISOString(),
+      action: 'generateTextDeepSeek',
+      request: body,
+      response: {
+        rawContent,
+        latencyMs: Date.now() - startTime
+      }
+    });
+  }
+
+  return rawContent;
 }
 
 /**
@@ -264,6 +316,9 @@ async function chatWithTools(options) {
     body.tool_choice = options.tool_choice || 'auto';
   }
 
+  const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
+  const startTime = isDebugEnabled ? Date.now() : 0;
+
   const response = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: {
@@ -276,12 +331,34 @@ async function chatWithTools(options) {
 
   if (!response.ok) {
     const errorText = await response.text();
+    if (isDebugEnabled) {
+      appendDebugLog({
+        timestamp: new Date().toISOString(),
+        action: 'chatWithTools',
+        request: body,
+        error: { status: response.status, text: errorText },
+        latencyMs: Date.now() - startTime
+      });
+    }
     throw new Error(`DeepSeek chatWithTools failed: ${response.status} ${errorText}`);
   }
 
   const data = await response.json();
   const choice = data.choices?.[0];
   if (!choice) throw new Error('DeepSeek returned no choices');
+
+  if (isDebugEnabled) {
+    appendDebugLog({
+      timestamp: new Date().toISOString(),
+      action: 'chatWithTools',
+      request: body,
+      response: {
+        content: choice.message?.content,
+        tool_calls: choice.message?.tool_calls,
+        latencyMs: Date.now() - startTime
+      }
+    });
+  }
 
   return {
     content:    choice.message?.content ?? null,
