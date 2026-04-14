@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * 看板「智能洞察」：单接口按 module 生成 AI 总结，并落库；点赞/点踩单独提交。
+ * 看板「智能洞察」：单接口按 insightType 生成 AI 总结（**SSE**），并落库；点赞/点踩单独提交。
  *
- * POST /api/v1/dashboard/insights
+ * POST /api/v1/dashboard/insights（text/event-stream）
  * POST /api/v1/dashboard/insights/:insightId/vote
  */
 
@@ -13,6 +13,7 @@ const { createInsight, recordVote } = require('../services/dashboardInsightServi
 
 const router = express.Router();
 
+/** 固定返回 SSE（`text/event-stream`），成功体在 `event: done` 的 `data` 中，与原先 JSON 成功响应结构一致。 */
 router.post(
   '/insights',
   authenticate,
@@ -20,8 +21,7 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.id;
-      const data = await createInsight(req.body || {}, userId);
-      res.json({ code: 200, message: 'success', data, requestId: req.requestId });
+      await createInsight(req.body || {}, userId, req, res);
     } catch (err) {
       next(err);
     }
