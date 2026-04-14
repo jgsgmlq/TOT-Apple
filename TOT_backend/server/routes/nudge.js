@@ -7,6 +7,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const { broadcastToUsers } = require('../ws/manager');
 const mainAgent = require('../agent');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -145,7 +146,7 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
       throw createError(409, '目标范围内所有 assignment 均已完成，无可催对象', 'NUDGE_001');
     }
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     const nudgeRecordId = nanoid();
     const eventType = severity === 'red' ? 'nudge_red' : 'nudge_yellow';
 

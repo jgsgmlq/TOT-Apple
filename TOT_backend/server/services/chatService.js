@@ -2,6 +2,7 @@
 
 const { nanoid }       = require('nanoid');
 const { db, getDb }    = require('../db');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 const chatAgentRunner  = require('./chatAgentRunner');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ function createSession(userId) {
 
   const regionScope = resolveRegionScope(user);
   const sessionId = nanoid();
-  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const now = formatNowSqliteLocal();
 
   db.run(
     `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, created_at, last_active)
@@ -118,7 +119,7 @@ async function sendMessage(sessionId, userMessage, userId) {
   const replyContent = await chatAgentRunner.run(userMessage, history, regionScope);
   const responseTime = Date.now() - startMs;
 
-  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const now = formatNowSqliteLocal();
   const userMsgId   = nanoid();
   const assistMsgId = nanoid();
   const intentType  = replyContent._intentType || null;
@@ -219,7 +220,7 @@ function setMessageFeedback(sessionId, messageId, userId, feedback) {
     throw Object.assign(new Error('Can only provide feedback for assistant messages'), { status: 400, code: 'CHAT_006' });
   }
 
-  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const now = formatNowSqliteLocal();
 
   if (feedback === 'none') {
     db.run(
@@ -297,7 +298,7 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   const replyContent = await chatAgentRunner.run(userMessage, history, regionScope);
   const responseTime = Date.now() - startMs;
 
-  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const now = formatNowSqliteLocal();
   const newAssistMsgId = nanoid();
   const intentType = replyContent._intentType || null;
   delete replyContent._intentType;

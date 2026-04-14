@@ -2,6 +2,7 @@
 
 const { nanoid } = require('nanoid');
 const { createError } = require('../middleware/errorHandler');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 /**
  * Dev1：§3.4 批量创建分配记录（仅写 task_assignments，不含通知事件）
@@ -20,7 +21,7 @@ function batchCreateAssignments(db, taskId, targetUsers) {
   let skippedCount = 0;
   let failedCount = 0;
   const failedUsers = [];
-  const now = new Date().toISOString();
+  const now = formatNowSqliteLocal();
 
   for (const u of targetUsers) {
     const { userId, storeId } = u;

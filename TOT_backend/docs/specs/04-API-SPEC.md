@@ -1,5 +1,21 @@
 # ToT API 接口定义文档
 
+### v1.4.21（2026-04-14）
+
+- **时间口径统一（本地墙钟）**：`utils/ddlAt.js` 中 **`parseDateToSqliteLocal`** / **`formatNowSqliteLocal`** 为任务时间与「当前时刻」写入的唯一规范化入口；**废弃**原「仅 UTC」语义（`parseDdlAtToSqliteUtc` 仍为同名别名）。SQLite 默认值与 SQL 比较改为 **`datetime('now', 'localtime')`**（`schema.sql`、`db/index.js` 迁移脚本、看板逾期条件等）。路由与服务中 **`new Date().toISOString()`** 写入库/JSON 处已替换为 **`formatNowSqliteLocal()`**。详见 `ddlAt.js` 头注释与 `01-DATA-MODEL.md` 设计约定。
+
+### v1.4.20（2026-04-14）
+
+- **`POST /tasks/ai-smart-publish`**：响应中的 **`startAt` / `ddlAt`** 改为与 **`startTime` / `endTime`** 一致的 **本地墙钟** `YYYY-MM-DD HH:MM:SS`（可直接填入 **`POST /tasks`**）；不再使用 `parseDdlAtToSqliteUtc` 的结果字符串作为响应值，避免出现与东八区等相比 **少 8 小时**的 UTC 展示误解。落库时仍由创建任务接口统一做 UTC 规范化。见 §2.10。
+
+### v1.4.19（2026-04-14）
+
+- **`POST /tasks/ai-smart-publish`**：响应 **`data`** 仅保留 **`taskName` / `passingScore` / `startTime` / `endTime` / `taskDetails` / `startAt` / `ddlAt`**，不再重复返回与 `taskName`/`taskDetails`/`passingScore` 同义的 `title`/`description`/`passScore`；创建任务时在客户端映射为 `POST /tasks` 字段即可。见 §2.10。
+
+### v1.4.18（2026-04-14）
+
+- **任务智能发布解析**：新增 **`POST /tasks/ai-smart-publish`**（`central` / `admin`）。请求体传入自然语言 **`input`**（或 **`userInput`** / **`instruction`**），服务端注入当前系统时间，调用 **DeepSeek** 按 Apple Retail 培训运营 Prompt 输出 **`task_name` / `passing_score` / `start_time` / `end_time` / `task_details`**（含文案润色），并附加 **`startAt` / `ddlAt`**（与 **`startTime` / `endTime`** 同为本地墙钟，可直接用于 **`POST /tasks`** 请求体）。**不重复**返回 `title`/`description`/`passScore`（与 `taskName`/`taskDetails`/`passingScore` 同义，前端创建任务时自行映射）。详见 §2.10。
+
 ### v1.4.17（2026-04-14）
 
 - **看板智能洞察模型路由**：`POST /dashboard/insights` 请求体可选 **`reasoning`**（`boolean`，默认 `false`）。为 **`true`** 时使用 **`deepseek-reasoner`**（深度思考，流式中 **`delta`** 可带 **`phase`: `reasoning` | `content`**）；否则使用 **`deepseek-chat`**。成功 **`done.data`** 返回 **`model`**、**`reasoning`** 便于客户端展示本次选用模型。
@@ -274,7 +290,7 @@
 >   passScore: number,         // 达标分数，整数，必填
 >   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
 >   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
->   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 UTC 的 `YYYY-MM-DD HH:MM:SS`（与 SQLite `datetime('now')` 同形）
+>   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 **本地墙钟** `YYYY-MM-DD HH:MM:SS`（与 `datetime('now', 'localtime')` / `parseDateToSqliteLocal` 一致）
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
 >   updatedAt: string,         // ISO 8601
@@ -562,11 +578,54 @@
 }
 ```
 
-### 2.9 触发自动催办扫描
+### 2.10 任务智能发布解析（自然语言一键填表）
+
+- **接口路径**：`/tasks/ai-smart-publish`
+- **请求方式**：`POST`
+- **权限要求**：`central`, `admin`
+- **接口说明**：面向 Apple Retail 门店培训场景，使用固定 **Prompt**（含当前系统时间占位，用于解析「明天」「7 天后」等相对时间）。模型输出 **JSON** 五字段：`task_name`、`passing_score`、`start_time`、`end_time`、`task_details`（**`task_details`** 已含结构化润色与 Emoji）。**`startAt` / `ddlAt`** 与模型时间字段同为 **本地墙钟**（`YYYY-MM-DD HH:MM:SS`），语义与直接调用 **`POST /tasks`** 时传入的 `startAt`/`ddlAt` 一致；**勿**与此前误用的「仅响应里展示 UTC 字符串」混淆。**`taskName` / `taskDetails` / `passingScore` 与创建任务接口的 `title` / `description` / `passScore` 一一对应**，响应中不重复返回后者。依赖 **`DEEPSEEK_API_KEY`**。
+- **请求参数 (Body)**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `input` | string | 条件 | 用户自然语言；三选一，与 `userInput`、`instruction` 等价，**至少填一个** |
+| `userInput` | string | 条件 | 同 `input` |
+| `instruction` | string | 条件 | 同 `input` |
+
+- **返回参数 `data` 说明**：
+
+| 字段 | 说明 |
+|------|------|
+| `taskName` / `passingScore` / `startTime` / `endTime` / `taskDetails` | 与模型约定字段对应；`startTime`/`endTime` 为 Prompt 约定格式（日期与时分之间为空格，**时分秒可为连字符**） |
+| `startAt` / `ddlAt` | 由 `startTime`/`endTime` 解析得到的 **`YYYY-MM-DD HH:MM:SS`（本地墙钟）**，与 `POST /tasks` 请求体时间语义一致；**非**单独换算成 UTC 后的展示串 |
+| **对接 `POST /tasks` 时** | `title` ← `taskName`，`description` ← `taskDetails`，`passScore` ← `passingScore`，`startAt`/`ddlAt` ← 本接口返回的同名字段 |
+
+- **返回示例**：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "taskName": "MacBook Pro M4 新品培训",
+    "passingScore": 85,
+    "startTime": "2026-04-13 10-00-00",
+    "endTime": "2026-04-20 10-00-00",
+    "taskDetails": "Team，全新MacBook Pro M4培训已上线！…",
+    "startAt": "2026-04-13 10:00:00",
+    "ddlAt": "2026-04-20 10:00:00"
+  },
+  "requestId": "req-123..."
+}
+```
+
+- **异常**：`400`（`TASK_SMART_001` 未提供输入）；`502`（`TASK_SMART_003` 时间无法解析）；`503`（`TASK_SMART_002` 模型返回非 JSON 或调用失败）
+
+### 2.11 触发自动催办扫描
 
 自动预警的**业务逻辑**（读 `auto_nudge_rules`、命中规则、调用 `generate_nudge_message`、写 `notification_events` / `nudge_records`、WebSocket `nudge_sent`）在服务端 `evaluateAndTriggerAutoNudges` 中统一实现。触发方式有两种：
 
-#### 2.9.1 服务端定时调度（已实现）
+#### 2.11.1 服务端定时调度（已实现）
 
 - **行为**：HTTP 服务进程启动后挂载 `server/jobs/autoNudgeScheduler.js`；按固定间隔查询所有 **`status = dispatched`** 且 **`auto_nudge_rules` 非空** 的任务，对每个任务 **ID** 调用与下述手动接口**相同**的扫描逻辑（即 `evaluateAndTriggerAutoNudges`）。
 - **默认间隔**：**1 小时**（`3600000` ms）。
@@ -576,7 +635,7 @@
   | `AUTO_NUDGE_SCHEDULER` | 设为 `0` 时**不启动**定时调度（仅保留手动接口） |
   | `AUTO_NUDGE_INTERVAL_MS` | 自定义扫描间隔，单位为**毫秒**；未设置则默认 1 小时 |
 
-#### 2.9.2 手动触发单任务扫描（本接口）
+#### 2.11.2 手动触发单任务扫描（本接口）
 
 - **接口路径**：`/tasks/{id}/auto-nudge`
 - **请求方式**：`POST`

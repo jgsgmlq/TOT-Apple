@@ -20,6 +20,7 @@
 const bcrypt    = require('bcrypt');
 const { nanoid } = require('nanoid');
 const { db }    = require('./index');
+const { parseDateToSqliteLocal } = require('../utils/ddlAt');
 
 const SALT_ROUNDS    = 10;
 const DEFAULT_PASSWORD = 'Train2026!';
@@ -174,15 +175,15 @@ function getPlatformCompletion(task, status, empIndex) {
 function daysMs(d) { return d * 24 * 3600 * 1000; }
 
 function toDbStr(ms) {
-  return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  return parseDateToSqliteLocal(new Date(ms));
 }
 
 // 完成时距 ddl 的天数（按员工位次，越靠前完成越早）
 const DAYS_BEFORE_DDL = [9, 7, 5, 4, 3, 2.5, 1.5, 1, 0.5, 0.2];
 
 function getTimestamps(task, status, empIndex) {
-  const startAtMs  = new Date(task.start_at.replace(' ', 'T') + 'Z').getTime();
-  const ddlAtMs    = new Date(task.ddl_at.replace(' ', 'T') + 'Z').getTime();
+  const startAtMs  = new Date(task.start_at).getTime();
+  const ddlAtMs    = new Date(task.ddl_at).getTime();
 
   // received_at：任务下发后 0.5–2 天（按员工位次错开）
   const receivedMs = startAtMs + daysMs(0.5 + (empIndex % 4) * 0.4);
@@ -290,8 +291,8 @@ const MY_PAL_WEEK_PRIMARY = 'FY26Q2W1';
 const MY_PAL_WEEK_SECONDARY = 'FY26Q2W2';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
-function fmtUTC(date) {
-  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth()+1)}-${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`;
+function fmtLocal(date) {
+  return parseDateToSqliteLocal(date);
 }
 
 function generateMypalRows(employees) {
@@ -311,15 +312,15 @@ function generateMypalRows(employees) {
       progress    = 100;
       passedWeek  = taskWeek;
       const passedAt    = new Date(base.getTime() + idx * 3600 * 1000);
-      passedTime        = fmtUTC(passedAt);
+      passedTime        = fmtLocal(passedAt);
       const weekStartAt = new Date(passedAt.getTime() - 12 * 3600 * 1000);
-      weekStartTime     = fmtUTC(weekStartAt);
-      firstUseTime      = fmtUTC(new Date(weekStartAt.getTime() - 2 * 24 * 3600 * 1000));
+      weekStartTime     = fmtLocal(weekStartAt);
+      firstUseTime      = fmtLocal(new Date(weekStartAt.getTime() - 2 * 24 * 3600 * 1000));
     } else {
       const startedAt   = new Date(base.getTime() + idx * 3600 * 1000);
       const weekStartAt = new Date(startedAt.getTime() - 6 * 3600 * 1000);
-      weekStartTime     = fmtUTC(weekStartAt);
-      firstUseTime      = fmtUTC(new Date(weekStartAt.getTime() - 2 * 24 * 3600 * 1000));
+      weekStartTime     = fmtLocal(weekStartAt);
+      firstUseTime      = fmtLocal(new Date(weekStartAt.getTime() - 2 * 24 * 3600 * 1000));
       progress          = Math.min(99, 10 + (idx * 7) % 85);
     }
 

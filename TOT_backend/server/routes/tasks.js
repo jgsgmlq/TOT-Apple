@@ -9,7 +9,8 @@ const { createError } = require('../middleware/errorHandler');
 const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 const mainAgent = require('../agent');
 const { evaluateAndTriggerAutoNudges } = require('../services/autoNudge'); // 保留
-const { parseDdlAtToSqliteUtc } = require('../utils/ddlAt');
+const { smartPublishParse } = require('../services/taskSmartPublishService');
+const { parseDdlAtToSqliteUtc, formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -71,6 +72,22 @@ router.post('/ai-parse', authenticate, requireRole(['central', 'admin']), async 
       code: 200,
       message: 'success',
       data: result,
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api/v1/tasks/ai-smart-publish — 任务智能发布（自然语言 → 表格字段 + 润色）────────
+router.post('/ai-smart-publish', authenticate, requireRole(['central', 'admin']), async (req, res, next) => {
+  try {
+    const input = req.body.input ?? req.body.userInput ?? req.body.instruction;
+    const data = await smartPublishParse(input);
+    res.json({
+      code: 200,
+      message: 'success',
+      data,
       requestId: req.requestId,
     });
   } catch (err) {
@@ -232,7 +249,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
         : null;
 
     const id = nanoid();
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     const rtmFilterStr = rtmFilter ? JSON.stringify(rtmFilter) : null;
     const storeScopeStr = (!storeScope || storeScope === 'all') ? 'all' : JSON.stringify(storeScope);
     const autoNudgeRulesStr = autoNudgeRules ? JSON.stringify(autoNudgeRules) : null; // 保留
@@ -313,7 +330,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
       const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
       db.run(
         'UPDATE tasks SET ddl_at = ?, auto_nudge_rules = ?, updated_at = ? WHERE id = ?',
-        [ddlAtNorm, autoNudgeRulesStr, new Date().toISOString(), task.id]
+        [ddlAtNorm, autoNudgeRulesStr, formatNowSqliteLocal(), task.id]
       );
     } else {
       // draft 状态，允许修改所有字段
@@ -378,7 +395,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           platforms[0] === 1 ? mypalWeekResolved : null,
           platforms[0] === 1 ? mypalProductResolved : null,
           ddlAtResolved,
-          new Date().toISOString(),
+          formatNowSqliteLocal(),
           task.id,
         ]
       );
@@ -391,7 +408,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         'SELECT DISTINCT user_id, store_id FROM task_assignments WHERE task_id = ?',
         [task.id]
       );
-      const now = new Date().toISOString();
+      const now = formatNowSqliteLocal();
       for (const t of targets) {
         db.run(
           `INSERT OR IGNORE INTO notification_events
@@ -508,7 +525,7 @@ router.post('/:id/dispatch', authenticate, requireRole(['central', 'admin']), (r
       throw createError(400, '筛选结果无目标员工', 'TASK_006');
     }
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     let assignmentCount = 0;
     let notificationCount = 0;
 

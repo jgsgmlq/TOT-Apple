@@ -21,6 +21,7 @@ const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const { parseStoreDrill } = require('../utils/storeDrill');
+const { formatLocalDateYYYYMMDD, formatNowSqliteLocal } = require('../utils/ddlAt');
 const {
   parseAutoNudgeRules,
   classifyDeadlineCrisisBand,
@@ -97,7 +98,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
          AND ta.status != 'completed'
-         AND datetime('now') > t.ddl_at`,
+         AND datetime('now', 'localtime') > t.ddl_at`,
       allParams
     );
     const overdueCount = (overdueRow && overdueRow.cnt) || 0;
@@ -277,7 +278,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         pendingCount:    pendingCnt,
         overdueCount,
         warningCount: { p1: warnP1, p0: warnP0 },
-        updatedAt: base.last_updated || new Date().toISOString(),
+        updatedAt: base.last_updated || formatNowSqliteLocal(),
       },
       requestId: req.requestId,
     });
@@ -351,7 +352,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
 
     const updatedAt = rows.length > 0
       ? rows.reduce((m, r) => (r.last_updated > m ? r.last_updated : m), '')
-      : new Date().toISOString();
+      : formatNowSqliteLocal();
 
     res.json({
       code: 200,
@@ -416,7 +417,7 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
       completedCount:  r.completed_count,
     }));
 
-    const updatedAt = new Date().toISOString();
+    const updatedAt = formatNowSqliteLocal();
     res.json({
       code: 200,
       message: 'success',
@@ -454,7 +455,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     }
 
     const whereClause = conditions.join(' AND ');
-    const nowIso = new Date().toISOString();
+    const nowIso = formatNowSqliteLocal();
     const nowMs = Date.now();
 
     const aggregateSql = `
@@ -606,7 +607,7 @@ router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (re
           completedAt:  r.completed_at || null,
           updatedAt:    r.updated_at,
         })),
-        updatedAt: new Date().toISOString(),
+        updatedAt: formatNowSqliteLocal(),
       },
       requestId: req.requestId,
     });
@@ -626,7 +627,7 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
       throw createError(400, 'type 必须是 daily 或 hourly', 'DASH_005');
     }
 
-    const targetDate = date || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const targetDate = date || formatLocalDateYYYYMMDD(); // 本地日历「当天」，避免 UTC 日期偏差
     const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
     const storeWhere = drill.hasDrill ? drill.sql : '';
     const trendParamsDaily = [taskId, ...drill.params];
