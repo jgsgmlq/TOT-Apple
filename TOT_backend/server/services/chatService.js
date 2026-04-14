@@ -107,11 +107,24 @@ async function sendMessage(sessionId, userMessage, userId) {
   const historyRows = db.all(
     `SELECT role, content FROM chat_messages
      WHERE session_id = ?
-     ORDER BY created_at DESC LIMIT 6`,
+     ORDER BY created_at DESC, rowid DESC LIMIT 6`,
     [sessionId]
   ).reverse(); // oldest first for LLM
 
-  const history = historyRows.map((r) => ({ role: r.role, content: r.content }));
+  const history = historyRows.map((r) => {
+    let content = r.content;
+    if (r.role === 'assistant') {
+      try {
+        const parsed = JSON.parse(r.content);
+        if (parsed && parsed.overview) {
+          content = parsed.overview;
+        }
+      } catch (e) {
+        // Not valid JSON, keep as is
+      }
+    }
+    return { role: r.role, content };
+  });
 
   const startMs = Date.now();
 
@@ -287,7 +300,20 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   const userMessage = userMessageRow.content;
   
   // What remains in historyRows is the context history
-  const history = historyRows.map((r) => ({ role: r.role, content: r.content }));
+  const history = historyRows.map((r) => {
+    let content = r.content;
+    if (r.role === 'assistant') {
+      try {
+        const parsed = JSON.parse(r.content);
+        if (parsed && parsed.overview) {
+          content = parsed.overview;
+        }
+      } catch (e) {
+        // Not valid JSON, keep as is
+      }
+    }
+    return { role: r.role, content };
+  });
   
   const regionScope = {
     type: session.role_scope,

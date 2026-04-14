@@ -1,6 +1,6 @@
 # Executive Chat 规格
 
-**版本:** 2.1.0 | **PRD 4.0.5**（§5.7、§5.7.1、§8.5、§14.6）| **优先级:** P1（任务管理闭环跑通后实现）
+**版本:** 2.2.0 | **PRD 4.0.5**（§5.7、§5.7.1、§8.5、§14.6）| **优先级:** P1（任务管理闭环跑通后实现）
 
 **HTTP 契约正本：**请求/响应字段级定义以 [04-API-SPEC.md](./04-API-SPEC.md) **§6 Executive Chat Agent API**（含 §6.6 / §6.7 反馈与重新生成）为准；本文描述产品行为、意图、权限口径、数据溯源与 LLM 架构，避免与 04 重复维护两套 JSON。
 
@@ -21,6 +21,80 @@
 ## 功能概述
 
 Executive Chat 是面向高管（VP、区域总监）的独立 H5 Chat 页面，允许用户通过自然语言查询培训进度数据，**5 秒内**（P95）获得结构化回答，支持多轮追问下钻；并支持 PRD **§5.7.1** 定义的**高阶统计、相关性与预测类**问题（分 EC-P0 / EC-P1 子能力批次）。
+
+---
+
+## Agent 实现框架（当前实现）
+
+> 本节描述 **server 真实代码结构**，用于后端研发、联调与排障；HTTP 字段正本仍以 [04-API-SPEC.md](./04-API-SPEC.md) §6 为准。
+
+### 分层架构
+
+| 层 | 模块（代码） | 职责 |
+|----|--------------|------|
+| API 路由层 | `server/routes/chat.js` | 鉴权（`authenticate + requireRole(['executive'])`）、会话归属校验、参数校验、统一响应 |
+| 会话编排层 | `server/services/chatService.js` | 创建/删除会话、读取最近历史、恢复 `role_scope/regions/rtm`、落库 user/assistant 消息、反馈与 regenerate |
+| Agent 运行层 | `server/services/chatAgentRunner.js` | 模式路由（`intent_routing` / `function_calling`）、意图识别与工具调度、最终结构化回答输出 |
+| Agent 子能力层 | `chatIntentService` / `chatToolsService` / `chatAnswerService` | 意图分类、受权限约束的数据查询工具、回答格式化 |
+| LLM 适配层 | `server/utils/ai.js` | DeepSeek 文本生成（`generateTextDeepSeek`）与工具调用（`chatWithTools`），日志落盘（`DEBUG_AI_LOG=true`） |
+| 数据层 | SQLite：`chat_sessions` / `chat_messages` / `chat_message_feedback` + `tasks/assignments/stores/...` | 会话持久化、反馈记录、同源业务数据读取 |
+
+### 端到端执行链路（MVP 默认）
+
+1. `POST /api/v1/chat/executive/sessions/{sessionId}/messages` 进入路由层  
+2. `chatService.sendMessage` 读取最近 6 条历史 + 会话权限范围（national/regional/rtm）  
+3. `chatAgentRunner.run` 进入 `intent_routing` 分支：  
+   - `chatIntentService.classify`：LLM 输出 `intentType + entities`  
+   - `chatToolsService.executeByName`：按意图执行只读工具并应用权限裁剪  
+   - `chatAnswerService.format`：将工具结果二次整理为 `overview/keyNumbers/attentionPoints/followUpSuggestions`  
+4. `chatService` 持久化 user + assistant 消息，返回结构化响应
+
+### 数据与安全边界
+
+- **权限收敛点：**以 `chat_sessions.role_scope + regions/rtm` 为准，查询时必须经 `chatToolsService.buildRegionFilter(...)` 裁剪。
+- **数据来源约束：**回答数字来自 `tasks/assignments/stores` 同源聚合；禁止在回答层虚构指标。
+- **会话隔离：**路由层与服务层双重校验 session 归属（`CHAT_004`）。
+- **消息反馈约束：**仅 assistant 消息允许 `like/dislike/none`；regenerate 仅允许会话最后一条 assistant 消息（`CHAT_008`）。
+
+---
+
+## Agent 技术路线（Roadmap）
+
+### 路线总览
+
+| 阶段 | 模式 | 目标 | 当前状态 |
+|------|------|------|---------|
+| EC-R0 | Intent Routing | 用最小闭环跑通高管问答（两次 LLM + 本地工具） | **已上线（默认）** |
+| EC-R1 | Function Calling | 让模型自主多轮选工具、组合查询、减少硬编码意图映射 | **已预埋（`CHAT_AGENT_MODE=function_calling`）** |
+| EC-R2 | Analytics Agent | 面向 §5.7.1 的统计/相关性/预测子能力，支持异步重计算 | 规划中（EC-P0 / EC-P1 分批） |
+| EC-R3 | 可观测与评估闭环 | 基于反馈/重生成/日志形成持续优化机制 | 规划中 |
+
+### R0（当前）设计取舍
+
+- **优点：**链路稳定、可控性强、便于快速定位问题。
+- **限制：**意图到工具是固定映射，复杂组合查询能力有限；扩展新统计子能力时需要继续加映射和规则。
+
+### R1（Function Calling）升级要点
+
+- **开关：**`CHAT_AGENT_MODE=function_calling`（默认仍为 `intent_routing`）。
+- **核心机制：**`chatWithTools` + `TOOL_SCHEMAS` + 最多 `MAX_ITERATIONS=3` 工具循环。
+- **工程要求：**
+  - 工具 schema 与 `executeByName` 严格同名同参；
+  - 工具失败返回可解释结果，不中断整轮对话；
+  - 超过迭代上限时强制 `tool_choice='none'` 输出最终回答。
+
+### R2（统计/预测）技术方向
+
+- **意图层：**保持 `intentType=analytics_query`，通过 `entities.analysisType` 区分子类型，避免枚举爆炸。
+- **数据层：**优先复用 `/dashboard/*` 同源口径；缺失项走服务端只读聚合。
+- **结果层：**统计类回答强制携带 `statisticsProvenance`；预测类强制携带 `forecastDisclaimer`。
+- **异步层：**EC-P1 重计算支持 202 + `jobId`（或 WS）模式，前端展示“计算中”状态。
+
+### 可观测性与运维建议
+
+- **日志：**启用 `DEBUG_AI_LOG=true` 时写 `server/logs/ai_debug.log`，记录请求体、模型输出、延迟。
+- **关键指标：**P95 响应时长、工具调用成功率、`CHAT_001` 占比、regenerate 率、dislike 率。
+- **故障降级：**LLM/工具失败时返回标准错误（`CHAT_001` / 503）或“部分数据回答 + 追问建议”，禁止返回伪造结论。
 
 ---
 
@@ -277,3 +351,4 @@ function buildExecutiveDataScope(session) {
 | 1.0.1 | — | 初版单接口草案 |
 | 2.0.0 | 2026-04-10 | 对齐 PRD 4.0.5 §5.7/§5.7.1；HTTP 以 04 §6 为正本；`stores.region` 权限；溯源表；LLM 可插拔；废弃 `/api/executive/chat` 正本地位 |
 | 2.1.0 | 2026-04-13 | 实现状态与工程对齐：`/api/v1/chat` 已挂载；补充 Agent 模式与 `CHAT_AGENT_MODE`；入口对齐 Vue 前端路径；HTTP摘要增加 §6.6 / §6.7；新增「反馈与重新生成」产品口径与验收行 |
+| 2.2.0 | 2026-04-14 | 新增「Agent 实现框架」与「技术路线」：分层架构、端到端执行链路、模式演进（Intent Routing → Function Calling → Analytics）、可观测与降级策略 |
