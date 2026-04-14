@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const { db } = require('../db');
 const { authenticate, JWT_SECRET } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -41,7 +42,7 @@ router.post('/login', async (req, res, next) => {
       throw createError(401, '用户名或密码错误', 'AUTH_005');
     }
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     db.run('UPDATE users SET last_login_at = ? WHERE id = ?', [now, user.id]);
 
     const payload = {

@@ -4,6 +4,7 @@ const { db } = require('../db');
 const { nanoid } = require('nanoid');
 const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 const { classifyDeadlineCrisisBand, getDeadlineCrisisHours } = require('./autoNudgeRules');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const systemUserId = 1; // 系统执行账号（写入 initiator_id）
 
@@ -173,7 +174,7 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
 
     const eventId = nanoid();
     const eventType = target.severity === 'red' ? 'nudge_red' : 'nudge_yellow';
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     let nudgeRecordId;
 
     db.transaction(() => {

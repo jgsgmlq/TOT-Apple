@@ -2,6 +2,7 @@
 
 const { nanoid } = require('nanoid');
 const { db } = require('../db');
+const { formatLocalDateYYYYMMDD } = require('../utils/ddlAt');
 const { parseStoreDrill } = require('../utils/storeDrill');
 const { generateTextDeepSeekStream } = require('../utils/ai');
 const { createError } = require('../middleware/errorHandler');
@@ -71,7 +72,7 @@ function buildNorthStarFacts(body) {
              AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS on_time_count,
        AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL
              THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_hours,
-       SUM(CASE WHEN ta.status != 'completed' AND datetime('now') > datetime(t.ddl_at) THEN 1 ELSE 0 END) AS overdue
+       SUM(CASE WHEN ta.status != 'completed' AND datetime('now', 'localtime') > datetime(t.ddl_at) THEN 1 ELSE 0 END) AS overdue
      FROM task_assignments ta
      JOIN tasks t ON t.id = ta.task_id
      ${joinStore}
@@ -244,7 +245,7 @@ function buildWeeklyCompletionFacts(body) {
 function buildDailyCompletionFacts(body) {
   const taskId = body.taskId;
   if (!taskId) throw createError(400, 'completion_daily 需要 taskId', 'INSIGHT_001');
-  const targetDate = body.date || new Date().toISOString().slice(0, 10);
+  const targetDate = body.date || formatLocalDateYYYYMMDD();
   const drill = parseStoreDrill(normalizeQuery(body));
   const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
   const storeWhere = drill.hasDrill ? drill.sql : '';

@@ -6,6 +6,7 @@ const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const { broadcastToDashboard } = require('../ws/manager');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -254,7 +255,7 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
     }
 
     const id  = nanoid();
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     db.run(
       `INSERT INTO notification_events
         (id, task_id, assignment_id, target_user_id, store_id, event_type, dedupe_key, created_at)
@@ -288,7 +289,7 @@ router.post('/:eventId/read', authenticate, (req, res, next) => {
       throw createError(403, '无权操作他人通知', 'AUTH_003');
     }
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     const userId = employeeId || null;
 
     db.transaction(() => {

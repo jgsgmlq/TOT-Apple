@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS employees (
   name       TEXT NOT NULL,
   role       TEXT NOT NULL,
   email      TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_emp_store_id ON employees(store_id);
 
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at     TEXT,
   executive_regions TEXT,   -- JSON array e.g. '["华东","华南"]'，NULL = 全国
   executive_rtm     TEXT,   -- RTM 渠道名，NULL = 不按渠道分管
-  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 -- 4. tasks
@@ -51,14 +51,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   rtm_filter         TEXT,
   store_scope        TEXT NOT NULL DEFAULT 'all',
   auto_nudge_rules   TEXT,                          -- 自动催办规则 (JSON)
-  start_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  start_at           TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate，如 FY26Q2W1（has_mypal 时建议必填）
   mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空，见对接文档）
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
-  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (has_mypal + has_smartsell + has_ai_demo + has_live_broadcast >= 1),
   CHECK (rtm_filter IS NULL OR (json_valid(rtm_filter) AND json_type(rtm_filter) = 'array')),
   CHECK (store_scope = 'all' OR (json_valid(store_scope) AND json_type(store_scope) = 'array')),
@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS task_assignments (
   received_at              TEXT,
   started_at               TEXT,
   completed_at             TEXT,
-  created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at               TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   UNIQUE(task_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_ta_task_store_status ON task_assignments(task_id, store_id, status);
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS notification_events (
   dedupe_key     TEXT,
   content        TEXT,                          -- 催办类展示文案（nudge_*）；任务类可为空，由前端关联 task 或后续扩展
   initiator_id   INTEGER REFERENCES users(id),
-  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (
     (event_type = 'task_assigned' AND dedupe_key IS NOT NULL AND assignment_id IS NOT NULL)
     OR (event_type IN ('nudge_yellow', 'nudge_red') AND severity IS NOT NULL AND assignment_id IS NOT NULL)
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS read_receipts (
   id       TEXT PRIMARY KEY,
   event_id TEXT NOT NULL REFERENCES notification_events(id),
   user_id  TEXT NOT NULL REFERENCES employees(id),
-  read_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  read_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user ON read_receipts(event_id, user_id);
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS nudge_records (
   initiator_id           INTEGER NOT NULL REFERENCES users(id),
   severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'red')),
   notification_event_ids TEXT NOT NULL,
-  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at             TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (json_valid(notification_event_ids) AND json_type(notification_event_ids) = 'array')
 );
 CREATE INDEX IF NOT EXISTS idx_nr_task_id      ON nudge_records(task_id);
@@ -166,8 +166,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
   regions     TEXT,
   rtm         TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  last_active TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  last_active TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content     TEXT NOT NULL,
   intent_type TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS dashboard_insights (
   down_count          INTEGER NOT NULL DEFAULT 0
                         CHECK (down_count >= 0),
   created_by          INTEGER NOT NULL REFERENCES users(id),
-  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (extra_params_json IS NULL OR (json_valid(extra_params_json) AND json_type(extra_params_json) = 'object')),
   CHECK (context_json IS NULL OR (json_valid(context_json) AND json_type(context_json) = 'object'))
 );
@@ -212,8 +212,8 @@ CREATE TABLE IF NOT EXISTS chat_message_feedback (
   message_id    TEXT NOT NULL REFERENCES chat_messages(id),
   user_id       INTEGER NOT NULL REFERENCES users(id),
   feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
-  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   UNIQUE(message_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);

@@ -10,6 +10,7 @@ const {
   getUserDatasPage,
 } = require('./mypalClient');
 const { broadcastToUser, broadcastToUsers } = require('../ws/manager');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const WEEKLY_THROTTLE_MS = 1100;
 
@@ -121,7 +122,7 @@ async function syncMypal(opts) {
   }
 
   const mode = opts.mode === 'weekly' ? 'weekly' : 'batch';
-  const nowIso = new Date().toISOString();
+  const nowIso = formatNowSqliteLocal();
 
   let tasks;
   if (opts.taskId) {

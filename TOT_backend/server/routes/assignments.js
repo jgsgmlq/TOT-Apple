@@ -8,6 +8,7 @@ const { createError } = require('../middleware/errorHandler');
 const { broadcastToUser, broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
 const { batchCreateAssignments } = require('../services/assignmentBatch');
 const { getConfiguredPlatformColumns, computeAssignmentProgressStatus } = require('../services/assignmentProgress');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
@@ -287,7 +288,7 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
     const exists = db.get('SELECT id FROM task_assignments WHERE task_id = ? AND user_id = ?', [taskId, userId]);
     if (exists) throw createError(409, '该用户已存在 assignment', 'ASSIGN_007');
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     const id = nanoid();
     db.run(
       `INSERT INTO task_assignments
@@ -325,7 +326,7 @@ router.patch('/:id', authenticate, requireRole(['central', 'admin']), (req, res,
 
     db.run(
       'UPDATE task_assignments SET nudge_count = ?, updated_at = ? WHERE id = ?',
-      [nudgeCount, new Date().toISOString(), existing.id]
+      [nudgeCount, formatNowSqliteLocal(), existing.id]
     );
 
     const row = db.get('SELECT * FROM task_assignments WHERE id = ?', [existing.id]);
@@ -389,7 +390,7 @@ router.put('/:id/status', authenticate, (req, res, next) => {
     );
     if (!task) throw createError(404, '任务不存在', 'TASK_002');
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     let resolvedNudgeCount = 0;
 
     db.transaction(() => {
@@ -558,7 +559,7 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
       throw createError(403, '无权操作他人任务', 'AUTH_003');
     }
 
-    const now = new Date().toISOString();
+    const now = formatNowSqliteLocal();
     let alreadyViewed = false;
 
     // 1. 写 received_at（首次打开时）

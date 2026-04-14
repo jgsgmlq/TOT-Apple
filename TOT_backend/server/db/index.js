@@ -82,7 +82,7 @@ function migrateDashboardInsightModuleTypes(database) {
         up_count            INTEGER NOT NULL DEFAULT 0 CHECK (up_count >= 0),
         down_count          INTEGER NOT NULL DEFAULT 0 CHECK (down_count >= 0),
         created_by          INTEGER NOT NULL REFERENCES users(id),
-        created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         CHECK (extra_params_json IS NULL OR (json_valid(extra_params_json) AND json_type(extra_params_json) = 'object')),
         CHECK (context_json IS NULL OR (json_valid(context_json) AND json_type(context_json) = 'object'))
       )
@@ -188,8 +188,8 @@ function ensureChatTables(database) {
       role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
       regions     TEXT,
       rtm         TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      last_active TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      last_active TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     )
   `);
   database.exec(`
@@ -199,7 +199,7 @@ function ensureChatTables(database) {
       role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content     TEXT NOT NULL,
       intent_type TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     )
   `);
   database.exec(
@@ -215,8 +215,8 @@ function ensureChatTables(database) {
       message_id    TEXT NOT NULL REFERENCES chat_messages(id),
       user_id       INTEGER NOT NULL REFERENCES users(id),
       feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
-      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       UNIQUE(message_id, user_id)
     )
     `);
@@ -272,7 +272,7 @@ function migrateNudgeRecordsConstraints(database) {
         initiator_id           INTEGER NOT NULL REFERENCES users(id),
         severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'red')),
         notification_event_ids TEXT NOT NULL,
-        created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at             TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         CHECK (json_valid(notification_event_ids) AND json_type(notification_event_ids) = 'array')
       )
     `);

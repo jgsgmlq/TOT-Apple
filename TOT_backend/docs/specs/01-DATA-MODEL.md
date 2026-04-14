@@ -7,8 +7,8 @@
 ## 设计约定
 
 - 数据库：SQLite 3，WAL 模式
-- 所有时间字段：**统一为文本存储**（格式 `YYYY-MM-DD HH:MM:SS`）；SQLite `datetime('now')` 为**服务器本地时区**，若生产要求严格 UTC，应在应用层写入 UTC 或改用 `strftime` 等显式 UTC 表达式
-- 对外 API 返回时间：统一转换为 ISO 8601（`YYYY-MM-DDTHH:MM:SSZ`）
+- 所有时间字段：**统一为文本存储**（格式 `YYYY-MM-DD HH:MM:SS`），语义为 **Node 进程本地时区墙钟**（生产建议设置 **`TZ=Asia/Shanghai`** 等）；SQLite 默认值使用 **`datetime('now', 'localtime')`**，与应用层 `formatNowSqliteLocal()` / `parseDateToSqliteLocal()` 一致
+- 对外 API 返回时间：与库内一致，多为上述文本格式（部分历史字段文档仍写 ISO，以实现为准）
 - ID：TEXT，使用业务编号（stores/employees）或 nanoid（tasks/assignments/events 等）
 - 布尔值：INTEGER（0=false，1=true）
 - JSON 数组/对象：TEXT（序列化存储，仅用于 rtm_filter / store_scope / notification_event_ids）
@@ -175,14 +175,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   rtm_filter         TEXT,
   store_scope        TEXT NOT NULL DEFAULT 'all',
   auto_nudge_rules   TEXT,                          -- 自动预警规则（JSON；实现层命名保留 auto_nudge）
-  start_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  start_at           TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate / 任务周，如 FY26Q2W1
   mypal_product_name TEXT,                          -- 与 MyPal productName 精确匹配（可空）
-  ddl_at             TEXT NOT NULL,                 -- 与 SQLite datetime('now') 同形：UTC 的 YYYY-MM-DD HH:MM:SS（写入由 API 规范化）
+  ddl_at             TEXT NOT NULL,                 -- 本地墙钟 YYYY-MM-DD HH:MM:SS（与 datetime('now','localtime') 同形；写入由 API 规范化）
   created_by         TEXT NOT NULL,
-  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (has_mypal + has_smartsell + has_ai_demo + has_live_broadcast >= 1),
   CHECK (rtm_filter IS NULL OR (json_valid(rtm_filter) AND json_type(rtm_filter) = 'array')),
   CHECK (store_scope = 'all' OR (json_valid(store_scope) AND json_type(store_scope) = 'array')),
@@ -205,11 +205,11 @@ CREATE TABLE IF NOT EXISTS tasks (
 | rtm_filter | N | JSON 数组或 null | 按渠道属性动态筛选目标门店，优先级高于 store_scope；条件内 AND，条件间 OR（见 07-RTM-FILTER.md）|
 | store_scope | Y（有默认） | "all" 或 JSON 数组 | **NOT NULL，默认 `'all'`**；rtm_filter 为空时使用；"all"=全部门店，JSON 数组=指定门店列表；DB 约束保证值为 all 或合法 JSON 数组 |
 | auto_nudge_rules | N | JSON 对象或 null | **自动预警规则**（PRD：进度掉队、起步异常、deadline 危机等）；服务端定时调度与 `POST /api/v1/tasks/:id/auto-nudge` 读取该字段；实现层字段名仍含 `nudge`（见 `04-API-SPEC.md` §2.9） |
-| start_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务开始时间；与 PRD「开始时间」对应；落库前由服务端规范化 |
+| start_at | Y | `YYYY-MM-DD HH:MM:SS`（本地墙钟，与 `datetime('now','localtime')` 同形） | 任务开始时间；与 PRD「开始时间」对应；落库前由服务端 `parseDateToSqliteLocal` 规范化 |
 | pass_score | Y | 默认 100 | 达标分数（PRD `passingScore`）；整数 |
 | mypal_task_week | N | 文本 | MyPal 查询用任务周 / `queryDate`，如 `FY26Q2W1`；**has_mypal=1 时建议必填**；见 `mypalSyncService` |
 | mypal_product_name | N | 文本 | 与 MyPal 响应 `productName` **精确匹配**时用于筛选学习行；可空 |
-| ddl_at | Y | `YYYY-MM-DD HH:MM:SS`（UTC，与 `datetime('now')` 同形） | 任务截止时间；请求体可为任意可被解析的时间串，**落库前**由服务端 `parseDateToSqliteUtc` 规范化 |
+| ddl_at | Y | `YYYY-MM-DD HH:MM:SS`（本地墙钟） | 任务截止时间；请求体可为任意可被解析的时间串，**落库前**由服务端 `parseDateToSqliteLocal` 规范化（`parseDdlAtToSqliteUtc` 为同名历史别名） |
 | created_by | Y | — | 创建者 username（软引用，不设外键），用于审计 |
 | created_at / updated_at | Y | DEFAULT | 创建/更新时间 |
 | CHECK（平台）| — | 至少 1 个平台为 1 | 任务必须包含至少一个学习平台 |

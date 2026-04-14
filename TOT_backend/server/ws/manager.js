@@ -2,6 +2,7 @@
 
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'mvp-training-secret-2026';
 
@@ -90,7 +91,7 @@ function broadcastToUser(employeeId, payload) {
   if (payload.event === 'task_assigned' && payload.data && payload.data.taskId) {
     try {
       const { db } = require('../db');
-      const now = new Date().toISOString();
+      const now = formatNowSqliteLocal();
       db.run(
         'UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE task_id = ? AND user_id = ? AND received_at IS NULL',
         [now, now, payload.data.taskId, employeeId]
