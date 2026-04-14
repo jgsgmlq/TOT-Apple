@@ -43,12 +43,16 @@ type StoredRules = (AutoNudgeRulesApi & LegacyFlat) | null | undefined;
 export function formFromAutoNudgeRules(r: StoredRules): AlertRulesForm {
   if (!r || typeof r !== 'object') return { ...DEFAULT_FORM };
   return {
-    laggingLifestyle: r.progressLag?.lifestyle ?? r.laggingLifestyle ?? DEFAULT_FORM.laggingLifestyle,
+    laggingLifestyle:
+      r.progressLag?.lifestyle ?? r.laggingLifestyle ?? DEFAULT_FORM.laggingLifestyle,
     laggingMono: r.progressLag?.mono ?? r.laggingMono ?? DEFAULT_FORM.laggingMono,
     startDelayPercent: r.startDelay ?? r.startDelayPercent ?? DEFAULT_FORM.startDelayPercent,
-    deadlineCrisisHours: r.deadlineCrisis?.p0 ?? r.deadlineCrisisHours ?? DEFAULT_FORM.deadlineCrisisHours,
+    deadlineCrisisHours:
+      r.deadlineCrisis?.p0 ?? r.deadlineCrisisHours ?? DEFAULT_FORM.deadlineCrisisHours,
     deadlineCrisisHoursSecondary:
-      r.deadlineCrisis?.p1 ?? r.deadlineCrisisHoursSecondary ?? DEFAULT_FORM.deadlineCrisisHoursSecondary,
+      r.deadlineCrisis?.p1 ??
+      r.deadlineCrisisHoursSecondary ??
+      DEFAULT_FORM.deadlineCrisisHoursSecondary,
   };
 }
 

@@ -205,3 +205,16 @@ CREATE TABLE IF NOT EXISTS dashboard_insights (
 );
 CREATE INDEX IF NOT EXISTS idx_di_module_task ON dashboard_insights(module_type, task_id);
 CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
+
+-- 11. chat_message_feedback
+CREATE TABLE IF NOT EXISTS chat_message_feedback (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);
+CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);

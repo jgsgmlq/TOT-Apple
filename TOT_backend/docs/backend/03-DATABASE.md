@@ -362,14 +362,24 @@ CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
 
 **字段说明：** `module_type` 已与 API `insightType` 一致（与前端看板五个模块一一对应，详见 `docs/specs/04-API-SPEC.md` §5.7.1 对照表）。枚举与产品名简表：
 
-| `module_type` | 前端模块名称 |
-|---------------|--------------|
-| `north_star` | 北极星 |
-| `completion_weekly` | 完成人数趋势（周） |
-| `completion_daily` | 完成人数趋势（日内时段） |
-| `channel_north_star` | 区域进度与门店排行（按 RTM 渠道聚合） |
-| `funnel_alerts` | 漏斗链路数据 + 预警率统计（后端合并为一条类型） |
+**迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列。
 
-`context_json` 存生成洞察时使用的聚合事实（便于审计）；`extra_params_json` 存 `insightType`、`trendType`、`date`、`rtmLevel` 等。**`up_count` / `down_count`** 为赞、踩累计次数，不存投票人。
+## 12. chat_message_feedback 表
 
-**迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列；旧枚举（`trend`/`heatmap_rank`/`funnel`/`warning_stats`）由 `migrateDashboardInsightModuleTypes` 自动映射迁移到新枚举。
+```sql
+CREATE TABLE IF NOT EXISTS chat_message_feedback (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);
+CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);
+```
+
+**字段说明：** 用于持久化用户针对 AI (`assistant`) 消息的“喜欢”/“不喜欢”评价。通过 `UNIQUE(message_id, user_id)` 保证单用户对单条消息只有一条评价。
+**迁移说明：** `server/db/index.js` 的 `ensureChatFeedbackTable` 自动建表。
+

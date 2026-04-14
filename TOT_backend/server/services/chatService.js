@@ -162,12 +162,13 @@ function getHistory(sessionId, pageNum, pageSize) {
   const total = totalRow ? totalRow.total : 0;
 
   const rows = db.all(
-    `SELECT id, role, content, intent_type, created_at
-     FROM chat_messages
-     WHERE session_id = ?
-     ORDER BY created_at ASC
+    `SELECT cm.id, cm.role, cm.content, cm.intent_type, cm.created_at, cmf.feedback_type
+     FROM chat_messages cm
+     LEFT JOIN chat_message_feedback cmf ON cm.id = cmf.message_id AND cmf.user_id = (SELECT user_id FROM chat_sessions WHERE id = ?)
+     WHERE cm.session_id = ?
+     ORDER BY cm.created_at ASC, cm.rowid ASC
      LIMIT ? OFFSET ?`,
-    [sessionId, pageSize, offset]
+    [sessionId, sessionId, pageSize, offset]
   );
 
   const historyList = rows.map((r) => {
@@ -179,6 +180,7 @@ function getHistory(sessionId, pageNum, pageSize) {
         ? (() => { try { return JSON.parse(r.content); } catch { return null; } })()
         : undefined,
       intentType:   r.intent_type,
+      userFeedback: r.role === 'assistant' ? (r.feedback_type || null) : undefined,
       timestamp:    r.created_at,
     };
     return item;
@@ -195,6 +197,127 @@ function getHistory(sessionId, pageNum, pageSize) {
   };
 }
 
+// ─── setMessageFeedback ───────────────────────────────────────────────────────
+/**
+ * @param {string} sessionId
+ * @param {string} messageId
+ * @param {number} userId
+ * @param {string} feedback  'like', 'dislike', or 'none'
+ */
+function setMessageFeedback(sessionId, messageId, userId, feedback) {
+  const msg = db.get(
+    'SELECT id, role, session_id FROM chat_messages WHERE id = ?',
+    [messageId]
+  );
+  if (!msg) {
+    throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
+  }
+  if (msg.session_id !== sessionId) {
+    throw Object.assign(new Error('Message not found in session'), { status: 404, code: 'CHAT_007' });
+  }
+  if (msg.role !== 'assistant') {
+    throw Object.assign(new Error('Can only provide feedback for assistant messages'), { status: 400, code: 'CHAT_006' });
+  }
+
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+
+  if (feedback === 'none') {
+    db.run(
+      'DELETE FROM chat_message_feedback WHERE message_id = ? AND user_id = ?',
+      [messageId, userId]
+    );
+  } else if (feedback === 'like' || feedback === 'dislike') {
+    db.run(
+      `INSERT INTO chat_message_feedback (id, message_id, user_id, feedback_type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(message_id, user_id) DO UPDATE SET
+       feedback_type = excluded.feedback_type,
+       updated_at = excluded.updated_at`,
+      [nanoid(), messageId, userId, feedback, now, now]
+    );
+  } else {
+    throw Object.assign(new Error('Invalid feedback type'), { status: 400, code: 'CHAT_006' });
+  }
+}
+
+// ─── regenerateLastAssistant ──────────────────────────────────────────────────
+/**
+ * @param {string} sessionId
+ * @param {string} messageId
+ * @param {number} userId
+ */
+async function regenerateLastAssistant(sessionId, messageId, userId) {
+  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
+// Get the last assistant message
+  const lastMsgRow = db.get(
+    'SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    [sessionId]
+  );
+  
+  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {  throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
+}
+
+// To regenerate, we need the history *before* this assistant message
+// and the user message that prompted it. We'll just fetch the last 7 messages,
+// skip the last one (the assistant message being regenerated),
+// and the new last message should be the user message.
+  const historyRows = db.all(
+    `SELECT role, content FROM chat_messages
+     WHERE session_id = ?
+     ORDER BY created_at DESC, rowid DESC LIMIT 7`,
+    [sessionId]
+  ).reverse();
+
+  if (historyRows.length < 2) {
+    throw Object.assign(new Error('Not enough history to regenerate'), { status: 400, code: 'CHAT_008' });
+  }
+  
+  // The last item in historyRows is the assistant message being regenerated.
+  historyRows.pop();
+  
+  // The new last item is the user's prompt.
+  const userMessageRow = historyRows.pop();
+  if (userMessageRow.role !== 'user') {
+      throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
+  }
+  
+  const userMessage = userMessageRow.content;
+  
+  // What remains in historyRows is the context history
+  const history = historyRows.map((r) => ({ role: r.role, content: r.content }));
+  
+  const regionScope = {
+    type: session.role_scope,
+    regions: session.regions ? JSON.parse(session.regions) : null,
+    rtm: session.rtm || null,
+  };
+
+  const startMs = Date.now();
+  const replyContent = await chatAgentRunner.run(userMessage, history, regionScope);
+  const responseTime = Date.now() - startMs;
+
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const newAssistMsgId = nanoid();
+  const intentType = replyContent._intentType || null;
+  delete replyContent._intentType;
+
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [newAssistMsgId, sessionId, 'assistant', JSON.stringify(replyContent), intentType, now]
+  );
+  
+  db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+
+  return {
+    messageId:    newAssistMsgId,
+    replyContent,
+    responseTime,
+    contextId:    sessionId,
+    timestamp:    now,
+  };
+}
+
 // ─── deleteSessionById ────────────────────────────────────────────────────────
 /**
  * 硬删除：从 SQLite 中删除该会话及 `chat_messages` 中所有关联行（路由层需先校验归属）。
@@ -204,10 +327,15 @@ function getHistory(sessionId, pageNum, pageSize) {
 function deleteSessionById(sessionId) {
   const database = getDb();
   const runDelete = database.transaction(() => {
+    // Delete feedback for messages in this session
+    database.prepare(`
+      DELETE FROM chat_message_feedback
+      WHERE message_id IN (SELECT id FROM chat_messages WHERE session_id = ?)
+    `).run(sessionId);
     database.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(sessionId);
     database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
   });
   runDelete();
 }
 
-module.exports = { createSession, sendMessage, getHistory, deleteSessionById };
+module.exports = { createSession, sendMessage, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant };

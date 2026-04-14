@@ -1,6 +1,6 @@
 # 数据模型规格
 
-**版本:** 2.9.0 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-10
+**版本:** 2.9.1 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-13
 
 ---
 
@@ -570,6 +570,12 @@ nudge_records (TEXT PK: nanoid)
 
 ## 变更记录
 
+### v2.9.1（2026-04-13）
+
+| 范围 | 变更 | 理由 |
+|------|------|------|
+| §10 Executive Chat | 补充 `chat_sessions` / `chat_messages` / `chat_message_feedback` 完整 DDL、字段说明、索引、迁移函数与关系约束 | 原节仅占位说明，无法独立作为数据模型规范使用 |
+
 ### v2.9.0（2026-04-10）
 
 | 范围 | 变更 | 理由 |
@@ -749,7 +755,93 @@ nudge_records (TEXT PK: nanoid)
 
 ---
 
-## 10. chat_sessions / chat_messages（Executive Chat）
+## 10. chat_sessions / chat_messages / chat_message_feedback（Executive Chat）
 
-见 `docs/backend/03-DATABASE.md §10-11`。
-迁移函数：`migrateUsersExecutiveScope`（补 `users.executive_regions` / `executive_rtm`）、`ensureChatTables`。
+**业务含义：** Executive Chat 的会话与消息存储层。`chat_sessions` 记录 executive 用户发起的会话上下文（含权限作用域快照），`chat_messages` 按时序存储问答消息，`chat_message_feedback` 持久化用户对 assistant 回复的 like/dislike 反馈。
+
+> 详细实现见 `docs/backend/03-DATABASE.md §10-12`。
+
+### 10.1 `chat_sessions`（会话表）
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id),
+  role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
+  regions     TEXT,
+  rtm         TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  last_active TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| id | Y | 会话 ID（nanoid） |
+| user_id | Y | 会话所属登录用户（`users.id`） |
+| role_scope | Y | 会话生效的数据权限范围：`national / regional / rtm` |
+| regions | N | 区域范围快照（JSON 字符串）；`role_scope=regional` 时通常有值 |
+| rtm | N | 渠道范围快照；`role_scope=rtm` 时通常有值 |
+| created_at | Y | 会话创建时间 |
+| last_active | Y | 最近活跃时间（用于会话列表排序/续写） |
+
+### 10.2 `chat_messages`（消息表）
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
+  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content     TEXT NOT NULL,
+  intent_type TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| id | Y | 消息 ID（nanoid） |
+| session_id | Y | 所属会话（`chat_sessions.id`） |
+| role | Y | 消息角色：`user / assistant` |
+| content | Y | 消息内容；`user` 为原始文本，`assistant` 为序列化回复 JSON |
+| intent_type | N | 意图类型（仅 assistant 消息通常会写入） |
+| created_at | Y | 消息创建时间 |
+
+### 10.3 `chat_message_feedback`（消息反馈表）
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_message_feedback (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);
+CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| id | Y | 反馈记录 ID（nanoid） |
+| message_id | Y | 被评价的 assistant 消息（`chat_messages.id`） |
+| user_id | Y | 评价人（`users.id`） |
+| feedback_type | Y | 反馈类型：`like / dislike` |
+| created_at / updated_at | Y | 创建/更新时间 |
+| UNIQUE(message_id, user_id) | — | 保证同一用户对同一消息最多一条反馈（可覆盖更新） |
+
+### 10.4 迁移与兼容
+
+- `migrateUsersExecutiveScope`：旧库补齐 `users.executive_regions`、`users.executive_rtm` 两列（Executive 账号辖区绑定）。
+- `ensureChatTables`：旧库兜底创建 `chat_sessions`、`chat_messages` 与 `idx_cm_session_id`。
+- `ensureChatFeedbackTable`：旧库兜底创建 `chat_message_feedback` 与相关索引。
+
+### 10.5 关系与约束
+
+- `users (1) -> (n) chat_sessions`：一个用户可有多个会话。
+- `chat_sessions (1) -> (n) chat_messages`：一个会话可有多条消息。
+- `chat_messages (1) -> (n) chat_message_feedback`：单条消息可有多个用户的反馈（MVP 仅执行用户自己）。
+- `users (1) -> (n) chat_message_feedback`：单个用户可以给出多条反馈。

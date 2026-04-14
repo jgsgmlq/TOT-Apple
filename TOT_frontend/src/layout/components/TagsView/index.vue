@@ -301,16 +301,16 @@
         (to) => {
           if (whiteList.includes(route.name as string)) return;
           state.activeKey = to;
-          
+
           // 获取格式化后的路由，处理“编辑任务”动态标题
           const simpleRoute = getSimpleRoute(route);
           tabsViewStore.addTab(simpleRoute);
-          
+
           // 同步更新网页 title 以符合动态改名
           if (simpleRoute.meta && simpleRoute.meta.title) {
             document.title = simpleRoute.meta.title as string;
           }
-          
+
           updateNavScroll(true);
         },
         { immediate: true }

@@ -27,6 +27,7 @@ function getDb() {
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
     ensureChatTables(_db);
+    ensureChatFeedbackTable(_db);
     migrateDashboardInsightCounts(_db);
     migrateDashboardInsightModuleTypes(_db);
   }
@@ -203,10 +204,31 @@ function ensureChatTables(database) {
   `);
   database.exec(
     'CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id)'
-  );
-}
+    );
+    }
 
-function ensureMypalLearningMockIndexes(database) {
+    /** 创建 chat_message_feedback 表 */
+    function ensureChatFeedbackTable(database) {
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_message_feedback (
+      id            TEXT PRIMARY KEY,
+      message_id    TEXT NOT NULL REFERENCES chat_messages(id),
+      user_id       INTEGER NOT NULL REFERENCES users(id),
+      feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(message_id, user_id)
+    )
+    `);
+    database.exec(
+    'CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id)'
+    );
+    database.exec(
+    'CREATE INDEX IF NOT EXISTS idx_cmf_user_id ON chat_message_feedback(user_id)'
+    );
+    }
+
+    function ensureMypalLearningMockIndexes(database) {
   const row = database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mypal_learning_mock'")
     .get();

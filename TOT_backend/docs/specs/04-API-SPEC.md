@@ -1994,7 +1994,8 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
             "keyNumbers": [],
             "attentionPoints": [],
             "followUpSuggestions": []
-          }
+          },
+          "userFeedback": "like | dislike | null"
         }
       ],
       "pagination": {
@@ -3188,3 +3189,65 @@ async function onReconnect() {
 | 报告Agent | 自动生成统计分析报告 | 8.2 / 9.3 |
 | 集成Agent | 对接外部系统、数据同步 | 9.9 |
 | 编排Agent | 多Agent工作流调度、自动化 | 9.5 |
+
+### 6.6 提交 AI 回复反馈
+
+- **接口名称**：提交 AI 回复反馈
+- **接口路径**：`/chat/executive/sessions/{sessionId}/messages/{messageId}/feedback`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：sessionId（必选）, messageId（必选）
+- **请求体**：
+  ```json
+  {
+    "feedback": "like | dislike | none"
+  }
+  ```
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "sessionId": "string",
+      "messageId": "string",
+      "userFeedback": "like | dislike | null"
+    },
+    "requestId": "string"
+  }
+  ```
+- **错误码补充**：
+  - 400：`CHAT_006`，feedback 参数非法，或消息角色不是 assistant
+  - 404：`CHAT_007`，消息不存在或不属于该会话
+
+### 6.7 重新生成 AI 回复
+
+- **接口名称**：重新生成 AI 回复
+- **接口路径**：`/chat/executive/sessions/{sessionId}/messages/{messageId}/regenerate`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：sessionId（必选）, messageId（必选，必须是该会话最后一条 assistant 消息）
+- **请求体**：无
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "messageId": "string",
+      "replyContent": {
+        "overview": "string",
+        "keyNumbers": [],
+        "attentionPoints": [],
+        "followUpSuggestions": []
+      },
+      "responseTime": 1234,
+      "contextId": "string",
+      "timestamp": "string"
+    },
+    "requestId": "string"
+  }
+  ```
+- **错误码补充**：
+  - 400：`CHAT_008`，仅支持最后一条 assistant 消息重新生成
+

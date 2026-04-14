@@ -1,10 +1,43 @@
 # MVP 项目文档中心
 
-**最后更新:** 2026-04-09  
+**最后更新:** 2026-04-13  
 **文档版本:** 1.2  
 **适用于:** AI、开发者、测试、产品
 
 **产品需求口径：** 以 [`product/PRODUCT_REQUIREMENTS.md`](product/PRODUCT_REQUIREMENTS.md) 为准（版本与日期以该文件头部为准）。
+
+---
+
+## 文档状态说明
+
+| 标签 | 含义 |
+|------|------|
+| **Current** | 当前实现与验收基线，开发时优先遵循 |
+| **Reference** | 可参考的补充说明，非唯一技术口径 |
+| **Historical** | 历史背景或已过时上下文，**不作为**当前改造与验收依据 |
+| **Archived** | 已迁入 [`archive/`](archive/index.md)，仅作追溯 |
+
+各子目录的 [`specs/index.md`](specs/index.md)、[`backend/index.md`](backend/index.md)、[`frontend/index.md`](frontend/index.md) 等索引中，对单篇文档使用 **Current / Reference / Historical** 标注；[`frontend/index.md`](frontend/index.md) 同时保留 ✅、⚠️、❌ 图例列，可与上表对照。
+
+---
+
+## AI 快速阅读路径（只读）
+
+用于快速建立上下文，**不改变**各角色在下方「按用途查找文档」中的推荐顺序。
+
+1. [`product/PROJECT_OVERVIEW.md`](product/PROJECT_OVERVIEW.md) — 项目与仓库入口  
+2. [`specs/00-OVERVIEW.md`](specs/00-OVERVIEW.md) — Spec 总览  
+3. [`specs/01-DATA-MODEL.md`](specs/01-DATA-MODEL.md) — 数据模型  
+4. [`specs/04-API-SPEC.md`](specs/04-API-SPEC.md) — REST / WebSocket 约定  
+5. [`backend/03-DATABASE.md`](backend/03-DATABASE.md) — 库表实现与迁移对照  
+6. [`backend/02-SERVICES.md`](backend/02-SERVICES.md) — 服务层与实现对照  
+7. [`tests/QUICK_START.md`](tests/QUICK_START.md) — 启动与验证  
+
+---
+
+## 归档入口
+
+- [`archive/index.md`](archive/index.md) — 历史计划与迁出文档索引（随 Batch 2 逐步充实）
 
 ---
 
@@ -25,7 +58,20 @@
 - 前端：[`frontend/index.md`](frontend/index.md)  
 - 后端：[`backend/index.md`](backend/index.md)  
 - 测试：[`tests/index.md`](tests/index.md)  
-- 内部契约 / 前端交付：[`internal/CONTRACT.md`](internal/CONTRACT.md)、[`internal/FRONTEND-HANDOFF.md`](internal/FRONTEND-HANDOFF.md)
+- 内部契约 / 前端交付：[`internal/CONTRACT.md`](internal/CONTRACT.md)、[`internal/FRONTEND-HANDOFF.md`](internal/FRONTEND-HANDOFF.md)  
+- 归档：[`archive/index.md`](archive/index.md)
+
+---
+
+## 文档维护规则
+
+1. **新增/变更 API** → 更新 `specs/04-API-SPEC.md`  
+2. **变更数据库** → 更新 `specs/01-DATA-MODEL.md` 与 `backend/03-DATABASE.md`  
+3. **架构或服务层重大调整** → 更新 `backend/02-SERVICES.md`、`backend/index.md` 等  
+4. **启动或部署流程变化** → 更新 `tests/QUICK_START.md`、根目录 `README.md`  
+5. **产品口径变化** → 更新 `product/PRODUCT_REQUIREMENTS.md`（由 Product Team 维护），并同步本索引中引用说明  
+
+建议在文档头部维护「最后更新」日期（不必强求统一版本号）。
 
 ---
 
@@ -102,18 +148,6 @@
 | 表结构？ | [specs/01-DATA-MODEL.md](specs/01-DATA-MODEL.md) |
 | 后端路由与 Gap？ | [backend/01-ROUTES.md](backend/01-ROUTES.md) |
 | 产品范围与验收？ | [product/PRODUCT_REQUIREMENTS.md](product/PRODUCT_REQUIREMENTS.md) |
-
----
-
-## 文档维护规则
-
-1. **新增/变更 API** → 更新 `specs/04-API-SPEC.md`  
-2. **变更数据库** → 更新 `specs/01-DATA-MODEL.md`  
-3. **架构或服务层重大调整** → 更新 `backend/02-SERVICES.md`、`backend/index.md` 等  
-4. **启动或部署流程变化** → 更新 `tests/QUICK_START.md`、根目录 `README.md`  
-5. **产品口径变化** → 更新 `product/PRODUCT_REQUIREMENTS.md`（由 Product Team 维护），并同步本索引中引用说明  
-
-建议在文档头部维护「最后更新」日期（不必强求统一版本号）。
 
 ---
 

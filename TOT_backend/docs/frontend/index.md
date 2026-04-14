@@ -2,18 +2,20 @@
 
 此目录存放"前端页面实现规格/公共模块/交互行为"等说明。
 
-**图例：** ✅ 已完成接入 | ⚠️ 部分实现 / 需修改 | ❌ 未实现
+**状态标签（与文档中心一致）：** **Current** 当前基线 | **Reference** 可参考、部分对齐中 | **Historical** 历史参考，不作为当前开发依据
+
+**图例（保留，与上表对照）：** ✅ 已完成接入 | ⚠️ 部分实现 / 需修改 | ❌ 未实现
 
 ## 文档列表
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
-| [04-SHARED.md](./04-SHARED.md) | 公共模块：auth.js / api.js / ws.js | ✅ |
-| [01-CENTRAL.md](./01-CENTRAL.md) | central.html 总部看板页（Phase 2d）| ✅ |
-| [03-EMPLOYEE.md](./03-EMPLOYEE.md) | employee.html 员工移动端（Phase 2b）| ✅ |
-| [05-EXECUTIVE-CHAT.md](./05-EXECUTIVE-CHAT.md) | Executive Chat（`executive`）：会话/消息/历史 API 与 UI 映射；衔接 04 §6；P1，后端 `/chat/*` 未挂载前仅规格对齐 | ⚠️ |
+| [04-SHARED.md](./04-SHARED.md) | 公共模块：auth.js / api.js / ws.js | Current（✅） |
+| [01-CENTRAL.md](./01-CENTRAL.md) | central.html 总部看板页（Phase 2d）| Current（✅） |
+| [03-EMPLOYEE.md](./03-EMPLOYEE.md) | employee.html 员工移动端（Phase 2b）| Current（✅） |
+| [05-EXECUTIVE-CHAT.md](./05-EXECUTIVE-CHAT.md) | Executive Chat（`executive`）：会话/消息/历史 API 与 UI 映射；衔接 04 §6；P1，后端 `/chat/*` 未挂载前仅规格对齐 | Reference（⚠️） |
 
-## 历史文档（已过时）
+## 历史文档（Historical）
 
 - [FRONTEND_SYSTEM_BEHAVIOR.md](./FRONTEND_SYSTEM_BEHAVIOR.md) — 旧版前端行为分析（基于旧版，仅供参考）
 - [02-STORE.md](./02-STORE.md) — 店长移动端页实现指南（store_manager 角色已从当前系统移除）

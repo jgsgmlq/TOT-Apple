@@ -27,6 +27,7 @@ export interface ChatHistoryItem {
   content?: string;
   replyContent?: ReplyContent | null;
   intentType?: string | null;
+  userFeedback?: 'like' | 'dislike' | null;
   timestamp: string;
 }
 
@@ -41,12 +42,20 @@ export interface ChatHistoryResult {
   };
 }
 
+export interface SubmitFeedbackResult {
+  sessionId: string;
+  messageId: string;
+  userFeedback: 'like' | 'dislike' | null;
+}
+
 /** 将后端 replyContent 格式化为气泡内展示文本 */
 export function formatReplyContentText(rc: ReplyContent | null | undefined): string {
   if (!rc) return '';
   let text = rc.overview || '';
   if (rc.keyNumbers?.length) {
-    text += '\n\n📊 关键数据：\n' + rc.keyNumbers.map((k) => `• ${k.label}：${k.value}${k.unit || ''}`).join('\n');
+    text +=
+      '\n\n📊 关键数据：\n' +
+      rc.keyNumbers.map((k) => `• ${k.label}：${k.value}${k.unit || ''}`).join('\n');
   }
   if (rc.attentionPoints?.length) {
     text += '\n\n⚠️ 关注点：\n' + rc.attentionPoints.map((p) => `• ${p}`).join('\n');
@@ -105,5 +114,29 @@ export const deleteChatSession = (
     `/chat/executive/sessions/${sessionId}`,
     undefined,
     options?.skipGlobalErrorMessage ? { meta: { skipGlobalErrorMessage: true } } : undefined
+  );
+};
+
+/**
+ * 提交针对 AI 回复的反馈
+ * @param feedback 'like' | 'dislike' | 'none'
+ */
+export const submitChatFeedback = (
+  sessionId: string,
+  messageId: string,
+  feedback: 'like' | 'dislike' | 'none'
+) => {
+  return Alova.Post<SubmitFeedbackResult>(
+    `/chat/executive/sessions/${sessionId}/messages/${messageId}/feedback`,
+    { feedback }
+  );
+};
+
+/**
+ * 重新生成 AI 的最后一条回复
+ */
+export const regenerateChatMessage = (sessionId: string, messageId: string) => {
+  return Alova.Post<SendMessageResult>(
+    `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`
   );
 };

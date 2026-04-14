@@ -1,5 +1,10 @@
 # Executive Chat (EChat) Implementation Plan
 
+**Status:** Done（主链路实施记录；后续迭代见 `plans/` 内其它文档）  
+**Owner:** Backend & AI Team  
+**Last-Updated:** 2026-04-13  
+**Related-Specs:** `docs/specs/09-EXECUTIVE-CHAT.md`, `docs/specs/04-API-SPEC.md`, `docs/superpowers/specs/2026-04-10-executive-chat-design.md`
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build an AI-powered natural language chat interface for the `executive` role that queries training task data using a dual-stage LLM pipeline, with a clean upgrade path to Function Calling.
