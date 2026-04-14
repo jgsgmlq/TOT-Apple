@@ -100,6 +100,32 @@ function requireAssignmentActor(req, assignment) {
   throw createError(403, '只能操作本人任务', 'AUTH_003');
 }
 
+/**
+ * 保证存在 task_assigned 通知事件（与 dispatch 同 dedupe_key），供 read_receipts 外键挂载。
+ * batch-create / 单条 POST assignment 等路径可能此前未写 notification_events。
+ */
+function ensureTaskAssignedEventId(assignment, now) {
+  let ev = db.get(
+    `SELECT id FROM notification_events
+     WHERE assignment_id = ? AND event_type = 'task_assigned'`,
+    [assignment.id]
+  );
+  if (ev) return ev.id;
+
+  const dedupeKey = `task:${assignment.task_id}:user:${assignment.user_id}`;
+  const byDedupe = db.get('SELECT id FROM notification_events WHERE dedupe_key = ?', [dedupeKey]);
+  if (byDedupe) return byDedupe.id;
+
+  const eid = nanoid();
+  db.run(
+    `INSERT INTO notification_events
+      (id, task_id, assignment_id, target_user_id, store_id, event_type, dedupe_key, created_at)
+     VALUES (?, ?, ?, ?, ?, 'task_assigned', ?, ?)`,
+    [eid, assignment.task_id, assignment.id, assignment.user_id, assignment.store_id, dedupeKey, now]
+  );
+  return eid;
+}
+
 function mapPlatformToColumn(platform) {
   const key = String(platform || '').trim().toLowerCase();
   const dict = {
@@ -546,7 +572,7 @@ router.put('/:id/status', authenticate, (req, res, next) => {
 });
 
 // ─── POST /api/v1/assignments/:id/viewed ──────────────────────────────────────
-// 记录任务详情已读（task_detail_open）：写 received_at + read_receipts
+// 记录任务详情已读（task_detail_open）：写 received_at + 保证 task_assigned 事件 + read_receipts
 
 router.post('/:id/viewed', authenticate, (req, res, next) => {
   try {
@@ -561,42 +587,51 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
 
     const now = formatNowSqliteLocal();
     let alreadyViewed = false;
-
-    // 1. 写 received_at（首次打开时）
-    if (assignment.received_at) {
-      alreadyViewed = true;
-    } else {
-      db.run(
-        'UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE id = ?',
-        [now, now, assignment.id]
-      );
-    }
-
-    // 2. 查找该 assignment 对应的 task_assigned 通知事件（batch-create 路径可能无此事件）
-    const event = db.get(
-      `SELECT id FROM notification_events
-       WHERE assignment_id = ? AND event_type = 'task_assigned'`,
-      [assignment.id]
-    );
-
-    // 3. 写 read_receipts（幂等；若无 task_assigned 事件则跳过，如 batch-create 场景）
-    const userId = employeeId || null;
     let receiptId = null;
-    if (event) {
-      const existing = db.get(
-        'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
-        [event.id, userId]
-      );
+    let dashboardNotify = false;
+    const userId = employeeId || null;
+
+    db.transaction(() => {
+      const row = db.get('SELECT * FROM task_assignments WHERE id = ?', [assignment.id]);
+      if (row.received_at) {
+        alreadyViewed = true;
+      } else {
+        db.run(
+          'UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE id = ?',
+          [now, now, assignment.id]
+        );
+      }
+
+      const eventId = ensureTaskAssignedEventId(row, now);
+
+      const existing = userId
+        ? db.get(
+            'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
+            [eventId, userId]
+          )
+        : null;
       if (existing) {
         receiptId = existing.id;
-      } else {
+      } else if (userId) {
         receiptId = nanoid();
         db.run(
           `INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
            VALUES (?, ?, ?, ?, 'task_detail_open')`,
-          [receiptId, event.id, userId, now]
+          [receiptId, eventId, userId, now]
         );
+        dashboardNotify = true;
       }
+    });
+
+    if (dashboardNotify && assignment.task_id) {
+      broadcastToDashboard({
+        event: 'dashboard_updated',
+        data: {
+          taskId: assignment.task_id,
+          assignmentId: assignment.id,
+          operationType: 'assignment_viewed',
+        },
+      });
     }
 
     const finalRow = db.get('SELECT received_at FROM task_assignments WHERE id = ?', [assignment.id]);

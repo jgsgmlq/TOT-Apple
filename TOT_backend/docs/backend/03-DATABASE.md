@@ -199,6 +199,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ne_dedupe         ON notification_events(d
 
 ## 7. read_receipts 表
 
+当前写入以 **`source = 'task_detail_open'`** 为主（`POST /assignments/:id/viewed`）。**`notification_click`** 仅历史行保留；DB `CHECK` 仍允许两值。
+
 ```sql
 CREATE TABLE IF NOT EXISTS read_receipts (
   id       TEXT PRIMARY KEY,

@@ -20,7 +20,6 @@
 ## Day4 实施状态（已完成）
 
 - ✅ 已落地：`GET /api/v1/events` — `employee` 仅 `target_user_id = 本人 employeeId`；`central` / `admin` / `executive` **无额外 SQL 过滤**（可拉全表，依赖业务上是否写入面向该角色的事件）
-- ✅ 已落地：`POST /api/v1/events/:id/read` — 若 `req.user.employeeId` 存在则须 `event.target_user_id === employeeId`；**无 `employeeId` 时不做目标校验**（与 `POST /assignments/:id/viewed` 同类实现细节，见下文「实现注意事项」）
 - ✅ 已落地：`GET /api/v1/events/unread-count` — **无 `employeeId` 时直接返回 `unreadCount: 0`**
 - ✅ 已落地：`POST /api/v1/assignments/:id/viewed` — 已认证即可；**仅当 `employeeId` 存在时**校验 `assignment.user_id === employeeId`
 - ✅ 已落地：`POST /api/v1/nudges` — **`central` 专用**（`admin` / `executive` 不可用）；`POST /api/v1/nudges/ai-generate` 为 `central` + `admin`
@@ -89,7 +88,6 @@
 | GET /api/v1/events/unread-count | 空（0） | 是（本人未读） | 空（0） | 空（0） |
 | GET /api/v1/events | 是（无 SQL 过滤） | 是（本人） | 是（无 SQL 过滤） | 是（无 SQL 过滤） |
 | POST /api/v1/events | 是 | 否 | 是 | 否 |
-| POST /api/v1/events/:id/read | 注 | 是（本人，有 employeeId 时） | 注 | 注 |
 | **催办** | | | | |
 | POST /api/v1/nudges | 是 | 否 | 否 | 否 |
 | GET /api/v1/nudges | 是 | 否 | 否 | 否 |
@@ -114,7 +112,6 @@
 对 `central` / `admin` / `executive` 等 **`employeeId` 为 `null`** 的账号，下列接口在代码中 **仅在 `employeeId` 存在时** 才校验「资源是否属于本人」：
 
 - `POST /api/v1/assignments/:id/viewed`
-- `POST /api/v1/events/:id/read`
 
 因此这些账号在技术上可写入上述端点所触及的任意 assignment / 事件（依赖产品层是否暴露 UI）。若需收紧，应在路由层显式按角色拒绝或改为使用 `user.id` 维度校验。
 

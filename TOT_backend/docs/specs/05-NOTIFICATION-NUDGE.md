@@ -18,7 +18,7 @@
 | 表 | 职责 |
 |----|------|
 | `notification_events` | 每条通知一行（1 行 = 某员工 1 次触达）；含任务下发、任务更新、黄/红提醒等 |
-| `read_receipts` | 已读回执（`notification_click` / `task_detail_open`） |
+| `read_receipts` | 已读回执（主路径 `task_detail_open`；历史数据可有 `notification_click`） |
 | `nudge_records` | 与「催办/触达」相关的审计行（总部主动路径与自动预警路径均可能写入，见下文） |
 
 **接口与字段细节以 `04-API-SPEC.md` 为准。**
@@ -32,8 +32,7 @@
 | 创建系统事件（内部） | `POST /api/v1/events` | `routes/notifications.js`；仅 `task_assigned` / `task_updated`，**禁止**经此创建 `nudge_*`（须走 nudges 或自动预警逻辑） |
 | 通知列表 | `GET /api/v1/events` | 含 `isActive`、`readStatus`、`ruleType`（自动预警且 `dedupe_key` 形如 `autonudge:…` 时解析） |
 | 未读数 | `GET /api/v1/events/unread-count` | 店员 `employeeId`；无则返回 0 |
-| 标记已读（铃铛） | `POST /api/v1/events/:eventId/read` | `source=notification_click` |
-| 任务详情已读 | `POST /api/v1/assignments/:assignmentId/viewed` | `task_detail_open` + `received_at` |
+| 任务详情已读（主路径） | `POST /api/v1/assignments/:assignmentId/viewed` | `task_detail_open` + `received_at`；必要时补建 `task_assigned` 后写 `read_receipts` |
 | 总部主动催办 | `POST /api/v1/nudges` | `routes/nudge.js`；**仅 `central`** |
 | 催办记录列表 | `GET /api/v1/nudges` | **仅 `central`**；`taskId` 必填 |
 | AI 辅助催办文案 | `POST /api/v1/nudges/ai-generate` | **`central` / `admin`** |
@@ -77,8 +76,7 @@
 ```
 任务下发（POST /api/v1/tasks/:id/dispatch）
   └─▶ notification_events（task_assigned）+ WS task_assigned
-       └─▶ POST /events/:eventId/read（notification_click）
-            └─▶ POST /assignments/:id/viewed（task_detail_open）
+       └─▶ POST /assignments/:id/viewed（task_detail_open，已读主路径）
 
 任务更新（PATCH /api/v1/tasks/:id，dispatched）
   └─▶ notification_events（task_updated）+ WS task_updated
@@ -138,8 +136,8 @@
 
 **已读条件：**
 
-- 消息中心铃铛点击：`POST /events/:eventId/read` → `notification_click`
-- 打开任务详情：`POST /assignments/:id/viewed` → `task_detail_open`（并写 `received_at`）
+- 打开任务详情：`POST /assignments/:id/viewed` → `task_detail_open`（并写 `received_at`；**唯一**写入入口，见 `04-API-SPEC` §4.3）
+- 历史：`notification_click` 来自已移除的 `POST /events/:eventId/read`，仅存量数据可能出现
 
 ---
 

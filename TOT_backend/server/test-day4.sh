@@ -98,27 +98,9 @@ echo "    total = ${ETOTAL}  eventId = ${EVENT_ID}  isActive = ${IS_ACT}"
 R=$(curl -s "$BASE/events?pageNum=1&pageSize=5" -H "Authorization: Bearer ${TOKEN_C}")
 check "central 获取所有事件 code=200" "$(echo "$R" | jq_code)" "200"
 
-# ─── 4. POST /events/:id/read ────────────────────────────────────────────────
+# ─── 4. POST /assignments/:id/viewed（已读主路径；含 read_receipts）──────────────
 blue ""
-blue "[4] POST /events/:id/read  标记已读"
-
-if [ -n "${EVENT_ID}" ]; then
-  R=$(curl -s -X POST "$BASE/events/${EVENT_ID}/read" -H "Authorization: Bearer ${TOKEN_E}")
-  check "标记已读 code=200" "$(echo "$R" | jq_code)" "200"
-
-  R=$(curl -s -X POST "$BASE/events/${EVENT_ID}/read" -H "Authorization: Bearer ${TOKEN_E}")
-  check "重复标记已读（幂等）code=200" "$(echo "$R" | jq_code)" "200"
-
-  R=$(curl -s "$BASE/events/unread-count" -H "Authorization: Bearer ${TOKEN_E}")
-  UC2=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['unreadCount'])")
-  echo "    标记后 unreadCount = ${UC2}"
-else
-  red "  SKIP  没有 eventId"
-fi
-
-# ─── 5. POST /assignments/:id/viewed ─────────────────────────────────────────
-blue ""
-blue "[5] POST /assignments/:id/viewed  打开任务详情"
+blue "[4] POST /assignments/:id/viewed  打开任务详情"
 
 R=$(curl -s "$BASE/assignments" -H "Authorization: Bearer ${TOKEN_E}")
 ASSIGN_ID=$(echo "$R" | python3 -c "
@@ -135,8 +117,9 @@ if [ -n "${ASSIGN_ID}" ]; then
   R=$(curl -s -X POST "$BASE/assignments/${ASSIGN_ID}/viewed" \
     -H "Authorization: Bearer ${TOKEN_E}")
   AV=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['alreadyViewed'])")
+  RID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'].get('receiptId') or '')")
   check "首次打开任务详情 code=200" "$(echo "$R" | jq_code)" "200"
-  echo "    alreadyViewed = ${AV}  (首次应为 False)"
+  echo "    alreadyViewed = ${AV}  (首次应为 False)  receiptId = ${RID}"
 
   R=$(curl -s -X POST "$BASE/assignments/${ASSIGN_ID}/viewed" \
     -H "Authorization: Bearer ${TOKEN_E}")
@@ -147,9 +130,9 @@ else
   red "  SKIP  没有 assignmentId"
 fi
 
-# ─── 6. POST /nudges ─────────────────────────────────────────────────────────
+# ─── 5. POST /nudges ─────────────────────────────────────────────────────────
 blue ""
-blue "[6] POST /nudges  发起催办"
+blue "[5] POST /nudges  发起催办"
 
 R=$(curl -s -X POST "$BASE/nudges" \
   -H "Authorization: Bearer ${TOKEN_C}" \
@@ -185,9 +168,9 @@ R=$(curl -s -X POST "$BASE/nudges" \
   -d "{\"taskId\":\"${TASK_ID}\",\"targetType\":\"employee\",\"targetId\":\"${EMP_ID}\",\"severity\":\"blue\"}")
 check "非法 severity 期望 400" "$(echo "$R" | jq_code)" "400"
 
-# ─── 7. GET /nudges ──────────────────────────────────────────────────────────
+# ─── 6. GET /nudges ──────────────────────────────────────────────────────────
 blue ""
-blue "[7] GET /nudges  催办审计记录"
+blue "[6] GET /nudges  催办审计记录"
 
 R=$(curl -s "$BASE/nudges?taskId=${TASK_ID}" -H "Authorization: Bearer ${TOKEN_C}")
 NT=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['pagination']['total'])")
@@ -197,9 +180,9 @@ echo "    total = ${NT}  (期望 >= 2)"
 R=$(curl -s "$BASE/nudges" -H "Authorization: Bearer ${TOKEN_C}")
 check "缺少 taskId 期望 400" "$(echo "$R" | jq_code)" "400"
 
-# ─── 8. 权限边界 ──────────────────────────────────────────────────────────────
+# ─── 7. 权限边界 ──────────────────────────────────────────────────────────────
 blue ""
-blue "[8] 权限边界"
+blue "[7] 权限边界"
 
 R=$(curl -s "$BASE/events/unread-count")
 check "无 Token 期望 401" "$(echo "$R" | jq_code)" "401"
@@ -210,9 +193,9 @@ R=$(curl -s -X POST "$BASE/events" \
   -d "{\"eventType\":\"nudge_yellow\",\"taskId\":\"${TASK_ID}\",\"targetUserId\":\"${EMP_ID}\",\"targetRole\":\"employee\"}")
 check "POST /events 禁止 nudge 类型 期望 400" "$(echo "$R" | jq_code)" "400"
 
-# ─── 9. WebSocket 握手 ────────────────────────────────────────────────────────
+# ─── 8. WebSocket 握手 ────────────────────────────────────────────────────────
 blue ""
-blue "[9] WebSocket 握手"
+blue "[8] WebSocket 握手"
 
 WS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
   -H "Connection: Upgrade" \

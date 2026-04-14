@@ -161,8 +161,8 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       );
       managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
     }
-    const totalReadCount   = employeeReadCount + managerReadCount;
-    const realDeliveryRate = total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0;
+    // 已读人数：与下钻无关均为「DISTINCT rr.user_id」一条口径；managerReadCount 占位与 employee 同值时再相加会翻倍
+    const totalReadCount = employeeReadCount;
 
     // ─ 预警数（门店+任务维度）；临期口径与 autoNudge.evaluateAndTriggerAutoNudges 一致（tasks.auto_nudge_rules.deadlineCrisis、p0/p1 小时、hoursLeft<=0 不计）
     const storeTaskRows = db.all(

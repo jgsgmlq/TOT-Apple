@@ -5,7 +5,6 @@ const { nanoid } = require('nanoid');
 const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
-const { broadcastToDashboard } = require('../ws/manager');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
@@ -267,81 +266,6 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
       code: 200,
       message: '事件创建成功',
       data: { eventId: id, eventType, createdAt: now },
-      requestId: req.requestId,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── POST /api/v1/events/:eventId/read ────────────────────────────────────────
-// 标记通知已读（铃铛点击，source=notification_click），同时标记任务已收到 (received_at)
-
-router.post('/:eventId/read', authenticate, (req, res, next) => {
-  try {
-    const { eventId } = req.params;
-    const { employeeId } = req.user;
-
-    const event = db.get('SELECT * FROM notification_events WHERE id = ?', [eventId]);
-    if (!event) throw createError(404, '通知事件不存在', 'EVENT_009');
-
-    if (employeeId && event.target_user_id !== employeeId) {
-      throw createError(403, '无权操作他人通知', 'AUTH_003');
-    }
-
-    const now = formatNowSqliteLocal();
-    const userId = employeeId || null;
-
-    db.transaction(() => {
-      // UNIQUE(event_id, user_id) 保证幂等
-      const existing = db.get(
-        'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
-        [eventId, userId]
-      );
-      
-      if (!existing) {
-        db.run(
-          `INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
-           VALUES (?, ?, ?, ?, 'notification_click')`,
-          [nanoid(), eventId, userId, now]
-        );
-      }
-
-      // 联动：如果这个事件关联了任务，同时标记任务已收到，从而支持“点开即已读并直接去完成”的交互要求
-      if (event.assignment_id && userId) {
-        const assignment = db.get('SELECT id, received_at FROM task_assignments WHERE id = ?', [event.assignment_id]);
-        if (assignment && !assignment.received_at) {
-          db.run('UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE id = ?', [now, now, assignment.id]);
-        }
-      }
-    });
-
-    const finalReceipt = db.get(
-      'SELECT id, read_at FROM read_receipts WHERE event_id = ? AND user_id = ?',
-      [eventId, userId]
-    );
-
-    // 给看板端推送数据刷新信号 (任务阅读率等改变)
-    if (event.task_id) {
-      broadcastToDashboard({
-        event: 'dashboard_updated',
-        data: {
-          taskId: event.task_id,
-          assignmentId: event.assignment_id || null,
-          operationType: 'notification_read'
-        }
-      });
-    }
-
-    res.json({
-      code: 200,
-      message: '标记已读成功',
-      data: { 
-        receiptId: finalReceipt.id, 
-        eventId, 
-        readAt: finalReceipt.read_at,
-        assignmentId: event.assignment_id || null // 将 assignmentId 吐出，供前端直接跳转
-      },
       requestId: req.requestId,
     });
   } catch (err) {

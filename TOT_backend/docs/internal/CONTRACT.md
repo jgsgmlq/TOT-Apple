@@ -133,7 +133,7 @@ db.run(
 - `GET /api/v1/assignments` 的 `data` 为 `{ list, pagination }`。`list[]` 含 **`assignmentId`**（= `id`）、**`taskAssignedEventId`**（对应 `task_assigned` 通知，无则为 `null`），并保留 **`id`** 兼容旧客户端。
 - `GET /api/v1/assignments/:id` 的 `data` 为详情对象，含 **`assignmentId`**、**`taskAssignedEventId`** 及 `startedAt` / `completedAt` / `createdAt` 等。
 - 查询参数：`pageNum`（默认 1）、`pageSize`（默认 20，最大 200），以及可选 `taskId`、`status`、`employeeId`、`storeId`（按角色裁剪，见 §3.1）。
-- `POST /api/v1/assignments/batch-create`（central/admin）的 `data`：`successCount`、`skippedCount`（已存在 assignment 等跳过）、`failedCount`、`failedUsers`（校验失败明细）。**不**写入 `notification_events`（与 dispatch 路径区分，见 `04-API-SPEC` §3.4）。
+- `POST /api/v1/assignments/batch-create`（central/admin）的 `data`：`successCount`、`skippedCount`（已存在 assignment 等跳过）、`failedCount`、`failedUsers`（校验失败明细）。创建时**不**写入 `notification_events`（与 dispatch 区分，见 `04-API-SPEC` §3.4）；员工首次 **`POST /assignments/:id/viewed`** 可补建 `task_assigned` 并写 `read_receipts`（见 §4.3）。
 
 **与看板规格：** 门店下钻 KPI 字段定义见 `docs/specs/06-DASHBOARD-KPI.md` §5.6，与 `04-API-SPEC` §5.6 `GET /dashboard/store-detail` 对应。
 

@@ -267,8 +267,7 @@ nudge_records       催办记录（审计用）
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/events` | 通知列表（分页 + 过滤）|
-| GET | `/events/unread-count` | 铃铛未读数 |
-| POST | `/events/:id/read` | 标记已读 |
+| GET | `/events/unread-count` | 未读事件数（角标等）|
 
 ### 催办
 | 方法 | 路径 | 说明 |

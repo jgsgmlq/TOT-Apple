@@ -15,7 +15,7 @@ server/
     tasks.js        ← 任务 + Assignment 路由
     stores.js       ← /api/stores, /api/stores/:id/employees
     employees.js    ← /api/employees/:id
-    notifications.js ← /api/notifications, /api/notifications/:eventId/read
+    notifications.js ← /api/v1/events（列表、未读数、内部 POST 建事件；已读见 assignments `POST .../viewed`）
     store-progress.js ← /api/store/tasks/:id/progress
     mypal.js          ← /api/v1/mypal/sync（MyPal 学习进度同步）
 ```
@@ -286,16 +286,9 @@ GET /api/notifications?unread=true&taskId=
 
 ---
 
-### POST /api/notifications/:eventId/read ❌
+### ~~POST /api/v1/events/:eventId/read~~（已移除）
 
-**目标：**
-1. 查找 `notification_events`，校验归属（`requireNotificationOwner`）
-2. `INSERT OR IGNORE INTO read_receipts`（幂等）
-3. 返回 `{ eventId, readAt }`
-
-**Gap 清单**
-- [ ] 创建路由
-- [ ] 实现 `requireNotificationOwner` 中间件（见 08-PERMISSION-MODEL.md）
+员工侧已读请使用 **`POST /api/v1/assignments/:id/viewed`**（`04-API-SPEC` §4.3）。
 
 ---
 
