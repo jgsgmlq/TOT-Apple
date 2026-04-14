@@ -130,3 +130,57 @@ export const getDashboardWarnings = (params: {
     localCache: 0,
   });
 };
+
+/** POST /api/v1/dashboard/insights — 看板模块 AI 洞察 */
+export type DashboardInsightType =
+  | 'north_star'
+  | 'completion_weekly'
+  | 'completion_daily'
+  | 'channel_north_star'
+  | 'funnel_alerts';
+
+export interface CreateDashboardInsightBody {
+  insightType: DashboardInsightType;
+  taskId?: string | null;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
+  /** completion_daily 建议 YYYY-MM-DD */
+  date?: string;
+  trendType?: string;
+  rtmLevel?: string;
+  /** 旧版兼容 */
+  module?: string;
+}
+
+export interface DashboardInsightResult {
+  insightId: string;
+  insightType: string;
+  module: string;
+  taskId: string | null;
+  filters: {
+    rtm: string | null;
+    format: string | null;
+    dealerName: string | null;
+    storeId: string | null;
+  };
+  content: string;
+  createdAt: string;
+  voteSummary: { up: number; down: number };
+}
+
+export const postDashboardInsight = (data: CreateDashboardInsightBody) => {
+  return Alova.Post<DashboardInsightResult>('/dashboard/insights', data);
+};
+
+/** POST /api/v1/dashboard/insights/{insightId}/vote — action 缺省为 add；remove 为取消对应计数 */
+export const postDashboardInsightVote = (
+  insightId: string,
+  payload: { vote: 'up' | 'down'; action?: 'add' | 'remove' }
+) => {
+  return Alova.Post<{ insightId: string; up: number; down: number }>(
+    `/dashboard/insights/${insightId}/vote`,
+    payload
+  );
+};
