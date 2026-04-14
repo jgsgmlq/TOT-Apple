@@ -32,7 +32,7 @@
 
 | 维度 | 结论 | 证据 |
 |------|------|------|
-| Dev2：通知事件 API | ✅ 100% | `GET/POST /events`、`POST /events/:id/read`、`GET /events/unread-count` 已落地；含 isActive/resolvedAt/readStatus 计算 |
+| Dev2：通知事件 API | ✅ 100% | `GET/POST /events`、`GET /events/unread-count` 已落地；已读主路径为 `POST /assignments/:id/viewed`（`POST /events/:id/read` 已移除）；含 isActive/resolvedAt/readStatus 计算 |
 | Dev2：任务详情已读 | ✅ 100% | `POST /assignments/:id/viewed` 已落地；原子写入 `received_at` + `read_receipts`（source=task_detail_open） |
 | Dev2：催办 API | ✅ 100% | `POST /nudges` 事务内原子写 nudge_records + notification_events + nudge_count；`GET /nudges` 审计列表 |
 | Dev2：WebSocket | ✅ 100% | `ws/manager.js` 实现连接管理；task_assigned / nudge_sent / assignment_completed 三路广播 |

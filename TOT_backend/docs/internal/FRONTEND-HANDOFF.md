@@ -75,7 +75,7 @@ Authorization: Bearer <token>
 
 ### 5.2 batch-create 产生的 assignment
 
-通过 `POST /assignments/batch-create` 创建的 assignment，不会产生 `task_assigned` 通知事件。此类 assignment 调用 `POST /assignments/:id/viewed` 时，响应中 `receiptId` 为 `null`，属正常行为，前端不可断言其非空。
+通过 `POST /assignments/batch-create` 创建的 assignment 在创建时**仍不**写入 `notification_events`；员工首次调用 **`POST /assignments/:id/viewed`** 时，服务端会在事务内**补建** `task_assigned` 通知行（与 dispatch 同 `dedupe_key`）并写入 **`read_receipts`**。在请求带有效 **`Employee-Id`** 的前提下，**`receiptId` 应为非空**（幂等重复调用返回已有回执 ID）。**`POST /api/v1/events/:eventId/read` 已移除。**
 
 ### 5.3 WebSocket 覆盖范围
 

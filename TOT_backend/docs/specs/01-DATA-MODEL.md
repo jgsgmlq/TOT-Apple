@@ -384,7 +384,7 @@ CREATE UNIQUE INDEX idx_ne_dedupe ON notification_events(dedupe_key)
 
 ## 7. read_receipts（已读回执表）
 
-**业务含义：** 记录员工何时、以何种方式"看到了"某条通知。一条 notification_event 只有被记录到此表才算已读，铃铛未读数随之减少。`UNIQUE(event_id, user_id)` 保证同一通知对同一用户只记录一次已读（幂等）。
+**业务含义：** 记录员工何时、以何种方式「已读」某条通知事件。主路径为员工打开任务详情时 **`POST /assignments/:id/viewed`** 写入（`task_detail_open`）。一条 `notification_events` 行只有对应回执存在才算对该用户已读；`GET /events/unread-count` 等随之减少未读。`UNIQUE(event_id, user_id)` 保证幂等。
 
 ```sql
 CREATE TABLE IF NOT EXISTS read_receipts (
@@ -407,14 +407,14 @@ CREATE INDEX        idx_rr_user_id    ON read_receipts(user_id);
 | event_id | Y | 关联的通知事件；UNIQUE(event_id, user_id) 防止重复已读 |
 | user_id | Y | 已读的员工（引用 employees.id）|
 | read_at | Y | 已读时间，DEFAULT 当前时间 |
-| source | Y | 已读来源：notification_click=点击铃铛通知，task_detail_open=直接打开任务详情（后者同时写入 assignment.received_at）|
+| source | Y | 已读来源：**主路径** `task_detail_open`（`POST /assignments/:id/viewed`）；`notification_click` 仅历史数据（原铃铛接口已移除）|
 
 **source 说明:**
 
 | 值 | 含义 |
 |----|------|
-| `notification_click` | 用户点击铃铛通知列表中的通知 |
-| `task_detail_open` | 用户直接打开任务详情页（同时写入 assignment.received_at）|
+| `notification_click` | 历史：原 `POST /events/:eventId/read`；新写入不再使用 |
+| `task_detail_open` | 打开任务详情（`POST /assignments/:id/viewed`；同时写入 assignment.received_at）|
 
 ---
 

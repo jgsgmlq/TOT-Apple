@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.4.22（2026-04-14）
+
+- **已读主路径**：移除 **`POST /api/v1/events/{eventId}/read`**（原 `notification_click`）。员工侧 **`POST /api/v1/assignments/{assignmentId}/viewed`** 为唯一写入 **`read_receipts`（`source=task_detail_open`）** 的入口；若此前无 `task_assigned` 通知行（如 batch-create），服务端在事务内**补建**与 dispatch 同 **`dedupe_key`** 的 `notification_events` 后再写回执。新建回执时向看板推送 **`operationType: assignment_viewed`**。
+
 ### v1.4.21（2026-04-14）
 
 - **时间口径统一（本地墙钟）**：`utils/ddlAt.js` 中 **`parseDateToSqliteLocal`** / **`formatNowSqliteLocal`** 为任务时间与「当前时刻」写入的唯一规范化入口；**废弃**原「仅 UTC」语义（`parseDdlAtToSqliteUtc` 仍为同名别名）。SQLite 默认值与 SQL 比较改为 **`datetime('now', 'localtime')`**（`schema.sql`、`db/index.js` 迁移脚本、看板逾期条件等）。路由与服务中 **`new Date().toISOString()`** 写入库/JSON 处已替换为 **`formatNowSqliteLocal()`**。详见 `ddlAt.js` 头注释与 `01-DATA-MODEL.md` 设计约定。
@@ -53,7 +57,7 @@
 
 - **AI 解析任务**：新增 `/tasks/ai-parse` 接口，支持一键根据自然语言解析任务信息并格式化返回所有任务所需的创建字段。
 - **店员任务筛选**：店员端 `/tasks` 列表新增 `status=completed` 支持，满足已完成任务的历史记录查询。
-- **通知联动**：`/events/:eventId/read` 支持点击通知时自动标记底层任务为 `received_at` 并返回 `assignmentId`，实现点开即直达“去完成”。
+- **已读**：员工打开任务详情调用 **`POST /assignments/:id/viewed`** 写 `received_at` 与 `read_receipts`（见 §4.3）；**`/events/:eventId/read` 已移除**。
 - **看板触达率优化**：记录了用户最新登录时间（`last_login_at`）和任务接收时间（`received_at`），并且在WebSocket连接触达时也会计算在内，只把任务下发后成功触达的人算进 `taskReachRate`。
 - **时间格式**：后端涉及的 `startAt`、`ddlAt` 等出入参及大模型生成的格式规范统一变更为无 T 无 Z 的 `YYYY-MM-DD HH:MM:SS`。
 - **预警催办简化**：保留了原有的定时预警服务（`/tasks/:id/auto-nudge` 以及后台的 `autoNudgeScheduler`），但文案不再调用 AI 进行润色，直接返回设定的规则触发原文。
@@ -717,8 +721,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "liveBroadcastCompleted": false, // task_assignments.live_broadcast_completed
           "nudgeCount": 0,   // task_assignments.nudge_count
           "receivedAt": "string", // task_assignments.received_at，null 表示未打开过任务详情
-          // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件ID
-          // 前端从铃铛通知点击跳转时，用此 ID 调 POST /events/{eventId}/read（§4.3）
+          // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件 ID（无则 null；员工首次 POST /assignments/:id/viewed 后通常会补建并可在后续 GET 中看到）
           "taskAssignedEventId": "string|null",
           "updatedAt": "string",
           "id": "string"
@@ -770,8 +773,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "receivedAt": "string",             // task_assignments.received_at，null 表示未打开过任务详情
       "startedAt": "string",              // task_assignments.started_at，null 表示未点击"开始任务"
       "completedAt": "string",            // task_assignments.completed_at，null 表示未完成
-      // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件ID
-      // 前端从铃铛通知点击跳转后，用此 ID 调 POST /events/{eventId}/read（§4.3）
+      // taskAssignedEventId：该 assignment 对应的 task_assigned 通知事件 ID（可为 null，见 §3.1 说明）
       "taskAssignedEventId": "string",
       "createdAt": "string",
       "updatedAt": "string",
@@ -900,7 +902,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **实现说明（Day6）**：**仅写入 `task_assignments`**，不创建 `notification_events`（与 `POST /tasks/{id}/dispatch` 区分）。`INSERT OR IGNORE` 遇 **`UNIQUE(task_id, user_id)`** 冲突时计入 **`skippedCount`**，**不**写入 **`failedUsers`**。**`failedUsers`** 仅承载**校验失败**（用户不存在、门店不匹配）。`taskId` 不存在时整单 **404**（`TASK_002`）。`targetUsers` 为空或非数组时 **400**（`ASSIGN_021`）。
+- **实现说明（Day6）**：**仅写入 `task_assignments`**，不创建 `notification_events`（与 `POST /tasks/{id}/dispatch` 区分）。`INSERT OR IGNORE` 遇 **`UNIQUE(task_id, user_id)`** 冲突时计入 **`skippedCount`**，**不**写入 **`failedUsers`**。**`failedUsers`** 仅承载**校验失败**（用户不存在、门店不匹配）。`taskId` 不存在时整单 **404**（`TASK_002`）。`targetUsers` 为空或非数组时 **400**（`ASSIGN_021`）。员工首次 **`POST /assignments/:id/viewed`** 时，服务端可**补建** `task_assigned` 通知行并写 **`read_receipts`**（见 §4.3）。
 - **接口说明**：供总部/运维批量补录分配；正式下发带通知仍走 **§2.4 dispatch**。
 - **权限要求**：`central` / `admin`
 - **异常场景**：
@@ -1232,35 +1234,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **异常场景**：
   - 400：pageNum/pageSize非法
 
-### 4.3 标记通知已读（打开事件）**P0**
-
-- **接口名称**：标记通知事件已读（notification_click）
-- **接口路径**：`/events/{eventId}/read`
-- **请求方法**：POST
-- **请求头**：需携带通用请求头
-- **路径参数**：eventId（必填，notification_events.id）
-- **请求体**：无
-- **响应体（成功）**：
-  ```json
-  {
-    "code": 200,
-    "message": "标记已读成功",
-    "data": {
-      "receiptId": "string", // read_receipts.id（nanoid）
-      "eventId": "string",
-      "readAt": "string",    // read_receipts.read_at（ISO8601）
-      "assignmentId": "string" // 底层任务分配记录 ID，供前端直达任务去完成（若无则为 null）
-    },
-    "requestId": "string"
-  }
-  ```
-- **接口说明**：用户点击铃铛通知列表中某条通知后调用。写入 `read_receipts` 一条记录（`source='notification_click'`）。`user_id` 从请求头 `Employee-Id` 获取。`UNIQUE(event_id, user_id)` 保证幂等，重复调用不报错（返回已有记录）。**★ 联动：同时将该通知关联的任务分配记录更新为已收到（写 `assignment.received_at`），前端可利用返回的 `assignmentId` 直接进入详情“去完成”任务。**
-- **权限要求**：仅本人事件
-- **异常场景**：
-  - 404：eventId不存在
-  - 403：target_user_id ≠ 当前 Employee-Id
-
-### 4.3b 记录任务详情已读（打开任务详情）**P0**
+### 4.3 记录任务详情已读（打开任务详情）**P0**
 
 - **接口名称**：记录任务详情打开（task_detail_open）
 - **接口路径**：`/assignments/{assignmentId}/viewed`
@@ -1276,22 +1250,24 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "assignmentId": "string",
       "receivedAt": "string",   // task_assignments.received_at（首次打开时写入，已有则返回原值）
-      "receiptId": "string",    // read_receipts.id（本次写入的回执ID；已读则返回已有ID）
+      "receiptId": "string",    // read_receipts.id（本次写入或已有；无 Employee-Id 时可能为 null）
       "alreadyViewed": false    // true=已经打开过（received_at 已有值），false=首次打开
     },
     "requestId": "string"
   }
   ```
-- **接口说明**：用户打开任务详情页时前端自动调用（无需用户手动操作）。服务端执行两个原子写入：
-  1. 若 `task_assignments.received_at` 为 NULL，写入当前时间
-  2. 查找该 assignment 对应的 `task_assigned` 通知事件（`notification_events WHERE assignment_id=? AND event_type='task_assigned'`），写入 `read_receipts`（`source='task_detail_open'`）
+- **接口说明**：用户打开任务详情页时前端自动调用。服务端在**同一事务**内：
+  1. 若 `task_assignments.received_at` 为 NULL，写入当前时间并更新 `updated_at`。
+  2. **保证**存在与该 assignment 对应的 **`task_assigned`** 通知行：若尚无，则插入 `notification_events`（`dedupe_key` 与 **`POST /tasks/{id}/dispatch`** 一致：`task:{taskId}:user:{userId}`，与 batch-create 等路径补数后对齐）。
+  3. 写入 `read_receipts`（`source='task_detail_open'`）。`user_id` 来自请求头 `Employee-Id`。`UNIQUE(event_id, user_id)` 保证幂等。
 
-  **这是 PRD §6.12"店员已读"统计口径的唯一写入入口**（`employeeReadCount`/`managerReadCount` 均从此处的 read_receipts 记录统计）。`UNIQUE(event_id, user_id)` 保证幂等。
-- **权限要求**：仅 assignment 所属用户（user_id = 当前 Employee-Id）
+  **这是 PRD §6.12「店员已读」统计口径的写入入口**（`employeeReadCount`/`managerReadCount` 等从 `read_receipts` + `source='task_detail_open'` 统计）。新建回执时服务端向看板 WebSocket 推送 `dashboard_updated`（`operationType: assignment_viewed`）。
+
+  > **已移除**：`POST /api/v1/events/{eventId}/read`（原 `notification_click`）。历史库中仍可能存在 `source='notification_click'` 的回执记录。
+- **权限要求**：仅 assignment 所属用户（`user_id` = 当前 Employee-Id）
 - **异常场景**：
-  - 404：assignmentId不存在
+  - 404：assignmentId 不存在
   - 403：非所属用户
-  - 404：该 assignment 无对应 task_assigned 事件（数据异常，返回错误提示）
 
 ### 4.4 获取未读事件数量**P0**
 
