@@ -420,6 +420,16 @@ async function seed() {
     }
     console.log(`  ✓ tasks: ${TASKS.length} 条`);
 
+    // 与 API 示例一致：下发任务默认带 auto_nudge_rules（含 deadlineCrisis），便于看板 / 自动预警联调
+    const defaultAutoNudgeRules = JSON.stringify({
+      progressLag: { lifestyle: 3, mono: 1 },
+      startDelay: 50,
+      deadlineCrisis: { p0: 24, p1: 48 },
+    });
+    for (const t of TASKS) {
+      db.run('UPDATE tasks SET auto_nudge_rules = ? WHERE id = ?', [defaultAutoNudgeRules, t.id]);
+    }
+
     // ── task_assignments
     for (const a of assignments) {
       db.run(
