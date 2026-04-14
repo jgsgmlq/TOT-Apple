@@ -3,7 +3,7 @@
 const { nanoid } = require('nanoid');
 const { db } = require('../db');
 const { parseStoreDrill } = require('../utils/storeDrill');
-const { generateText, generateTextDeepSeek } = require('../utils/ai');
+const { generateTextDeepSeekStream } = require('../utils/ai');
 const { createError } = require('../middleware/errorHandler');
 
 const MODULE_TYPES = [
@@ -54,19 +54,6 @@ function taScope(taskId, drill) {
   const storeWhere = drill.hasDrill ? drill.sql : '';
   const allParams = [...taParams, ...drill.params];
   return { taConditions, joinStore, storeWhere, allParams };
-}
-
-async function generateInsightText(userPrompt, systemPrompt, options = {}) {
-  try {
-    return await generateTextDeepSeek(userPrompt, {
-      system: systemPrompt,
-      temperature: options.temperature == null ? 0.25 : options.temperature,
-      maxTokens: options.maxTokens || 900,
-    });
-  } catch (err) {
-    console.warn('[dashboardInsight] DeepSeek failed, fallback Gemini:', err.message);
-    return generateText(`${systemPrompt}\n\n---\n\n${userPrompt}`);
-  }
 }
 
 function buildNorthStarFacts(body) {
@@ -561,11 +548,13 @@ function buildPromptByInsightType(insightType, facts) {
   };
 }
 
-/**
- * @param {object} body
- * @param {number} userId
- */
-async function createInsight(body, userId) {
+/** 深度思考：为 true 时使用 `deepseek-reasoner`，否则 `deepseek-chat`。 */
+function parseReasoningFlag(body) {
+  const v = body && body.reasoning;
+  return v === true || v === 'true' || v === 1;
+}
+
+function prepareInsightContext(body) {
   const insightType = resolveInsightType(body);
   if (!insightType) {
     throw createError(
@@ -574,8 +563,9 @@ async function createInsight(body, userId) {
       'INSIGHT_002'
     );
   }
+  const reasoning = parseReasoningFlag(body);
+  const llmModel = reasoning ? 'deepseek-reasoner' : 'deepseek-chat';
   const module = insightType;
-
   let facts;
   if (insightType === 'north_star') facts = buildNorthStarFacts(body);
   else if (insightType === 'completion_weekly') facts = buildWeeklyCompletionFacts(body);
@@ -584,12 +574,6 @@ async function createInsight(body, userId) {
   else facts = buildFunnelFacts(body);
 
   const promptPack = buildPromptByInsightType(insightType, facts);
-  const content = (
-    await generateInsightText(promptPack.user, promptPack.system, promptPack.options)
-  ).trim();
-  if (!content) throw createError(503, '智能洞察生成失败，请稍后重试', 'INSIGHT_503');
-
-  const id = nanoid();
   const taskId = body.taskId || null;
   const q = normalizeQuery(body);
   const extra = {
@@ -597,8 +581,13 @@ async function createInsight(body, userId) {
     trendType: body.trendType,
     date: body.date,
     rtmLevel: body.rtmLevel,
+    reasoning,
+    model: llmModel,
   };
+  return { insightType, module, facts, promptPack, taskId, q, extra, reasoning, llmModel };
+}
 
+function persistInsightRecord(id, module, taskId, q, extra, content, facts, userId) {
   try {
     db.run(
       `INSERT INTO dashboard_insights (
@@ -625,17 +614,96 @@ async function createInsight(body, userId) {
     }
     throw e;
   }
+}
 
-  return {
-    insightId: id,
-    insightType,
-    module,
-    taskId,
-    filters: q,
-    content,
-    createdAt: db.get('SELECT created_at AS t FROM dashboard_insights WHERE id = ?', [id]).t,
-    voteSummary: { up: 0, down: 0 },
+/**
+ * 生成洞察：固定 **SSE**（`event: delta` 推送增量；`event: done` 为 `{ code, message, data, requestId }`，与原先 JSON 成功响应一致）。
+ * 请求体 **`reasoning: true`** 时使用 **`deepseek-reasoner`**（深度思考），否则 **`deepseek-chat`**。
+ * 仅使用 DeepSeek 流式接口（需 DEEPSEEK_API_KEY）；不走 Gemini 回退。
+ *
+ * @param {object} body
+ * @param {number} userId
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function createInsight(body, userId, req, res) {
+  const ctx = prepareInsightContext(body);
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
+
+  const baseMax = ctx.promptPack.options.maxTokens ?? 900;
+  const streamMaxTokens = ctx.reasoning ? Math.max(baseMax, 8192) : baseMax;
+
+  let full = '';
+  try {
+    full = await generateTextDeepSeekStream(
+      ctx.promptPack.user,
+      {
+        system: ctx.promptPack.system,
+        model: ctx.llmModel,
+        temperature: ctx.promptPack.options.temperature,
+        maxTokens: streamMaxTokens,
+      },
+      (delta, meta) => {
+        send('delta', { text: delta, phase: meta && meta.phase ? meta.phase : 'content' });
+      }
+    );
+  } catch (err) {
+    console.error('[dashboardInsight] stream failed:', err.message);
+    send('error', {
+      message: err.message || '智能洞察流式生成失败',
+      code: 'INSIGHT_503',
+    });
+    res.end();
+    return;
+  }
+
+  full = (full || '').trim();
+  if (!full) {
+    send('error', { message: '智能洞察生成失败，请稍后重试', code: 'INSIGHT_503' });
+    res.end();
+    return;
+  }
+
+  const id = nanoid();
+  try {
+    persistInsightRecord(id, ctx.module, ctx.taskId, ctx.q, ctx.extra, full, ctx.facts, userId);
+  } catch (e) {
+    const msg = e.message || 'persist failed';
+    const code = e.errorCode || 'INSIGHT_004';
+    send('error', { message: msg, code });
+    res.end();
+    return;
+  }
+
+  const createdAt = db.get('SELECT created_at AS t FROM dashboard_insights WHERE id = ?', [id]).t;
+  send('done', {
+    code: 200,
+    message: 'success',
+    data: {
+      insightId: id,
+      insightType: ctx.insightType,
+      module: ctx.module,
+      taskId: ctx.taskId,
+      filters: ctx.q,
+      content: full,
+      createdAt,
+      voteSummary: { up: 0, down: 0 },
+      model: ctx.llmModel,
+      reasoning: ctx.reasoning,
+    },
+    requestId: req.requestId,
+  });
+  res.end();
 }
 
 /** 仅累加汇总计数，不记录投票人。 */

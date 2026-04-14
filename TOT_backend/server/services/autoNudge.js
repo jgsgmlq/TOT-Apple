@@ -3,6 +3,7 @@
 const { db } = require('../db');
 const { nanoid } = require('nanoid');
 const { broadcastToUsers, broadcastToDashboard } = require('../ws/manager');
+const { classifyDeadlineCrisisBand, getDeadlineCrisisHours } = require('./autoNudgeRules');
 
 const systemUserId = 1; // 系统执行账号（写入 initiator_id）
 
@@ -98,18 +99,16 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     }
   }
 
-  if (rules.deadlineCrisis && hoursLeft > 0) {
-    const p0Hours = rules.deadlineCrisis.p0 || 24;
-    const p1Hours = rules.deadlineCrisis.p1 || 48;
-
-    if (hoursLeft <= p0Hours) {
-      for (const a of assignments) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0', threshold: p0Hours });
-      }
-    } else if (hoursLeft <= p1Hours) {
-      for (const a of assignments) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'deadlineCrisisP1', threshold: p1Hours });
-      }
+  const crisisBand = classifyDeadlineCrisisBand(rules, hoursLeft);
+  if (crisisBand === 'p0') {
+    const h = getDeadlineCrisisHours(rules);
+    for (const a of assignments) {
+      triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0', threshold: h.p0Hours });
+    }
+  } else if (crisisBand === 'p1') {
+    const h = getDeadlineCrisisHours(rules);
+    for (const a of assignments) {
+      triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'deadlineCrisisP1', threshold: h.p1Hours });
     }
   }
 

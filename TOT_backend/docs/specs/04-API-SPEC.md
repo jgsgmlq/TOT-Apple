@@ -1,5 +1,20 @@
 # ToT API 接口定义文档
 
+### v1.4.17（2026-04-14）
+
+- **看板智能洞察模型路由**：`POST /dashboard/insights` 请求体可选 **`reasoning`**（`boolean`，默认 `false`）。为 **`true`** 时使用 **`deepseek-reasoner`**（深度思考，流式中 **`delta`** 可带 **`phase`: `reasoning` | `content`**）；否则使用 **`deepseek-chat`**。成功 **`done.data`** 返回 **`model`**、**`reasoning`** 便于客户端展示本次选用模型。
+
+### v1.4.16（2026-04-14）
+
+- **看板智能洞察固定 SSE**：`POST /dashboard/insights` **始终**返回 **`text/event-stream`（SSE）**（不再提供单次 JSON 200 正文）：事件 **`delta`** 推送正文增量；**`done`** 的 `data` 为 **`{ code, message, data, requestId }`**，其中内层 **`data`** 与原先 JSON 成功体中的 **`data`** 字段结构一致；**`error`** 表示生成或落库失败。本接口**仅调用 DeepSeek 流式 API**（需 **`DEEPSEEK_API_KEY`**），不做 Floodgate/Gemini 回退。
+
+### v1.4.15（2026-04-14）
+
+- **看板临期预警与自动预警对齐**：`GET /dashboard/overview` 的 **`warningCount`**、`GET /dashboard/warnings` 的临期分级与 **`evaluateAndTriggerAutoNudges`** 共用 **`services/autoNudgeRules.js`**（`tasks.auto_nudge_rules.deadlineCrisis` 的 **p0/p1** 小时；未配置 **deadlineCrisis** 不计临期；**hoursLeft ≤ 0** 不计入临期档）。概览按 **门店 + 任务** 聚合计数。
+- **自动预警重构**：`services/autoNudge.js` 临期分支改为调用上述共用函数，避免与看板口径漂移。
+- **Seed**：`seed.js` 对示例任务 **`UPDATE` 默认 `auto_nudge_rules`**（含 `deadlineCrisis`），便于本地联调；需重新执行 seed 后生效。
+- **规格**：`06-DASHBOARD-KPI.md` 同步更新预警计数与 `/warnings` 说明。
+
 ### v1.4.14（2026-04-13）
 
 - **看板智能洞察类型重构**：`POST /dashboard/insights` 由旧 `module` 升级为 `insightType` 分发，支持：`north_star`（北极星）、`completion_weekly`（完成人数周趋势）、`completion_daily`（完成人数日内时段）、`channel_north_star`（分渠道北极星下钻）、`funnel_alerts`（链路数据 + 预警率合并）。服务端仍兼容旧 `module` 入参并自动映射。
@@ -1434,16 +1449,16 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       
       // 预警数据
       "startDelayRate": 5.5,        // 起步异常预警人数 / 任务总人数
-      "crisisP0Rate": 2.1,          // 进度危机P0预警人数 / 任务总人数
       "crisisP1Rate": 4.0,          // 进度危机P1预警人数 / 任务总人数
+      "crisisP0Rate": 2.1,          // 进度危机P0预警人数 / 任务总人数
 
       "inProgressCount": 60,
       "pendingCount": 24,
       "overdueCount": 10,
       "updatedAt": "string",
       "warningCount": {
-        "p1": 5, // 门店完成率<50%且距DDL<24h的门店数
-        "p2": 3  // 门店完成率<80%的门店数（未达P1阈值）
+        "p1": 5, // 与 auto_nudge_rules.deadlineCrisis 一致：p1 档（默认距 ddl 不足 48h 等）
+        "p0": 3  // 同上 p0 档（默认不足 24h）；未配置 deadlineCrisis 的任务不计入
       }
     },
     "requestId": "string"
@@ -1639,7 +1654,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
-  | warningLevel | string | 否 | 预警级别：p1/p2（默认全部） |
+  | warningLevel | string | 否 | 预警级别：p1/p0（默认全部） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
   | rtm | string | 否 | 可选门店下钻，同 §5.1 |
@@ -1655,17 +1670,16 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "list": [
         {
           // 预警数据从 task_assignments 实时聚合计算（无独立 alerts 存储表）
-          // P1 规则：门店完成率 < 50% 且距离 ddl_at < 24h（PRD §5.2）
-          // P2 规则：门店完成率 < 80%（或其他规则）
+          // P1/P0：与 tasks.auto_nudge_rules.deadlineCrisis 及 autoNudge 扫描一致（默认 48h/24h 可配置）
           "taskId": "string",
           "storeId": "string",      // stores.id
           "storeName": "string",    // JOIN stores.name
-          "warningLevel": "p1",     // p1（严重）/ p2（一般）
+          "warningLevel": "p1",     // p1（yellow）/ p0（red）
           "completionRate": 45.0,   // 该门店当前完成率（%），从 task_assignments 聚合
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
           "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
-          "triggerDesc": "完成率<50%且距截止时间<24h", // 服务端根据规则生成的触发描述
+          "triggerDesc": "距 Deadline 不足N小时，仍未完成（P1）", // N 为任务配置的 p1 小时（默认 48）
           "aiSuggestion": "建议总部发起红牌催办，需重点跟进", // MVP 阶段为模板文案，非 AI 实时生成
           "calculatedAt": "string"  // 本次聚合计算时间（ISO8601）
         }
@@ -1680,10 +1694,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：**预警无独立存储表**，由服务端对 `task_assignments` 按门店聚合，结合 `tasks.ddl_at` 和当前时间实时计算 P1/P2 预警（PRD §5.2）。P1：门店完成率 < 50% 且距 DDL < 24h；P2：门店完成率 < 80%（具体阈值见业务规则）。MVP 阶段 `aiSuggestion` 为静态模板文案。
+- **接口说明**：**预警无独立存储表**，由服务端对 `task_assignments` 按门店+任务聚合，**临期分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致**（阈值默认 48h/24h，已过期不计入临期档）。未配置 `deadlineCrisis` 的任务不出现在本列表。MVP 阶段 `aiSuggestion` 为静态模板文案。
 - **权限要求**：仅总部角色（central）
 - **异常场景**：
-  - 400：warningLevel非法（非p1/p2）
+  - 400：warningLevel非法（非p1/p0）
   - 403：非总部角色
 
 ### 5.6 门店任务明细（下钻）**P0**
@@ -1782,27 +1796,36 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | trendType | string | 否 | 兼容旧入参：仅旧 `module=trend` 生效（`daily`/`hourly`） |
   | rtmLevel | string | 否 | 兼容旧入参：仅旧 `module=heatmap_rank` 生效 |
   | module | string | 否 | **兼容旧客户端**：`trend` / `heatmap_rank` / `funnel` / `warning_stats`（服务端会自动映射到 `insightType`） |
+  | reasoning | boolean | 否 | **`true`** 时使用 **`deepseek-reasoner`**（深度思考）；省略或 **`false`** 时使用 **`deepseek-chat`** |
 
-- **响应体（成功）**：
-  ```json
-  {
-    "code": 200,
-    "message": "success",
-    "data": {
-      "insightId": "string",
-      "insightType": "north_star",
-      "module": "north_star",
-      "taskId": "string|null",
-      "filters": { "rtm": null, "format": null, "dealerName": null, "storeId": null },
-      "content": "string",
-      "createdAt": "string",
-      "voteSummary": { "up": 0, "down": 0 }
-    },
-    "requestId": "string"
-  }
-  ```
+- **响应（固定 SSE，成功不再返回单次 `application/json` 200 正文）**：
+  - **Content-Type**：`text/event-stream; charset=utf-8`
+  - **SSE 事件**（每行 `event:` + `data:` + 空行）：
+    - **`delta`**：`data` 为 JSON，`{ "text": "<增量片段>", "phase": "content" }`；使用 **`deepseek-reasoner`** 时 **`phase`** 可能为 **`reasoning`**（思维链片段）或 **`content`**（最终答复片段）；**`deepseek-chat`** 时一般为 **`content`**
+    - **`done`**：生成结束且已写入 `dashboard_insights`。`data` 为与原先 JSON 成功响应**同形**的外层对象：
+      ```json
+      {
+        "code": 200,
+        "message": "success",
+        "data": {
+          "insightId": "string",
+          "insightType": "north_star",
+          "module": "north_star",
+          "taskId": "string|null",
+          "filters": { "rtm": null, "format": null, "dealerName": null, "storeId": null },
+          "content": "string",
+          "createdAt": "string",
+          "voteSummary": { "up": 0, "down": 0 },
+          "model": "deepseek-chat",
+          "reasoning": false
+        },
+        "requestId": "string"
+      }
+      ```
+    - **`error`**：`data` 为 `{ "message": "...", "code": "INSIGHT_xxx" }`（若校验失败仍走常规 **400 JSON**，不建立 SSE）
+  - **客户端**：请使用 **`fetch` + `POST` + 读取 `response.body`（ReadableStream）** 解析 SSE；浏览器原生 **`EventSource` 仅支持 GET**，不宜直接用于本接口。
 
-- **接口说明**：服务端将当前模块相关的**聚合事实**（写入 `context_json`）送入 LLM（优先 DeepSeek，失败时可回退 Floodgate/Gemini，以部署环境为准），生成 2～4 句中文洞察，持久化至 **`dashboard_insights`**。
+- **接口说明**：服务端将当前模块相关的**聚合事实**（写入 `context_json`）送入 **DeepSeek 流式** LLM（需 **`DEEPSEEK_API_KEY`**）：默认 **`deepseek-chat`**；若 **`reasoning: true`** 则 **`deepseek-reasoner`**。落库正文为模型 **`content`**（不含思维链文本）。本接口不做 Floodgate/Gemini 回退。
 - **权限要求**：`central` / `executive` / `admin`
 - **异常场景**：400（`insightType` 非法、缺 `taskId` 等，`INSIGHT_001` / `INSIGHT_002`）；404/503 见实现
 

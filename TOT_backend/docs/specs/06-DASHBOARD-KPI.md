@@ -1,6 +1,6 @@
 # 看板指标规格
 
-**版本:** 1.3.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-09
+**版本:** 1.4.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-14
 
 ---
 
@@ -43,14 +43,15 @@
 | 中等 | `50 <= progress < 80` | `medium` |
 | 严重落队 | `progress < 50` | `behind` |
 
-**门店完成率（概览 `warningCount`、预警列表分级）：**
+**门店预警计数（概览 `warningCount`、预警列表分级）：**
 
-实现侧对「门店维度」完成率 `completion_rate`（0–100 整数）：
+实现侧按 **门店 + 任务** 聚合后，与 **`services/autoNudge.js` 临期（`deadlineCrisis`）规则一致**：
 
-- **P1 计数：** `completion_rate < 50`，**或**（`completion_rate < 80` **且** 距该任务 `ddl_at` 不足 24 小时）。
-- **P2 计数：** 不满足 P1，且 `completion_rate < 80`。
+- 读取该任务 `tasks.auto_nudge_rules` 中的 **`deadlineCrisis.p0` / `p1`**（缺省与自动预警相同：**24** / **48** 小时）；若任务**未配置** `deadlineCrisis`，则**不计**临期预警（与自动扫描不触发临期一致）。
+- 剩余小时与自动预警相同：`(new Date(ddl_at) - Date.now()) / 3600000`；**`hoursLeft <= 0`（已过期）不计**入 P0/P1 临期档。
+- 仍有未完成人数时：`hoursLeft <= p0` → **P0**；否则 `hoursLeft <= p1` → **P1**（黄）。
 
-（用于 `overview.data.warningCount.p1` / `p2`。）
+（用于 `overview.data.warningCount.p1` / `p0`；与 `services/autoNudgeRules.js` 中 `classifyDeadlineCrisisBand` 同源。）
 
 **热力图色值：** `GET /heatmap` 返回 **`color` 为十六进制**（如 `#4CAF50` / `#FF9900` / `#F44336`），非 `red/yellow/green` 枚举字符串。
 
@@ -76,11 +77,11 @@
 
 ### 预警率（基于自动预警事件 `dedupe_key`）
 
-对范围内 `notification_events` 与 assignment 关联行，按 **`dedupe_key` 子串** 粗计 **`startDelay` / `deadlineCrisisP0` / `deadlineCrisisP1`** 命中次数，再除以 **totalAssignments** 得到 **startDelayRate、crisisP0Rate、crisisP1Rate**（百分比点数，一位小数）。规则与 `services/autoNudge.js` 写入的 `autonudge:…` 前缀一致。
+对范围内 `notification_events` 与 assignment 关联行，按 **`dedupe_key` 子串** 粗计 **`startDelay` / `deadlineCrisisP1` / `deadlineCrisisP0`** 命中次数，再除以 **totalAssignments** 得到 **startDelayRate、crisisP1Rate、crisisP0Rate**（百分比点数，一位小数）。规则与 `services/autoNudge.js` 写入的 `autonudge:…` 前缀一致。Dashboard 预警监控展示顺序为：起步异常（P1）→ 48h 临期（P1）→ 24h 临期（P0）。
 
 ### 其他
 
-- **warningCount：** `{ p1, p2 }`，见上文「门店完成率」规则按店聚合后计数。
+- **warningCount：** `{ p1, p0 }`，见上文「门店预警计数」规则按店聚合后计数。
 - **updatedAt：** 范围内 **`MAX(task_assignments.updated_at)`**，无数据时为当前时间。
 
 ---
@@ -129,8 +130,8 @@ WHERE task_id = :taskId;
 
 - **角色：** 仅 `central` / `admin`。
 - **分页：** `pageNum` / `pageSize`。
-- **taskId：** 可选；**warningLevel：** `p1` | `p2`，按门店+任务聚合后的完成率区间过滤（与 overview 的 p1/p2 **分级口径不完全相同**：列表侧重「完成率区间」，见实现 `HAVING`）。
-- 列表项含：`taskId`、`storeId`、`warningLevel`（`p1`/`p2`）、`completionRate`、`triggerDesc`、`aiSuggestion`（按完成率分段 Mock 文案）等。
+- **taskId：** 可选；**warningLevel：** `p1` | `p0`，按与上表相同的 **deadlineCrisis** 分级过滤（且均有未完成）。
+- 列表项含：`taskId`、`storeId`、`warningLevel`（`p1`/`p0`）、`completionRate`、`triggerDesc`、`aiSuggestion` 等。
 
 ---
 
@@ -188,5 +189,6 @@ ORDER BY strftime('%H', completed_at) ASC;
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.2.1 | 2026-03-28 | Day5 初版对齐 |
+| 1.4.0 | 2026-04-14 | **临期预警与 autoNudge 一致**：`warningCount` / `/warnings` 使用 `auto_nudge_rules.deadlineCrisis`（默认 24h/48h 可配置），与 `services/autoNudgeRules.js` / `autoNudge.js` 同源；未配置 `deadlineCrisis` 不计临期；已过期不计临期档。概览按门店+任务聚合。 |
 | 1.3.0 | 2026-04-09 | 与 `routes/dashboard.js`、PRD §5.3/§6.6 对齐：角色矩阵、`overview` 扩展 KPI、`/trend`、预警/热力图口径、移除过时 Day2 待办表述 |
+| 1.2.1 | 2026-03-28 | Day5 初版对齐 |

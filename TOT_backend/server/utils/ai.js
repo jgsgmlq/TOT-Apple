@@ -119,6 +119,119 @@ async function generateTextDeepSeek(prompt, options = {}) {
 }
 
 /**
+ * 解析 DeepSeek 流式 chunk：`deepseek-chat` 仅有 `delta.content`；
+ * `deepseek-reasoner` 可能同时出现 `delta.reasoning_content`（思维链）与 `delta.content`（最终答复）。
+ * @param {object} json choices[0] 所在 JSON
+ * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content' }) => void} [onChunk]
+ * @returns {string} 仅累加 **content**（用于落库正文；不含思维链）
+ */
+function accumulateDeepSeekStreamDelta(json, onChunk) {
+  const d = json.choices?.[0]?.delta;
+  if (!d) return '';
+  if (d.reasoning_content && typeof onChunk === 'function') {
+    onChunk(d.reasoning_content, { phase: 'reasoning' });
+  }
+  let contentAcc = '';
+  if (d.content) {
+    contentAcc = d.content;
+    if (typeof onChunk === 'function') onChunk(d.content, { phase: 'content' });
+  }
+  return contentAcc;
+}
+
+/**
+ * DeepSeek 流式输出（OpenAI 兼容 SSE）。仅当上游支持 stream 时使用。
+ * @param {string} userPrompt
+ * @param {{ system?: string, model?: string, temperature?: number, maxTokens?: number }} [options]
+ * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content' }) => void} [onChunk] 每个文本增量；reasoner 时 `phase` 区分思维链与正文
+ * @returns {Promise<string>} 拼接后的 **content** 全文（不含 reasoning_content）
+ */
+async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey || String(apiKey).trim() === '') {
+    throw new Error('DEEPSEEK_API_KEY is not set');
+  }
+
+  const messages = [];
+  if (options.system) {
+    messages.push({ role: 'system', content: options.system });
+  }
+  messages.push({ role: 'user', content: userPrompt });
+
+  const body = {
+    model: options.model || 'deepseek-chat',
+    messages,
+    temperature: options.temperature ?? 0.1,
+    max_tokens: options.maxTokens ?? 2048,
+    stream: true,
+  };
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      'User-Agent': 'TOT-Apple-Backend/1.0',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`DeepSeek stream API Error: ${response.status}`, errorText);
+    throw new Error(`DeepSeek stream failed: ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('DeepSeek stream: empty body');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n');
+    buffer = parts.pop() || '';
+    for (const line of parts) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(':')) continue;
+      if (!trimmed.startsWith('data: ')) continue;
+      const payload = trimmed.slice(6).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const json = JSON.parse(payload);
+        full += accumulateDeepSeekStreamDelta(json, onChunk);
+      } catch {
+        /* 忽略不完整 JSON 行 */
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const trimmed = buffer.trim();
+    if (trimmed.startsWith('data: ')) {
+      const payload = trimmed.slice(6).trim();
+      if (payload && payload !== '[DONE]') {
+        try {
+          const json = JSON.parse(payload);
+          full += accumulateDeepSeekStreamDelta(json, onChunk);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  return full;
+}
+
+/**
  * OpenAI-compatible chat completions with optional tool/function calling.
  * Used by chatAgentRunner.js in function_calling mode.
  *
@@ -179,5 +292,6 @@ async function chatWithTools(options) {
 module.exports = {
   generateText,
   generateTextDeepSeek,
+  generateTextDeepSeekStream,
   chatWithTools,
 };

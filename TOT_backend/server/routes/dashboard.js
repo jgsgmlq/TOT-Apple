@@ -21,16 +21,15 @@ const { db } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const { parseStoreDrill } = require('../utils/storeDrill');
+const {
+  parseAutoNudgeRules,
+  classifyDeadlineCrisisBand,
+  getDeadlineCrisisHours,
+} = require('../services/autoNudgeRules');
 
 const router = express.Router();
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
-
-function alertLevel(rate) {
-  if (rate < 50) return 'p1';
-  if (rate < 80) return 'p2';
-  return 'normal';
-}
 
 function heatmapColor(rate) {
   if (rate >= 80) return '#4CAF50';
@@ -164,29 +163,32 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const totalReadCount   = employeeReadCount + managerReadCount;
     const realDeliveryRate = total > 0 ? parseFloat(((totalReadCount / total) * 100).toFixed(2)) : 0;
 
-    // ─ 预警数（门店维度实时聚合）；无 stores 下钻时仍按店聚合（与旧版一致）
-    const storeStats = db.all(
+    // ─ 预警数（门店+任务维度）；临期口径与 autoNudge.evaluateAndTriggerAutoNudges 一致（tasks.auto_nudge_rules.deadlineCrisis、p0/p1 小时、hoursLeft<=0 不计）
+    const storeTaskRows = db.all(
       `SELECT
          ta.store_id,
+         ta.task_id,
          t.ddl_at,
-         COUNT(ta.id) AS total,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate
+         t.auto_nudge_rules,
+         SUM(CASE WHEN ta.status != 'completed' THEN 1 ELSE 0 END) AS uncompleted_count
        FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
-       GROUP BY ta.store_id${taskId ? ', ta.task_id' : ''}`,
+       GROUP BY ta.store_id, ta.task_id`,
       allParams
     );
-    let warnP1 = 0, warnP2 = 0;
-    const now = new Date();
-    for (const row of storeStats) {
-      const rate = row.completion_rate || 0;
-      const hoursLeft = (new Date(row.ddl_at) - now) / 3600000;
-      // P1：完成率<50%，或完成率<80%且距截止不足24h
-      const isP1 = rate < 50 || (rate < 80 && hoursLeft < 24);
-      if (isP1) warnP1++;
-      else if (rate < 80) warnP2++;
+    const nowMs = Date.now();
+    let warnP1 = 0;
+    let warnP0 = 0;
+    for (const row of storeTaskRows) {
+      if (!row.uncompleted_count) continue;
+      const rules = parseAutoNudgeRules(row.auto_nudge_rules);
+      const ddlAt = new Date(row.ddl_at).getTime();
+      const hoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
+      const band = classifyDeadlineCrisisBand(rules, hoursLeft);
+      if (band === 'p0') warnP0++;
+      else if (band === 'p1') warnP1++;
     }
 
     // ─ 预警及链路相关指标 (PRD 1.3) ──
@@ -268,13 +270,13 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         
         // 预警数据
         startDelayRate,
-        crisisP0Rate,
         crisisP1Rate,
+        crisisP0Rate,
 
         inProgressCount: inProgCnt,
         pendingCount:    pendingCnt,
         overdueCount,
-        warningCount: { p1: warnP1, p2: warnP2 },
+        warningCount: { p1: warnP1, p0: warnP0 },
         updatedAt: base.last_updated || new Date().toISOString(),
       },
       requestId: req.requestId,
@@ -428,16 +430,15 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 
 // ─── GET /api/v1/dashboard/warnings ───────────────────────────────────────────
 // §5.5 预警列表（实时从 task_assignments 聚合，无独立存储表）
-// P1：门店 completionRate < 50%
-// P2：50% ≤ completionRate < 80%
+// 临期分级与 autoNudge（tasks.auto_nudge_rules.deadlineCrisis）一致；未配置 deadlineCrisis 的不出现在本列表
 
 router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
   try {
     const { taskId, warningLevel, pageNum = 1, pageSize = 20 } = req.query;
     const drill = parseStoreDrill(req.query);
 
-    if (warningLevel && !['p1', 'p2'].includes(warningLevel)) {
-      throw createError(400, 'warningLevel 非法（p1/p2）', 'DASH_003');
+    if (warningLevel && !['p1', 'p0'].includes(warningLevel)) {
+      throw createError(400, 'warningLevel 非法（p1/p0）', 'DASH_003');
     }
 
     const page  = Math.max(1, parseInt(pageNum,  10) || 1);
@@ -452,23 +453,20 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       params.push(...drill.params);
     }
 
-    // warningLevel 转为 completion_rate 上界（p1 < 50，p2 在 [50,80)）
-    let rateHaving = 'completion_rate < 80';
-    if (warningLevel === 'p1') rateHaving = 'completion_rate < 50';
-    else if (warningLevel === 'p2') rateHaving = 'completion_rate >= 50 AND completion_rate < 80';
-
     const whereClause = conditions.join(' AND ');
-    const now = new Date().toISOString();
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
 
-    // 聚合子查询：按门店+任务分组，计算完成率（在 DB 层过滤预警级别）
     const aggregateSql = `
       SELECT
         ta.task_id,
         ta.store_id,
         s.name AS store_name,
         t.ddl_at,
+        t.auto_nudge_rules,
         COUNT(ta.id) AS total_count,
         SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
+        SUM(CASE WHEN ta.status!='completed' THEN 1 ELSE 0 END) AS uncompleted_count,
         SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
         MAX(ta.updated_at) AS last_updated
@@ -477,41 +475,47 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       JOIN tasks t ON t.id = ta.task_id
       WHERE ${whereClause}
       GROUP BY ta.store_id, ta.task_id
-      HAVING ${rateHaving}
     `;
 
-    // 总数
-    const countRow = db.get(
-      `SELECT COUNT(*) AS cnt FROM (${aggregateSql}) sub`,
-      [now, ...params]
-    );
-    const total = (countRow && countRow.cnt) || 0;
+    const rawRows = db.all(aggregateSql, [nowIso, ...params]);
+
+    const matched = [];
+    for (const r of rawRows) {
+      if (!r.uncompleted_count) continue;
+      const rules = parseAutoNudgeRules(r.auto_nudge_rules);
+      const ddlAt = new Date(r.ddl_at).getTime();
+      const hoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
+      const band = classifyDeadlineCrisisBand(rules, hoursLeft);
+      if (!band) continue;
+      if (warningLevel && band !== warningLevel) continue;
+      matched.push({ row: r, band });
+    }
+
+    matched.sort((a, b) => (a.row.completion_rate || 0) - (b.row.completion_rate || 0));
+
+    const total = matched.length;
     const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    const pageSlice = matched.slice(offset, offset + limit);
 
-    // 分页数据
-    const storeRows = db.all(
-      `${aggregateSql} ORDER BY completion_rate ASC LIMIT ? OFFSET ?`,
-      [now, ...params, limit, offset]
-    );
-
-    const list = storeRows.map(r => {
+    const list = pageSlice.map(({ row: r, band }) => {
+      const rules = parseAutoNudgeRules(r.auto_nudge_rules);
+      const h = getDeadlineCrisisHours(rules);
       const rate = r.completion_rate || 0;
-      const level = rate < 50 ? 'p1' : 'p2';
-      const triggerDesc = rate < 50
-        ? '完成率<50%，任务严重落后'
-        : '完成率<80%，存在落队风险';
+      const triggerDesc = band === 'p0'
+        ? `距 Deadline 不足${h.p0Hours}小时，仍未完成（P0）`
+        : `距 Deadline 不足${h.p1Hours}小时，仍未完成（P1）`;
       return {
         taskId:         r.task_id,
         storeId:        r.store_id,
         storeName:      r.store_name,
-        warningLevel:   level,
+        warningLevel:   band,
         completionRate: rate,
         completedCount: r.completed_count,
         totalCount:     r.total_count,
         overdueCount:   r.overdue_count || 0,
         triggerDesc,
         aiSuggestion:   aiSuggestion(rate),
-        calculatedAt:   now,
+        calculatedAt:   nowIso,
       };
     });
 
