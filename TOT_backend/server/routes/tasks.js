@@ -618,6 +618,8 @@ router.delete('/:id', authenticate, requireRole(['central', 'admin']), (req, res
       db.run('DELETE FROM notification_events WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM nudge_records WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
+      // 删除关联的 AI 洞察
+      db.run('DELETE FROM dashboard_insights WHERE task_id = ?', [taskId]);
       db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
     });
 

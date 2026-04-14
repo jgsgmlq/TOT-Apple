@@ -1039,14 +1039,10 @@
                 </div>
               </div>
 
-          <!-- 预警数据 -->
-          <n-card :bordered="false" class="metrics-card warning-card">
-            <template #header>
-              <div>
-                <div class="chart-title">预警率统计</div>
-                <div class="chart-sub">点击下方具体预警指标可查看风险门店名单</div>
-              </div>
-            </template>
+              <div class="vertical-divider"></div>
+
+              <!-- 预警数据 -->
+              <n-card :bordered="false" class="metrics-card warning-card" style="flex: 1;">
             <div class="metrics-grid">
               <div
                 class="metric-box warn-style is-clickable"
