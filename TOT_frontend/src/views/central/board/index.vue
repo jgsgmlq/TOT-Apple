@@ -66,7 +66,9 @@
           <div class="hq-ai-drawer-header">
             <div class="hq-ai-drawer-header-brand">
               <div class="hq-ai-drawer-header-avatar">
-                <n-icon size="28" color="#2563eb" class="hq-ai-header-icon"><RobotOutlined /></n-icon>
+                <n-icon size="28" color="#2563eb" class="hq-ai-header-icon"
+                  ><RobotOutlined
+                /></n-icon>
               </div>
               <div class="hq-ai-drawer-header-titles">
                 <span class="hq-ai-drawer-header-title">AI 洞察</span>
@@ -274,37 +276,78 @@
       :segmented="{ content: 'soft', footer: 'soft' }"
       class="hq-rules-modal"
     >
-      <div class="hq-rules-body static-rules" style="padding: 16px 8px; font-size: 14px; color: #374151; line-height: 1.6;">
-        <p style="margin-bottom: 24px; color: #6b7280; font-size: 13px;">
+      <div
+        class="hq-rules-body static-rules"
+        style="padding: 16px 8px; font-size: 14px; color: #374151; line-height: 1.6"
+      >
+        <p style="margin-bottom: 24px; color: #6b7280; font-size: 13px">
           总部已针对所有培训任务应用以下统一预警标准，暂不支持针对单个任务进行修改。
         </p>
 
-        <div class="hq-rule-block" style="margin-bottom: 20px;">
-          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">
-            进度掉队预警 <n-tag size="small" type="info" :bordered="false" style="margin-left: 6px; font-weight: normal;">仅 Monobrand</n-tag>
+        <div class="hq-rule-block" style="margin-bottom: 20px">
+          <div
+            class="hq-rule-block-title"
+            style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827"
+          >
+            进度掉队预警
+            <n-tag
+              size="small"
+              type="info"
+              :bordered="false"
+              style="margin-left: 6px; font-weight: normal"
+              >仅 Monobrand</n-tag
+            >
           </div>
-          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: #f59e0b; font-size: 18px;">•</span> Lifestyle：个人完成率处于门店最后 <strong>3</strong> 位
+          <p
+            class="hq-rule-line"
+            style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px"
+          >
+            <span style="color: #f59e0b; font-size: 18px">•</span> Lifestyle：个人完成率处于门店最后
+            <strong>3</strong> 位
           </p>
-          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: #f59e0b; font-size: 18px;">•</span> Mono：个人完成率处于门店最后 <strong>1</strong> 位
+          <p
+            class="hq-rule-line"
+            style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px"
+          >
+            <span style="color: #f59e0b; font-size: 18px">•</span> Mono：个人完成率处于门店最后
+            <strong>1</strong> 位
           </p>
         </div>
 
-        <div class="hq-rule-block" style="margin-bottom: 20px;">
-          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">起步异常预警</div>
-          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: #ef4444; font-size: 18px;">•</span> 任务期限已度过 <strong>50</strong>%，但个人进度仍为 0%
+        <div class="hq-rule-block" style="margin-bottom: 20px">
+          <div
+            class="hq-rule-block-title"
+            style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827"
+            >起步异常预警</div
+          >
+          <p
+            class="hq-rule-line"
+            style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px"
+          >
+            <span style="color: #ef4444; font-size: 18px">•</span> 任务期限已度过
+            <strong>50</strong>%，但个人进度仍为 0%
           </p>
         </div>
 
-        <div class="hq-rule-block" style="margin-bottom: 20px;">
-          <div class="hq-rule-block-title" style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827;">临期危机预警 (Deadline)</div>
-          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: #ef4444; font-size: 18px;">•</span> 距 Deadline 不足 <strong>24</strong> 小时，仍未完成 (P0 级)
+        <div class="hq-rule-block" style="margin-bottom: 20px">
+          <div
+            class="hq-rule-block-title"
+            style="font-weight: 600; font-size: 15px; margin-bottom: 8px; color: #111827"
+            >临期危机预警 (Deadline)</div
+          >
+          <p
+            class="hq-rule-line"
+            style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px"
+          >
+            <span style="color: #ef4444; font-size: 18px">•</span> 距 Deadline 不足
+            <strong>24</strong> 小时，仍未完成 (P0 级)
           </p>
-          <p class="hq-rule-line" style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: #f97316; font-size: 18px;">•</span> 距 Deadline 不足 <strong>48</strong> 小时，仍未完成 (P1 级)
+          <p
+            class="hq-rule-line"
+            style="margin: 0 0 4px 12px; display: flex; align-items: center; gap: 8px"
+          >
+            <span style="color: #f97316; font-size: 18px">•</span> 距 Deadline 不足
+            <strong>48</strong> 小时，仍未完成 (P1 级)
           </p>
         </div>
       </div>
@@ -320,35 +363,74 @@
       class="hq-drilldown-modal"
     >
       <n-spin :show="drillDownLoading">
-        <div class="drilldown-body custom-scroll" style="max-height: 60vh; overflow-y: auto; padding: 4px;">
-          <n-empty v-if="!drillDownLoading && drillDownList.length === 0" description="暂无符合条件的门店记录" />
-          
+        <div
+          class="drilldown-body custom-scroll"
+          style="max-height: 60vh; overflow-y: auto; padding: 4px"
+        >
+          <n-empty
+            v-if="!drillDownLoading && drillDownList.length === 0"
+            description="暂无符合条件的门店记录"
+          />
+
           <div v-else class="drilldown-list">
             <!-- 列表项：每一行代表一个门店 -->
-            <div 
-              v-for="item in drillDownList" 
-              :key="item.storeId" 
+            <div
+              v-for="item in drillDownList"
+              :key="item.storeId"
               class="dd-item"
-              style="display: flex; align-items: center; padding: 16px; border-bottom: 1px solid #f3f4f6; transition: background 0.2s;"
+              style="
+                display: flex;
+                align-items: center;
+                padding: 16px;
+                border-bottom: 1px solid #f3f4f6;
+                transition: background 0.2s;
+              "
             >
               <!-- 1. 🧍‍♂️ 图标与门店名称 -->
-              <div class="dd-col-info" style="flex: 1; display: flex; align-items: center; gap: 12px;">
-                <div class="dd-avatar" style="background: #f5f5f7; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #86868b;">
+              <div
+                class="dd-col-info"
+                style="flex: 1; display: flex; align-items: center; gap: 12px"
+              >
+                <div
+                  class="dd-avatar"
+                  style="
+                    background: #f5f5f7;
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #86868b;
+                  "
+                >
                   <n-icon size="20"><UserOutlined /></n-icon>
                 </div>
-                <div style="display: flex; flex-direction: column;">
-                  <span style="font-weight: 600; color: #1d1d1f; font-size: 14px;">{{ item.storeName }}</span>
-                  <span style="font-size: 12px; color: #86868b;">ID: {{ item.storeId }}</span>
+                <div style="display: flex; flex-direction: column">
+                  <span style="font-weight: 600; color: #1d1d1f; font-size: 14px">{{
+                    item.storeName
+                  }}</span>
+                  <span style="font-size: 12px; color: #86868b">ID: {{ item.storeId }}</span>
                 </div>
               </div>
 
               <!-- 2. 进度信息 -->
-              <div class="dd-col-progress" style="width: 240px; text-align: right;">
-                <div style="margin-bottom: 4px; display: flex; justify-content: space-between; align-items: baseline;">
-                  <span style="font-size: 12px; color: #6b7280;">
-                    已完成: <strong>{{ item.completedCount }}</strong> / {{ item.assignmentCount || item.totalCount }}
+              <div class="dd-col-progress" style="width: 240px; text-align: right">
+                <div
+                  style="
+                    margin-bottom: 4px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: baseline;
+                  "
+                >
+                  <span style="font-size: 12px; color: #6b7280">
+                    已完成: <strong>{{ item.completedCount }}</strong> /
+                    {{ item.assignmentCount || item.totalCount }}
                   </span>
-                  <span style="font-weight: 700; color: #0071e3; font-size: 15px;">{{ formatPct2(item.completionRate) }}%</span>
+                  <span style="font-weight: 700; color: #0071e3; font-size: 15px"
+                    >{{ formatPct2(item.completionRate) }}%</span
+                  >
                 </div>
                 <n-progress
                   type="line"
@@ -356,10 +438,13 @@
                   :indicator-placement="'hide'"
                   :color="item.completionRate >= 100 ? '#34c759' : '#0071e3'"
                   processing
-                  style="height: 8px;"
+                  style="height: 8px"
                 />
                 <!-- 预警模式下额外显示逾期数 -->
-                <div v-if="drillDownType === 'warning' && item.overdueCount > 0" style="margin-top: 4px; font-size: 11px; color: #ef4444;">
+                <div
+                  v-if="drillDownType === 'warning' && item.overdueCount > 0"
+                  style="margin-top: 4px; font-size: 11px; color: #ef4444"
+                >
                   ⚠️ {{ item.overdueCount }} 人已逾期
                 </div>
               </div>
@@ -368,7 +453,7 @@
         </div>
       </n-spin>
       <template #footer>
-        <div style="text-align: right; color: #86868b; font-size: 12px;">
+        <div style="text-align: right; color: #86868b; font-size: 12px">
           * 数据更新于 {{ formatOverviewTime(activeTask?.overviewSummary?.updatedAt) }}
         </div>
       </template>
@@ -432,15 +517,41 @@
     </div>
 
     <!-- 替换原“运行预警扫描”：新增页面级别的自动 AI 洞察框 -->
-    <section v-if="taskList.length > 0 && activeTask?.dispatched" class="ai-auto-insight-bar" style="margin: 0 0px 16px;">
+    <section
+      v-if="taskList.length > 0 && activeTask?.dispatched"
+      class="ai-auto-insight-bar"
+      style="margin: 0 0px 16px"
+    >
       <n-collapse :default-expanded-names="['1']" :key="activeTask.id">
-        <n-collapse-item name="1" style="border-top: none;">
+        <n-collapse-item name="1" style="border-top: none">
           <template #header>
-            <div style="font-size: 14px; font-weight: 400; color:rgb(62, 64, 66); letter-spacing: -0.3px; padding: 4px 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+            <div
+              style="
+                font-size: 14px;
+                font-weight: 400;
+                color: rgb(62, 64, 66);
+                letter-spacing: -0.3px;
+                padding: 4px 0;
+                font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
+                  Helvetica, Arial, sans-serif;
+              "
+            >
               AI洞察
             </div>
           </template>
-          <div style="white-space: pre-wrap; line-height: 1.6; font-size: 14px; color: #4b5563; background: #f5f5f7; padding: 16px 20px; border-radius: 12px; margin-top: 4px; margin-bottom: 8px;">
+          <div
+            style="
+              white-space: pre-wrap;
+              line-height: 1.6;
+              font-size: 14px;
+              color: #4b5563;
+              background: #f5f5f7;
+              padding: 16px 20px;
+              border-radius: 12px;
+              margin-top: 4px;
+              margin-bottom: 8px;
+            "
+          >
             {{ autoAiInsightContent }}
           </div>
         </n-collapse-item>
@@ -580,7 +691,7 @@
           <!-- RTM L3 拆解 -->
           <n-card :bordered="false" class="rtm-card">
             <template #header>
-              <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; justify-content: space-between; align-items: center">
                 <div>
                   <div class="chart-title">区域进度与门店排行</div>
                   <div class="chart-sub">按区域/业态热力拆解及各门店具体排行明细</div>
@@ -591,7 +702,7 @@
                     secondary
                     size="small"
                     @click="openStoreRankDrillDown('top')"
-                    style="font-weight: 600; padding: 0 10px;"
+                    style="font-weight: 600; padding: 0 10px"
                   >
                     Top 20 门店
                   </n-button>
@@ -600,7 +711,7 @@
                     secondary
                     size="small"
                     @click="openStoreRankDrillDown('bottom')"
-                    style="font-weight: 600; padding: 0 10px;"
+                    style="font-weight: 600; padding: 0 10px"
                   >
                     Bottom 20 门店
                   </n-button>
@@ -693,10 +804,7 @@
           </n-card>
 
           <!-- 预警数据 -->
-          <n-card
-            :bordered="false"
-            class="metrics-card warning-card"
-          >
+          <n-card :bordered="false" class="metrics-card warning-card">
             <template #header>
               <div>
                 <div class="chart-title">预警率统计</div>
@@ -704,7 +812,10 @@
               </div>
             </template>
             <div class="metrics-grid">
-              <div class="metric-box warn-style is-clickable" @click="openWarningDrillDown('p2', '起步异常')">
+              <div
+                class="metric-box warn-style is-clickable"
+                @click="openWarningDrillDown('p2', '起步异常')"
+              >
                 <div class="m-label"
                   >起步异常
                   <n-tooltip trigger="hover"
@@ -715,7 +826,10 @@
                 <div class="m-value">{{ formatPct2(activeTask.warningData.startAbnormal) }}%</div>
                 <div class="m-click-hint">点击下钻</div>
               </div>
-              <div class="metric-box danger-style is-clickable" @click="openWarningDrillDown('p2', '临期危机 (P1)')">
+              <div
+                class="metric-box danger-style is-clickable"
+                @click="openWarningDrillDown('p2', '临期危机 (P1)')"
+              >
                 <div class="m-label"
                   >临期危机 (P1)
                   <n-tooltip trigger="hover"
@@ -726,7 +840,10 @@
                 <div class="m-value">{{ formatPct2(activeTask.warningData.p1Crisis) }}%</div>
                 <div class="m-click-hint">点击下钻</div>
               </div>
-              <div class="metric-box fatal-style is-clickable" @click="openWarningDrillDown('p1', '临期危机 (P0)')">
+              <div
+                class="metric-box fatal-style is-clickable"
+                @click="openWarningDrillDown('p1', '临期危机 (P0)')"
+              >
                 <div class="m-label"
                   >临期危机 (P0)
                   <n-tooltip trigger="hover"
@@ -791,10 +908,7 @@
   import { useMessage, useDialog } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
   import { useGlobSetting } from '@/hooks/setting';
-  import {
-    displayAutoNudgeRules,
-    hasAutoNudgeRulesConfigured,
-  } from '@/utils/autoNudgeRules';
+  import { displayAutoNudgeRules, hasAutoNudgeRulesConfigured } from '@/utils/autoNudgeRules';
 
   const message = useMessage();
   const dialog = useDialog();
@@ -813,13 +927,14 @@
   async function openStoreRankDrillDown(type: 'top' | 'bottom') {
     const taskId = activeTaskId.value;
     if (!taskId) return;
-    
+
     drillDownType.value = 'rank';
-    drillDownTitle.value = type === 'top' ? '门店完成率排行 (Top 20)' : '门店完成率排行 (Bottom 20)';
+    drillDownTitle.value =
+      type === 'top' ? '门店完成率排行 (Top 20)' : '门店完成率排行 (Bottom 20)';
     showDrillDownModal.value = true;
     drillDownLoading.value = true;
     drillDownList.value = [];
-    
+
     try {
       const res = await getDashboardStoreRank({ taskId, type, limit: 20 }).send();
       drillDownList.value = res.rankList || [];
@@ -931,9 +1046,7 @@
       const sorted = [...t.rtmData].sort((a: any, b: any) => (a.rate || 0) - (b.rate || 0));
       const bottom3 = sorted.slice(0, 3).filter((x: any) => x.rate < 60);
       if (bottom3.length > 0) {
-        laggingAreas = bottom3
-          .map((x: any) => `${x.name}(${formatPct2(x.rate)}%)`)
-          .join('、');
+        laggingAreas = bottom3.map((x: any) => `${x.name}(${formatPct2(x.rate)}%)`).join('、');
       }
     }
 
@@ -958,7 +1071,11 @@
 🎯 风险评级：${riskLevel}
 
 💡 建议行动
-1. ${overdue > 0 ? `重点关注 ${overdue} 位逾期学员，建议手动催办或调整截止时间` : '进度正常，继续保持'}
+1. ${
+      overdue > 0
+        ? `重点关注 ${overdue} 位逾期学员，建议手动催办或调整截止时间`
+        : '进度正常，继续保持'
+    }
 2. ${readPct < 80 ? '读取率偏低，建议二次推送或短信提醒' : '读取率良好'}
 3. ${laggingAreas !== '暂无' ? `针对 ${laggingAreas} 区域启动专项督导` : '各区域进度均衡'}
 
@@ -1171,7 +1288,7 @@
         } else if (parsed.event === 'dashboard_updated') {
           void loadTasks().then(() => {
             if (activeTaskId.value) {
-              const stillExists = taskList.value.find(t => t.id === activeTaskId.value);
+              const stillExists = taskList.value.find((t) => t.id === activeTaskId.value);
               if (stillExists) {
                 void loadDashboardForTask(activeTaskId.value);
               } else {
@@ -1548,7 +1665,11 @@
       if (n > 0) {
         message.success(`扫描完成，本次触发 ${n} 人次催办${rules}`);
       } else {
-        message.warning(`本次触发 0 人次催办。${hint || '请检查任务截止时间与预警规则是否命中，或是否已被去重。'}${rules}`);
+        message.warning(
+          `本次触发 0 人次催办。${
+            hint || '请检查任务截止时间与预警规则是否命中，或是否已被去重。'
+          }${rules}`
+        );
       }
       if (activeTaskId.value) {
         await loadDashboardForTask(activeTaskId.value);
@@ -1880,7 +2001,8 @@
     padding: 32px 40px;
     min-height: 100%;
     background-color: #f5f5f7;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
+      Arial, sans-serif;
   }
 
   .board-header {
@@ -1902,7 +2024,8 @@
     }
 
     .title {
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica,
+        Arial, sans-serif;
       font-size: 24px;
       font-weight: 600;
       color: #1d1d1f;
@@ -1910,7 +2033,7 @@
       line-height: 1.1;
       margin: 0 0 8px 0;
     }
-    
+
     .desc {
       font-size: 14px;
       color: rgba(0, 0, 0, 0.48);
@@ -1954,9 +2077,7 @@
     box-sizing: border-box;
     background: linear-gradient(165deg, #f8fafc 0%, #ffffff 45%, #f1f5f9 100%);
     border: 1px solid rgba(15, 23, 42, 0.08);
-    box-shadow:
-      0 25px 50px -12px rgba(15, 23, 42, 0.18),
-      0 12px 24px -8px rgba(15, 23, 42, 0.1),
+    box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.18), 0 12px 24px -8px rgba(15, 23, 42, 0.1),
       inset 0 1px 0 rgba(255, 255, 255, 0.9);
   }
 
@@ -1972,7 +2093,11 @@
   :deep(.hq-ai-floating-panel .hq-ai-drawer-header-wrap.n-drawer-header) {
     padding: 16px 48px 14px 18px;
     border-bottom: 1px solid rgba(15, 23, 42, 0.06);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.88) 100%);
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.95) 0%,
+      rgba(248, 250, 252, 0.88) 100%
+    );
     backdrop-filter: blur(12px);
   }
 
@@ -2059,7 +2184,11 @@
     min-height: 0;
     overflow-y: auto;
     padding: 18px 18px 12px;
-    background: linear-gradient(180deg, rgba(241, 245, 249, 0.5) 0%, rgba(248, 250, 252, 0.35) 100%);
+    background: linear-gradient(
+      180deg,
+      rgba(241, 245, 249, 0.5) 0%,
+      rgba(248, 250, 252, 0.35) 100%
+    );
   }
 
   .custom-scroll-ai {
@@ -2135,10 +2264,7 @@
     border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 12px;
     cursor: pointer;
-    transition:
-      border-color 0.2s,
-      box-shadow 0.2s,
-      transform 0.15s;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
 
     &:hover {
       border-color: rgba(59, 130, 246, 0.45);
@@ -2238,9 +2364,7 @@
     }
 
     :deep(.n-input--focus) {
-      box-shadow:
-        inset 0 0 0 1px rgba(59, 130, 246, 0.45),
-        0 0 0 3px rgba(59, 130, 246, 0.12);
+      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45), 0 0 0 3px rgba(59, 130, 246, 0.12);
     }
   }
 
@@ -2515,7 +2639,7 @@
     &.is-active {
       box-shadow: rgba(0, 0, 0, 0.12) 0px 8px 30px 0px;
       border: 1px solid rgba(0, 113, 227, 0.3);
-      
+
       &::before {
         content: '';
         position: absolute;
@@ -2649,7 +2773,8 @@
       color: #1d1d1f;
       letter-spacing: -0.374px;
       margin-bottom: 12px;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
+        Arial, sans-serif;
     }
 
     .ns-value {
@@ -2658,7 +2783,8 @@
       line-height: 1.07;
       letter-spacing: -0.28px;
       color: #1d1d1f;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica,
+        Arial, sans-serif;
 
       &.highlight {
         color: #0071e3;
@@ -2693,7 +2819,8 @@
     border-radius: 8px;
     font-size: 14px;
     color: rgba(0, 0, 0, 0.48);
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
+      Arial, sans-serif;
     letter-spacing: -0.224px;
 
     .kpi-chip {
@@ -2724,7 +2851,8 @@
   }
 
   .chart-title {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica,
+      Arial, sans-serif;
     font-size: 17px;
     font-weight: 700;
     color: #1d1d1f;
@@ -2761,7 +2889,7 @@
     .chart-card {
       border-right: 1px solid #e5e7eb !important;
     }
-    
+
     .chart-container {
       height: 320px;
       width: 100%;
@@ -2863,7 +2991,7 @@
       box-shadow: none !important;
       border-radius: 0 !important;
     }
-    
+
     .link-card {
       border-right: 1px solid #e5e7eb !important;
     }
@@ -2911,7 +3039,8 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
+        Arial, sans-serif;
       .icon {
         color: rgba(0, 0, 0, 0.32);
         cursor: help;
@@ -2923,7 +3052,8 @@
       font-weight: 600;
       color: #1d1d1f;
       letter-spacing: -0.231px;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica,
+        Arial, sans-serif;
     }
 
     &.info-style {
@@ -3021,8 +3151,12 @@
         color: #86868b;
       }
 
-      &.top .de-icon { color: #34c759; }
-      &.bottom .de-icon { color: #ff3b30; }
+      &.top .de-icon {
+        color: #34c759;
+      }
+      &.bottom .de-icon {
+        color: #ff3b30;
+      }
     }
   }
 

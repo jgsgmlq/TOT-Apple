@@ -57,6 +57,73 @@ router.post(
   }
 );
 
+// POST /api/v1/chat/executive/sessions/:sessionId/messages/:messageId/feedback
+// Submit feedback for an AI message.
+router.post(
+  '/executive/sessions/:sessionId/messages/:messageId/feedback',
+  authenticate,
+  requireRole(['executive']),
+  (req, res, next) => {
+    try {
+      const { sessionId, messageId } = req.params;
+      const { feedback } = req.body;
+
+      if (!['like', 'dislike', 'none'].includes(feedback)) {
+        throw createError(400, '无效的反馈类型', 'CHAT_006');
+      }
+
+      // Ownership check
+      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
+      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
+      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
+
+      chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
+
+      res.json({
+        code: 200,
+        message: 'success',
+        data: {
+          sessionId,
+          messageId,
+          userFeedback: feedback === 'none' ? null : feedback,
+        },
+        requestId: req.requestId,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/v1/chat/executive/sessions/:sessionId/messages/:messageId/regenerate
+// Regenerate the last AI message.
+router.post(
+  '/executive/sessions/:sessionId/messages/:messageId/regenerate',
+  authenticate,
+  requireRole(['executive']),
+  async (req, res, next) => {
+    try {
+      const { sessionId, messageId } = req.params;
+
+      // Ownership check
+      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
+      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
+      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
+
+      const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
+      
+      res.json({
+        code: 200,
+        message: 'success',
+        data: result,
+        requestId: req.requestId,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // DELETE /api/v1/chat/executive/sessions/:sessionId
 // Removes session and all messages (ownership required).
 router.delete(

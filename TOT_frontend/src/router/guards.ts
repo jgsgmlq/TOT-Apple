@@ -292,7 +292,11 @@ export function createRouterGuards(router: Router) {
       }
 
       if (to.path.startsWith('/executive')) {
-        next({ path: '/executive/login', replace: true, query: to.fullPath ? { redirect: to.fullPath } : undefined });
+        next({
+          path: '/executive/login',
+          replace: true,
+          query: to.fullPath ? { redirect: to.fullPath } : undefined,
+        });
         return;
       }
 
@@ -331,7 +335,7 @@ export function createRouterGuards(router: Router) {
       let targetPath = '/employee/login';
       if (to.path.startsWith('/central')) targetPath = '/hq';
       else if (to.path.startsWith('/executive')) targetPath = '/executive/login';
-      
+
       next({
         path: targetPath,
         replace: true,

@@ -362,3 +362,23 @@ CREATE INDEX IF NOT EXISTS idx_di_created_at ON dashboard_insights(created_at);
 **字段说明：** `module_type` 枚举：`trend`、`heatmap_rank`、`funnel`、`warning_stats`。`context_json` 存生成洞察时使用的聚合事实（便于审计）；`extra_params_json` 存 `trendType`、`date`、`rtmLevel` 等。**`up_count` / `down_count`** 为赞、踩累计次数，不存投票人。
 
 **迁移说明：** 旧库若缺 `up_count` / `down_count` 列，由 `server/db/index.js` 的 `migrateDashboardInsightCounts` 自动补列。
+
+## 12. chat_message_feedback 表
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_message_feedback (
+  id            TEXT PRIMARY KEY,
+  message_id    TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('like', 'dislike')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);
+CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);
+```
+
+**字段说明：** 用于持久化用户针对 AI (`assistant`) 消息的“喜欢”/“不喜欢”评价。通过 `UNIQUE(message_id, user_id)` 保证单用户对单条消息只有一条评价。
+**迁移说明：** `server/db/index.js` 的 `ensureChatFeedbackTable` 自动建表。
+

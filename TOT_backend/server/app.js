@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const os = require('os');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const http    = require('http');
@@ -37,6 +38,26 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(requestId);
 
+// ─── 根路径与健康检查（无页面：前端默认 Vite :8001）──────────────────────────────
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'mvp-lan-api' });
+});
+
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    service: 'TOT backend API',
+    hint: '浏览器使用前端：TOT_frontend → pnpm dev（默认 http://localhost:8001）',
+    health: '/api/health',
+    api: '/api/v1',
+  });
+});
+
+// Chrome DevTools 会探测此 URL；返回 204 避免根域 404 噪音（与 CSP 无关）
+app.get('/.well-known/appspecific/com.chrome.devtools.json', (req, res) => {
+  res.status(204).end();
+});
+
 // ─── 路由 ──────────────────────────────────────────────────────────────────────
 app.use('/api/v1/auth',        authRoutes);
 app.use('/api/v1/tasks',       tasksRoutes);
@@ -64,10 +85,34 @@ setupWebSocket(server);
 
 const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws?token=<JWT>`);
+function firstLanIPv4() {
+  const nets = os.networkInterfaces();
+  for (const key of Object.keys(nets)) {
+    for (const net of nets[key] || []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return null;
+}
+
+function printStartupBanner(port) {
+  if (!process.env.JWT_SECRET) {
+    console.warn(
+      '[auth] WARNING: JWT_SECRET not set, using default dev secret. DO NOT use in production.'
+    );
+  }
+  const bindHost = '0.0.0.0';
+  const lan = firstLanIPv4();
+  const lanUrl = lan ? `http://${lan}:${port}` : 'http://192.168.x.x:3000 (no non-loopback IPv4 found)';
+  console.log(`MVP LAN server running at http://${bindHost}:${port}`);
+  console.log(`  Local:   http://localhost:${port}`);
+  console.log(`  LAN:     ${lanUrl}`);
+  console.log(`  WS:      ws://localhost:${port}/ws?token=<JWT>`);
+}
+
+const PORT = Number(process.env.PORT) || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  printStartupBanner(PORT);
   startAutoNudgeScheduler();
 });
 

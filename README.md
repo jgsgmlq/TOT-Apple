@@ -210,14 +210,18 @@ npm run seed
 npm run dev
 ```
 
-**预期输出：**
+**预期输出（`JWT_SECRET` 未设置时会多一行 `[auth] WARNING`；Agent 技能注册日志在其前）：**
 ```
 [auth] WARNING: JWT_SECRET not set, using default dev secret. DO NOT use in production.
 MVP LAN server running at http://0.0.0.0:3000
   Local:   http://localhost:3000
-  LAN:     http://192.168.x.x:3000
-  WS:      ws://localhost:3000/ws
+  LAN:     http://<本机局域网IP>:3000
+  WS:      ws://localhost:3000/ws?token=<JWT>
+[auto-nudge scheduler] every 3600s
 ```
+若已在 `TOT_backend/.env` 中设置 `JWT_SECRET`，则不会出现 `[auth] WARNING` 行；`LAN` 行会解析为本机第一个非回环 IPv4，解析不到时会有占位提示。
+
+**在浏览器打开 `http://localhost:3000`：** 只会看到 JSON API 说明（本仓库无静态页面）。**日常请用前端** `http://localhost:8001`（见下文「启动前端」）。若控制台出现 `com.chrome.devtools.json` 与 CSP 相关提示，多为 Chrome DevTools 的探测行为，可忽略。
 
 **健康检查：**
 ```bash
@@ -244,6 +248,8 @@ pnpm run dev                  # 端口 8001
 
 浏览器访问：总部 `http://localhost:8001/hq`，店员 `http://localhost:8001/employee/login`，Executive Chat `http://localhost:8001/executive/login`。
 
+**若控制台出现 `chrome-error://chromewebdata` 与 “Unsafe attempt to load URL … /hq from frame”：** 说明当前标签页其实是 **Chrome 连接失败错误页**（常见原因：`pnpm run dev` 未启动、8001 被占用、或先打开了地址再启动 Vite）。请先在本机终端确认 Vite 已监听8001（`lsof -i :8001` 或看 `pnpm dev` 输出），然后在 **系统自带 Chrome/Safari 新开标签** 直接访问上述地址；若在 Cursor/VS Code **嵌入式预览**里打开，请改用 **在外部浏览器打开**，避免错误页里嵌套跳转被拦截。
+
 ---
 
 ## 环境变量
@@ -252,7 +258,7 @@ pnpm run dev                  # 端口 8001
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `JWT_SECRET` | 生产必填 | `mvp-dev-secret-change-in-prod` | JWT 签名密钥，开发可忽略警告 |
+| `JWT_SECRET` | 生产必填 | （代码内默认 `mvp-training-secret-2026`） | JWT 签名密钥；未设置时启动会打印 `[auth] WARNING` |
 | `PORT` | 否 | `3000` | 后端监听端口 |
 | `MYPAL_MOCK` | 否 | `0` | 设为 `1` 启用 MyPal 本地 Mock（内部联调阶段必须） |
 | `MYPAL_ENABLED` | 否 | `0` | 设为 `1` 启用真实 MyPal HTTP 对接（凭证就绪后再开） |

@@ -373,6 +373,7 @@ async function seed() {
     db.run('DELETE FROM notification_events');
     db.run('DELETE FROM nudge_records');
     db.run('DELETE FROM task_assignments');
+    db.run('DELETE FROM chat_message_feedback');
     db.run('DELETE FROM chat_messages');
     db.run('DELETE FROM chat_sessions');
     db.run('DELETE FROM mypal_learning_mock');

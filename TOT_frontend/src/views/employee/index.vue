@@ -79,9 +79,17 @@
 
     <!-- 下半部分：信息瀑布流 -->
     <section class="emp-waterfall-section">
-      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding: 0 20px;">
-        <h2 class="section-title" style="margin-bottom: 0; padding: 0;">消息中心 📬</h2>
-        <n-button text type="primary" style="font-size: 13px;" @click="showHistoryModal = true">
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          margin-bottom: 12px;
+          padding: 0 20px;
+        "
+      >
+        <h2 class="section-title" style="margin-bottom: 0; padding: 0">消息中心 📬</h2>
+        <n-button text type="primary" style="font-size: 13px" @click="showHistoryModal = true">
           已完成任务 >
         </n-button>
       </div>
@@ -98,7 +106,7 @@
                   ? 'is-warning-red'
                   : 'is-warning-yellow'
                 : 'is-task',
-              msg.isCompleted ? 'is-completed-task' : ''
+              msg.isCompleted ? 'is-completed-task' : '',
             ]"
             @click="handleViewTask(msg)"
           >
@@ -132,8 +140,11 @@
             </div>
 
             <!-- 卡片底部操作按钮 -->
-            <div class="card-actions" v-if="msg.type === 'task' && msg.isRead && !msg.isCompleted" style="display: flex; justify-content: flex-end;">
-              
+            <div
+              class="card-actions"
+              v-if="msg.type === 'task' && msg.isRead && !msg.isCompleted"
+              style="display: flex; justify-content: flex-end"
+            >
               <n-button
                 class="action-btn do-btn"
                 type="primary"
@@ -256,12 +267,26 @@
         </div>
 
         <!-- 固定底部：已读状态 + 去完成 -->
-        <div v-if="currentTaskDetail && !currentTaskDetail.isCompleted" class="td-footer-actions" style="flex-direction: column; align-items: stretch; gap: 8px;">
-          <div style="text-align: center; margin-bottom: 4px;">
-            <span v-if="readConfirmDone" style="color: #10b981; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
-               <n-icon><CheckCircleOutlined /></n-icon> 已读
+        <div
+          v-if="currentTaskDetail && !currentTaskDetail.isCompleted"
+          class="td-footer-actions"
+          style="flex-direction: column; align-items: stretch; gap: 8px"
+        >
+          <div style="text-align: center; margin-bottom: 4px">
+            <span
+              v-if="readConfirmDone"
+              style="
+                color: #10b981;
+                font-size: 14px;
+                font-weight: 500;
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+              "
+            >
+              <n-icon><CheckCircleOutlined /></n-icon> 已读
             </span>
-            <span v-else style="color: #9ca3af; font-size: 13px;">请下滑阅读全部内容以标记已读</span>
+            <span v-else style="color: #9ca3af; font-size: 13px">请下滑阅读全部内容以标记已读</span>
           </div>
           <n-button
             v-if="readConfirmDone"
@@ -275,9 +300,27 @@
             去完成
           </n-button>
         </div>
-        <div v-else-if="currentTaskDetail && currentTaskDetail.isCompleted" class="td-footer-actions" style="padding: 16px 20px; text-align: center; background: #fafafa; border-top: 1px solid #f3f4f6;">
-          <span style="color: #34c759; font-size: 16px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
-             <n-icon size="18"><CheckCircleOutlined /></n-icon> 任务已完成
+        <div
+          v-else-if="currentTaskDetail && currentTaskDetail.isCompleted"
+          class="td-footer-actions"
+          style="
+            padding: 16px 20px;
+            text-align: center;
+            background: #fafafa;
+            border-top: 1px solid #f3f4f6;
+          "
+        >
+          <span
+            style="
+              color: #34c759;
+              font-size: 16px;
+              font-weight: 600;
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+            "
+          >
+            <n-icon size="18"><CheckCircleOutlined /></n-icon> 任务已完成
           </span>
         </div>
       </div>
@@ -299,13 +342,22 @@
     >
       <div v-if="currentWarnings.length > 0" class="wd-container" style="position: relative">
         <!-- 顶部：红色=紧急，黄色=催办（与 severity 一致） -->
-        <div class="wd-hero" :class="warningModalTone === 'red' ? 'wd-hero--red' : 'wd-hero--yellow'">
-          <div class="wd-icon-box" :class="warningModalTone === 'red' ? 'wd-icon-box--red' : 'wd-icon-box--yellow'">
+        <div
+          class="wd-hero"
+          :class="warningModalTone === 'red' ? 'wd-hero--red' : 'wd-hero--yellow'"
+        >
+          <div
+            class="wd-icon-box"
+            :class="warningModalTone === 'red' ? 'wd-icon-box--red' : 'wd-icon-box--yellow'"
+          >
             <n-icon size="36" color="#ffffff" style="transform: rotate(5deg)"
               ><WarningOutlined
             /></n-icon>
           </div>
-          <h2 class="wd-hero-title" :class="warningModalTone === 'red' ? 'wd-hero-title--red' : 'wd-hero-title--yellow'">
+          <h2
+            class="wd-hero-title"
+            :class="warningModalTone === 'red' ? 'wd-hero-title--red' : 'wd-hero-title--yellow'"
+          >
             {{
               currentWarnings.length > 1
                 ? `您有 ${currentWarnings.length} 条预警通知`
@@ -317,9 +369,7 @@
             :class="warningModalTone === 'red' ? 'wd-hero-sub--red' : 'wd-hero-sub--yellow'"
           >
             {{
-              warningModalTone === 'red'
-                ? '请优先处理以下学习任务'
-                : '请关注并尽快完成以下学习任务'
+              warningModalTone === 'red' ? '请优先处理以下学习任务' : '请关注并尽快完成以下学习任务'
             }}
           </p>
         </div>
@@ -330,11 +380,7 @@
             style="max-height: 260px; overflow-y: auto; padding-right: 4px; margin-bottom: 24px"
             class="custom-scroll"
           >
-            <div
-              v-for="(w, idx) in currentWarnings"
-              :key="w.id"
-              class="wd-item-card"
-            >
+            <div v-for="(w, idx) in currentWarnings" :key="w.id" class="wd-item-card">
               <div
                 class="wd-item-stripe"
                 :class="w.severity === 'red' ? 'wd-item-stripe--red' : 'wd-item-stripe--yellow'"
@@ -344,7 +390,9 @@
                 <n-icon
                   size="20"
                   class="wd-item-warn-icon"
-                  :class="w.severity === 'red' ? 'wd-item-warn-icon--red' : 'wd-item-warn-icon--yellow'"
+                  :class="
+                    w.severity === 'red' ? 'wd-item-warn-icon--red' : 'wd-item-warn-icon--yellow'
+                  "
                 >
                   <WarningOutlined />
                 </n-icon>
@@ -413,14 +461,28 @@
       </div>
     </n-modal>
     <!-- 历史记录 Modal -->
-    <n-modal v-model:show="showHistoryModal" preset="card" title="已完成任务记录" class="history-modal" style="width: 90%; max-width: 400px; border-radius: 16px;">
-      <div v-if="completedTasksData.length === 0" style="text-align: center; color: #999; padding: 40px 0;">
+    <n-modal
+      v-model:show="showHistoryModal"
+      preset="card"
+      title="已完成任务记录"
+      class="history-modal"
+      style="width: 90%; max-width: 400px; border-radius: 16px"
+    >
+      <div
+        v-if="completedTasksData.length === 0"
+        style="text-align: center; color: #999; padding: 40px 0"
+      >
         暂无已完成的任务哦 ~
       </div>
       <div v-else class="history-list">
-        <div v-for="task in completedTasksData" :key="task.id" class="history-card" @click="handleViewTask(task)">
+        <div
+          v-for="task in completedTasksData"
+          :key="task.id"
+          class="history-card"
+          @click="handleViewTask(task)"
+        >
           <div class="h-title">{{ task.title }}</div>
-          <div class="h-time" style="color: #999; font-size: 12px; margin-top: 6px;">
+          <div class="h-time" style="color: #999; font-size: 12px; margin-top: 6px">
             完成时间: {{ formatCompleteTime(task.assignment?.completedAt) }}
           </div>
         </div>
@@ -492,7 +554,12 @@
   function formatCompleteTime(iso: string | null | undefined): string {
     if (!iso) return '未知';
     const d = new Date(iso);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(
+      2,
+      '0'
+    )}`;
   }
 
   const showTaskModal = ref(false);
@@ -706,8 +773,10 @@
         const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
         // 将任务名称与后端的具体预警原因拼接起来
         let rawContent = ev.content || nudgeCopyCache[ev.eventId];
-        let nudgeContent = rawContent ? `【${taskTitle}】触发了预警：${rawContent}` : `【${taskTitle}】您有任务需要尽快处理。`;
-        
+        let nudgeContent = rawContent
+          ? `【${taskTitle}】触发了预警：${rawContent}`
+          : `【${taskTitle}】您有任务需要尽快处理。`;
+
         const severity = ev.severity === 'red' ? 'red' : 'yellow';
         return {
           id: ev.eventId,
@@ -741,7 +810,7 @@
       const now = Date.now();
       const recentDoneTasks = doneTasks.filter((t: any) => {
         const completedAt = new Date(t.assignment.completedAt || t.updatedAt).getTime();
-        return (now - completedAt) <= TWENTY_FOUR_HOURS;
+        return now - completedAt <= TWENTY_FOUR_HOURS;
       });
 
       // 组装要在瀑布流和横幅展示的数据
@@ -752,7 +821,7 @@
         const formattedDdl = `${ddl.getMonth() + 1}月${ddl.getDate()}日 ${String(
           ddl.getHours()
         ).padStart(2, '0')}:${String(ddl.getMinutes()).padStart(2, '0')}`;
-        
+
         const isCompleted = t.assignment?.status === 'completed';
 
         return {
@@ -762,7 +831,18 @@
           type: 'task' as const,
           title: t.title,
           desc: t.description || '总部未提供详细描述',
-          content: isCompleted ? `恭喜！你已于 ${t.assignment?.completedAt ? new Date(t.assignment.completedAt).toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '最近'} 完成该任务。` : `总部下发了一项学习任务，要求在 ${formattedDdl} 前完成。`,
+          content: isCompleted
+            ? `恭喜！你已于 ${
+                t.assignment?.completedAt
+                  ? new Date(t.assignment.completedAt).toLocaleString('zh-CN', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : '最近'
+              } 完成该任务。`
+            : `总部下发了一项学习任务，要求在 ${formattedDdl} 前完成。`,
           deadline: formattedDdl,
           ddlTimestamp: ddl.getTime(),
           time: t.createdAt ? t.createdAt.substring(0, 10) : '刚刚',
@@ -774,7 +854,7 @@
       formattedTasks.sort((a, b) => a.ddlTimestamp - b.ddlTimestamp);
 
       // 横幅只展示未完成的任务
-      pendingBanners.value = formattedTasks.filter(t => !t.isCompleted);
+      pendingBanners.value = formattedTasks.filter((t) => !t.isCompleted);
 
       const tasksForWaterfall = formattedTasks.map((t) => ({
         ...t,
@@ -801,7 +881,7 @@
   };
 
   // --- 烟花动画函数 (原生实现，轻量级) ---
-  const triggerConfetti = (x: number = 0.5, y: number = 0.5) => {
+  const triggerConfetti = (x = 0.5, y = 0.5) => {
     const canvas = document.createElement('canvas');
     canvas.style.position = 'fixed';
     canvas.style.inset = '0';
@@ -817,7 +897,7 @@
 
     const particles: any[] = [];
     const colors = ['#0071e3', '#34c759', '#ff9f0a', '#ff3b30', '#af52de'];
-    
+
     for (let i = 0; i < 100; i++) {
       particles.push({
         x: canvas.width * x,
@@ -827,8 +907,8 @@
         dy: Math.random() * -10 - 5,
         color: colors[Math.floor(Math.random() * colors.length)],
         tilt: Math.floor(Math.random() * 10) - 10,
-        tiltAngleInc: (Math.random() * 0.07) + 0.05,
-        tiltAngle: 0
+        tiltAngleInc: Math.random() * 0.07 + 0.05,
+        tiltAngle: 0,
       });
     }
 
@@ -843,9 +923,9 @@
         p.dy += 0.1; // gravity
         p.x += p.dx;
         p.y += p.dy;
-        
+
         if (p.y <= canvas.height) remaining = true;
-        
+
         ctx.beginPath();
         ctx.lineWidth = p.r;
         ctx.strokeStyle = p.color;
@@ -890,7 +970,8 @@
   // 1. 跳转到微信小程序
   const handleGoToMiniProgram = () => {
     const a = document.createElement('a');
-    a.href = 'weixin://dl/business/?appid=wx8490a792205aecda&path=pages/login/login&query=&env_version=release';
+    a.href =
+      'weixin://dl/business/?appid=wx8490a792205aecda&path=pages/login/login&query=&env_version=release';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -920,9 +1001,9 @@
     try {
       await postAssignmentViewed(aid).send();
       readConfirmDone.value = true;
-      
+
       // 更新外层瀑布流中的状态
-      const t = waterfallMessages.value.find(m => m.assignmentId === aid);
+      const t = waterfallMessages.value.find((m) => m.assignmentId === aid);
       if (t) t.isRead = true;
     } catch (err: any) {
       if (!silent) console.error(err);
@@ -943,7 +1024,7 @@
     const el = document.querySelector('.td-container');
     if (el) {
       if (el.scrollHeight - el.scrollTop - el.clientHeight <= 10) {
-         handleConfirmTaskRead(true);
+        handleConfirmTaskRead(true);
       }
     }
   };
@@ -1026,7 +1107,7 @@
         const loading = message.loading('正在提交…', { duration: 0 });
         try {
           // === [临时测试代码] 屏蔽真实请求，改用定时器模拟 ===
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 500));
           // await putAssignmentStatus(assignmentId, { operationType: 'complete_task' }).send();
         } catch (err: any) {
           message.error(err?.message || '标记完成失败，请稍后重试');
@@ -1347,19 +1428,19 @@
         animation: cardPulse 1.5s ease-out;
       }
       @keyframes warningPulse {
-        0% { 
-          opacity: 0.4; 
-          transform: scale(0.9); 
+        0% {
+          opacity: 0.4;
+          transform: scale(0.9);
           filter: drop-shadow(0 0 0px currentColor);
         }
-        50% { 
-          opacity: 1; 
-          transform: scale(1.25); 
-          filter: drop-shadow(0 0 12px currentColor) brightness(1.2); 
+        50% {
+          opacity: 1;
+          transform: scale(1.25);
+          filter: drop-shadow(0 0 12px currentColor) brightness(1.2);
         }
-        100% { 
-          opacity: 0.4; 
-          transform: scale(0.9); 
+        100% {
+          opacity: 0.4;
+          transform: scale(0.9);
           filter: drop-shadow(0 0 0px currentColor);
         }
       }
@@ -1708,27 +1789,27 @@
     color: #fbbf24;
   }
 
-.history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 4px;
-}
-.history-card {
-  padding: 12px 16px;
-  background: #f9f9fb;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-.history-card:active {
-  background: #f0f0f5;
-}
-.h-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1d1d1f;
-}
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .history-card {
+    padding: 12px 16px;
+    background: #f9f9fb;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .history-card:active {
+    background: #f0f0f5;
+  }
+  .h-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1d1d1f;
+  }
 </style>
