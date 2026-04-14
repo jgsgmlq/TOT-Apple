@@ -237,6 +237,26 @@
     .layout-content {
       flex: auto;
       min-height: 100vh;
+      background-color: #f5f5f7;
+      overflow-y: auto;
+
+      &:fullscreen {
+        padding: 0 !important;
+        background-color: #f5f5f7;
+
+        .layout-content-main {
+          padding-top: 0 !important;
+          margin: 0 !important;
+        }
+
+        .tabs-view {
+          display: none !important;
+        }
+
+        .main-view {
+          padding-top: 0 !important;
+        }
+      }
     }
 
     .n-layout-header.n-layout-header--absolute-positioned {

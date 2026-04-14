@@ -112,7 +112,7 @@
                 </template>
                 <template v-else>
                   <div class="hq-ai-bot-icon">
-                    <n-icon size="18" color="#2563eb"><RobotOutlined /></n-icon>
+                    <n-icon size="18" color="#2563eb"><ColorWandOutline /></n-icon>
                   </div>
                 </template>
               </div>
@@ -584,7 +584,33 @@
     <section class="dashboard-content" v-if="activeTask">
       <n-spin :show="boardStatsLoading" class="board-stats-spin">
         <!-- 1. 概览 KPI（/dashboard/overview） -->
-        <div class="north-star-container">
+        <div class="north-star-container ai-hover-trigger" style="position: relative;">
+          <!-- 智能分析浮动按钮 -->
+          <div class="ai-hover-btn-container" style="position: absolute; right: 24px; top: 24px;">
+            <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+              <template #trigger>
+                <n-button size="small" class="ai-analyze-btn">
+                  <template #icon><n-icon><ColorWandOutline /></n-icon></template>
+                  智能分析
+                </n-button>
+              </template>
+              <div class="ai-analyze-content">
+                <div class="ai-analyze-header">
+                  <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                  <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                </div>
+                <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
+                  {{ getMockSectionAnalysis('northStar') }}
+                </div>
+              <div class="ai-analyze-actions">
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('northStar'), 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                        </div>
+                      </div>
+            </n-popover>
+          </div>
+
           <div class="ns-card">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
@@ -634,17 +660,58 @@
         <!-- 2. 图表与区域拆解 -->
         <div class="middle-section">
           <!-- 趋势折线图 -->
-          <n-card :bordered="false" class="chart-card">
+          <n-card :bordered="false" class="chart-card ai-hover-trigger">
             <template #header>
-              <div class="chart-card-head">
+              <div class="chart-card-head" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                 <div>
-                  <div class="chart-title">完成人数趋势</div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="chart-title">完成人数趋势</div>
+                    <div class="ai-hover-btn-container">
+                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                        <template #trigger>
+                          <n-button size="small" class="ai-analyze-btn">
+                            <template #icon><n-icon><ColorWandOutline /></n-icon></template>
+                            智能分析
+                          </n-button>
+                        </template>
+                        <div class="ai-analyze-content">
+                          <div class="ai-analyze-header">
+                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          </div>
+                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
+                            {{ getMockSectionAnalysis('trend') }}
+                          </div>
+                        <div class="ai-analyze-actions">
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('trend'), 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                        </div>
+                      </div>
+                      </n-popover>
+                    </div>
+                  </div>
                   <div class="chart-sub">日维度为累计完成 · 时维度为所选日期的按小时完成</div>
                 </div>
               </div>
             </template>
             <template #header-extra>
               <n-space align="center" :size="16">
+                <!-- 下拉筛选任务周：仅在按天维度显示 -->
+                <div
+                  v-if="trendTimeDimension === 'day'"
+                  style="display: flex; align-items: center; gap: 8px"
+                >
+                  <span style="font-size: 13px; color: #6b7280">任务周</span>
+                  <n-select
+                    v-model:value="trendSelectedWeek"
+                    :options="trendWeekOptions"
+                    size="small"
+                    style="width: 110px"
+                    @update:value="renderChart"
+                  />
+                </div>
+
                 <!-- 下拉筛选日期：仅在按小时维度显示 -->
                 <div
                   v-if="trendTimeDimension === 'hour'"
@@ -689,11 +756,37 @@
           </n-card>
 
           <!-- RTM L3 拆解 -->
-          <n-card :bordered="false" class="rtm-card">
+          <n-card :bordered="false" class="rtm-card ai-hover-trigger">
             <template #header>
               <div style="display: flex; justify-content: space-between; align-items: center">
                 <div>
-                  <div class="chart-title">区域进度与门店排行</div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="chart-title">区域进度与门店排行</div>
+                    <div class="ai-hover-btn-container">
+                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                        <template #trigger>
+                          <n-button size="small" class="ai-analyze-btn">
+                            <template #icon><n-icon><ColorWandOutline /></n-icon></template>
+                            智能分析
+                          </n-button>
+                        </template>
+                        <div class="ai-analyze-content">
+                          <div class="ai-analyze-header">
+                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          </div>
+                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
+                            {{ getMockSectionAnalysis('rtm') }}
+                          </div>
+                        <div class="ai-analyze-actions">
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('rtm'), 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                        </div>
+                      </div>
+                      </n-popover>
+                    </div>
+                  </div>
                   <div class="chart-sub">按区域/业态热力拆解及各门店具体排行明细</div>
                 </div>
                 <n-space :size="8">
@@ -746,62 +839,89 @@
         </div>
 
         <!-- 3. 链路与预警数据 -->
-        <div class="bottom-section">
-          <!-- 链路数据 -->
-          <n-card :bordered="false" class="metrics-card link-card">
+        <div class="bottom-section" style="grid-template-columns: 1fr;">
+          <!-- 漏斗链路与预警数据合并 -->
+          <n-card :bordered="false" class="metrics-card link-warning-card ai-hover-trigger">
             <template #header>
               <div>
-                <div class="chart-title">漏斗链路数据</div>
-                <div class="chart-sub">全链路统计触达、读取与催办转化效率</div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div class="chart-title">漏斗链路与预警监控</div>
+                  <div class="ai-hover-btn-container">
+                    <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                      <template #trigger>
+                        <n-button size="small" class="ai-analyze-btn">
+                          <template #icon><n-icon><ColorWandOutline /></n-icon></template>
+                          智能分析
+                        </n-button>
+                      </template>
+                      <div class="ai-analyze-content">
+                        <div class="ai-analyze-header">
+                          <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                          <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                        </div>
+                        <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
+                          {{ getMockSectionAnalysis('linkAndWarning') }}
+                        </div>
+                        <div class="ai-analyze-actions">
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('linkAndWarning'), 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                        </div>
+                      </div>
+                    </n-popover>
+                  </div>
+                </div>
+                <div class="chart-sub">全链路转化追踪与各维度预警指标综合看板</div>
               </div>
             </template>
-            <div class="metrics-grid funnel-grid">
-              <div class="metric-box info-style">
-                <div class="m-label"
-                  >任务触达率
-                  <n-tooltip trigger="hover"
-                    ><span
-                      >后端当前口径：有下发 assignment 即视为可触达；有任务时多为
-                      100%。推送覆盖人数见上方「推送覆盖」</span
-                    ><template #trigger
-                      ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
-                ></div>
-                <div class="m-value">{{ formatPct2(activeTask.linkData.reachRate) }}%</div>
-              </div>
+            <div class="combined-metrics-container">
+              <!-- 左侧：链路数据 -->
+              <div class="metrics-grid funnel-grid" style="flex: 1;">
+                <div class="metric-box info-style">
+                  <div class="m-label"
+                    >任务触达率
+                    <n-tooltip trigger="hover"
+                      ><span
+                        >后端当前口径：有下发 assignment 即视为可触达；有任务时多为
+                        100%。推送覆盖人数见上方「推送覆盖」</span
+                      ><template #trigger
+                        ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
+                  ></div>
+                  <div class="m-value">{{ formatPct2(activeTask.linkData.reachRate) }}%</div>
+                </div>
 
-              <div class="funnel-arrow">
-                <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
-              </div>
+                <div class="funnel-arrow">
+                  <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
+                </div>
 
-              <div class="metric-box info-style">
-                <div class="m-label"
-                  >任务读取率
-                  <n-tooltip trigger="hover"
-                    ><span>已读人数（task_detail_open）/ 总 assignment 数</span
-                    ><template #trigger
-                      ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
-                ></div>
-                <div class="m-value">{{ formatPct2(activeTask.linkData.readRate) }}%</div>
-              </div>
+                <div class="metric-box info-style">
+                  <div class="m-label"
+                    >任务读取率
+                    <n-tooltip trigger="hover"
+                      ><span>已读人数（task_detail_open）/ 总 assignment 数</span
+                      ><template #trigger
+                        ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
+                  ></div>
+                  <div class="m-value">{{ formatPct2(activeTask.linkData.readRate) }}%</div>
+                </div>
 
-              <div class="funnel-arrow">
-                <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
-              </div>
+                <div class="funnel-arrow">
+                  <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
+                </div>
 
-              <div class="metric-box info-style">
-                <div class="m-label"
-                  >催办转化率
-                  <n-tooltip trigger="hover"
-                    ><span
-                      >曾被催办（nudge_count 大于 0）且已开始或已完成的 assignment 数 / 被催办
-                      assignment 总数</span
-                    ><template #trigger
-                      ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
-                ></div>
-                <div class="m-value">{{ formatPct2(activeTask.linkData.nudgeRate) }}%</div>
+                <div class="metric-box info-style">
+                  <div class="m-label"
+                    >催办转化率
+                    <n-tooltip trigger="hover"
+                      ><span
+                        >曾被催办（nudge_count 大于 0）且已开始或已完成的 assignment 数 / 被催办
+                        assignment 总数</span
+                      ><template #trigger
+                        ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
+                  ></div>
+                  <div class="m-value">{{ formatPct2(activeTask.linkData.nudgeRate) }}%</div>
+                </div>
               </div>
-            </div>
-          </n-card>
 
           <!-- 预警数据 -->
           <n-card :bordered="false" class="metrics-card warning-card">
@@ -891,9 +1011,13 @@
     UnorderedListOutlined,
     DownOutlined,
     AlertOutlined,
-    RobotOutlined,
     UserOutlined,
+    LikeOutlined,
+    DislikeOutlined,
+    CopyOutlined,
+    CheckOutlined,
   } from '@vicons/antd';
+  import { ColorWandOutline } from '@vicons/ionicons5';
   import aiWatchIcon from '@/assets/icons/AI_watch.png';
   import executiveAIIcon from '@/assets/images/ExecutiveAI.png';
   import { getTaskList, getTaskDetail, deleteTask, triggerTaskAutoNudge } from '@/api/task';
@@ -1019,6 +1143,104 @@
       e.preventDefault();
       handleAiInsightSend();
     }
+  }
+
+
+  const handleAiFeedback = (type: 'up' | 'down') => {
+    message.success(type === 'up' ? '感谢您的反馈！' : '已记录您的反馈，我们将持续优化。');
+  };
+
+  const copiedStates = ref<Record<string, boolean>>({
+    northStar: false, trend: false, rtm: false, linkAndWarning: false
+  });
+
+  const handleCopyAiInsight = (text: string, section: string) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => {
+        message.success('已复制到剪贴板');
+        copiedStates.value[section] = true;
+        setTimeout(() => {
+          copiedStates.value[section] = false;
+        }, 2000);
+      }).catch(() => {
+        message.error('复制失败');
+      });
+    } else {
+      // 降级处理: 针对内网 IP 访问非 HTTPS 环境下 clipboard API 不可用的情况
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        message.success('已复制到剪贴板');
+        copiedStates.value[section] = true;
+        setTimeout(() => {
+          copiedStates.value[section] = false;
+        }, 2000);
+      } catch (error) {
+        message.error('复制失败');
+      } finally {
+        textArea.remove();
+      }
+    }
+  };
+
+  /** 生成局部 Mock 智能分析 */
+  function getMockSectionAnalysis(type: string): string {
+    const t = activeTask.value;
+    if (!t) return '加载数据中...';
+
+    if (type === 'northStar') {
+      const onTime = t.northStar?.onTimeRate ?? 0;
+      const avgTime = t.northStar?.avgTime ?? '0';
+      if (onTime > 80) {
+        return `表现优秀 🚀\n当前按时完成率高达 ${onTime}%，高于历史平均水平。学员人均耗时仅 ${avgTime} 小时，展现出极高的学习热情。`;
+      } else {
+        return `需要关注 ⚠️\n按时完成率仅为 ${onTime}%。人均耗时 ${avgTime} 小时表明部分学员可能遇到了学习瓶颈，建议抽样回访。`;
+      }
+    }
+    if (type === 'trend') {
+      const total = t.overviewSummary?.totalAssignments ?? 0;
+      const completed = t.overviewSummary?.completedCount ?? 0;
+      return `趋势平稳 📈\n目前共有 ${total} 人参与，已完成 ${completed} 人。大部分完成动作集中在下发后的 24 小时内，符合典型的学习曲线。后续建议在下午 2 点推送催办以获得最佳转化。`;
+    }
+    if (type === 'rtm') {
+      let best = '无';
+      let worst = '无';
+      if (t.rtmData && t.rtmData.length > 0) {
+        const sorted = [...t.rtmData].sort((a: any, b: any) => (b.rate || 0) - (a.rate || 0));
+        best = sorted[0]?.name || '无';
+        worst = sorted[sorted.length - 1]?.name || '无';
+      }
+      return `区域极差显著 📊\n【${best}】表现最好，可作为标杆区域进行经验分享；而【${worst}】目前进度落后，建议重点跟进该区域的店长，排查执行阻力。`;
+    }
+    if (type === 'link') {
+      const readRate = t.linkData?.readRate ?? 0;
+      if (readRate < 70) {
+        return `转化流失 🔻\n尽管触达良好，但阅读转化率仅为 ${readRate}%，存在明显断层。建议优化企微推送文案，使用更具紧迫感的标题。`;
+      }
+      return `链路健康 🔗\n触达与读取率 (${readRate}%) 均维持在健康区间。员工对任务通知的响应迅速，无需额外调整策略。`;
+    }
+    if (type === 'warning') {
+      const p0 = t.warningData?.p0Crisis ?? 0;
+      const p1 = t.warningData?.p1Crisis ?? 0;
+      return `风险预警 ⚠️\n目前 P0 临期危机占比 ${p0}%，P1 危机占比 ${p1}%。危机情况主要集中在部分头部门店的兼职员工群体中，建议直接下发区域通报。`;
+    }
+        if (type === 'linkAndWarning') {
+      const readRate = t.linkData?.readRate ?? 0;
+      const p0 = t.warningData?.p0Crisis ?? 0;
+      const p1 = t.warningData?.p1Crisis ?? 0;
+      if (readRate < 70 || p0 > 10) {
+        return `高风险链路 ⚠️\n当前读取转化率(${readRate}%)偏低，且 P0 临期危机已达 ${p0}%。建议立即结合「门店排行」下钻，针对未读或起步异常人员下发强制性企微通报以拉升完课率。`;
+      }
+      return `链路健康 🔗\n整体触达与读取流转正常。P0/P1 风险人群占比较低，建议保持日常自动化催办频率即可，暂时无需人工干预。`;
+    }
+    return '分析生成中...';
   }
 
   /** 生成 Mock 任务分析报告（基于当前 activeTask 数据） */
@@ -1648,6 +1870,7 @@
 
   const selectTask = (id: string) => {
     activeTaskId.value = id;
+    trendSelectedWeek.value = 'all'; // 切换任务时重置任务周筛选
     void loadDashboardForTask(id);
   };
 
@@ -1715,6 +1938,26 @@
   const chartInstance = shallowRef<echarts.ECharts | null>(null);
   const trendTimeDimension = ref<'day' | 'hour'>('day');
   const trendSelectedDay = ref<string>('');
+  const trendSelectedWeek = ref<string>('all');
+
+  const trendWeekOptions = computed(() => {
+    const rows = activeTask.value?.trendDailyRows as TrendPoint[] | undefined;
+    if (!rows?.length) return [{ label: '全部时间', value: 'all' }];
+    
+    const firstDateStr = rows[0].timeKey;
+    const firstTime = new Date(firstDateStr).getTime();
+    const lastDateStr = rows[rows.length - 1].timeKey;
+    const lastTime = new Date(lastDateStr).getTime();
+    
+    const diffDays = Math.max(1, Math.ceil((lastTime - firstTime) / (1000 * 60 * 60 * 24)) + 1);
+    const totalWeeks = Math.ceil(diffDays / 7);
+    
+    const opts = [{ label: '全部时间', value: 'all' }];
+    for (let i = 1; i <= totalWeeks; i++) {
+      opts.push({ label: `第 ${i} 周`, value: String(i) });
+    }
+    return opts;
+  });
 
   const trendDayOptions = computed(() => {
     const rows = activeTask.value?.trendDailyRows as TrendPoint[] | undefined;
@@ -1750,7 +1993,21 @@
     let legendData: string[] = [];
 
     if (!isHour) {
-      const rows = (activeTask.value.trendDailyRows || []) as TrendPoint[];
+      let rows = (activeTask.value.trendDailyRows || []) as TrendPoint[];
+
+      // Filter by selected week
+      if (trendSelectedWeek.value !== 'all' && rows.length > 0) {
+        const firstTime = new Date(rows[0].timeKey).getTime();
+        const weekNum = parseInt(trendSelectedWeek.value, 10);
+        const startTimeMs = firstTime + (weekNum - 1) * 7 * 24 * 60 * 60 * 1000;
+        const endTimeMs = firstTime + weekNum * 7 * 24 * 60 * 60 * 1000;
+        
+        rows = rows.filter(r => {
+          const rTime = new Date(r.timeKey).getTime();
+          return rTime >= startTimeMs && rTime < endTimeMs;
+        });
+      }
+
       if (rows.length === 0) {
         xAxisData = ['暂无完成数据'];
         const cumulativeData = [0];
@@ -2739,6 +2996,65 @@
     }
   }
 
+  /* 各区域 AI 悬浮按钮公共类 */
+  .ai-hover-trigger {
+    position: relative;
+  }
+
+  .ai-hover-trigger .ai-hover-btn-container {
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: translateY(-4px);
+    z-index: 10;
+  }
+
+  .ai-hover-trigger:hover .ai-hover-btn-container,
+  .ai-hover-btn-container:focus-within {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
+
+  .ai-analyze-btn {
+    background: linear-gradient(135deg, #f0f7ff 0%, #e0f2fe 100%);
+    color: #0071e3;
+    border: 1px solid #bae6fd;
+    box-shadow: 0 4px 12px rgba(0, 113, 227, 0.15);
+    font-weight: 400;
+    border-radius: 6px !important;
+  }
+
+  .ai-analyze-btn:hover {
+    background: #dbeafe;
+  }
+
+  .ai-analyze-header {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #f3f4f6;
+    padding-bottom: 10px;
+  }
+
+  .ai-analyze-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 16px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #f3f4f6;
+    color: #9ca3af;
+  }
+
+  .ai-action-icon {
+    cursor: pointer;
+    transition: color 0.2s;
+  }
+
+  .ai-action-icon:hover {
+    color: #0071e3;
+  }
+
   /* 1. 概览 KPI（overview） */
   .north-star-container {
     display: flex;
@@ -2870,6 +3186,33 @@
   }
 
   /* 2. 中间图表区 */
+  
+  .combined-metrics-container {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .vertical-divider {
+    width: 1px;
+    height: 80px;
+    background-color: rgba(0, 0, 0, 0.06);
+    flex-shrink: 0;
+  }
+
+  @media screen and (max-width: 1200px) {
+    .combined-metrics-container {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 16px;
+    }
+    .vertical-divider {
+      width: 100%;
+      height: 1px;
+      margin: 8px 0;
+    }
+  }
+
   .middle-section {
     display: grid;
     grid-template-columns: 1fr 1fr;

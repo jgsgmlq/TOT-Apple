@@ -185,7 +185,7 @@ CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 CREATE TABLE IF NOT EXISTS dashboard_insights (
   id                  TEXT PRIMARY KEY,
   module_type         TEXT NOT NULL
-                        CHECK (module_type IN ('trend', 'heatmap_rank', 'funnel', 'warning_stats')),
+                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts')),
   task_id             TEXT REFERENCES tasks(id),
   filter_rtm          TEXT,
   filter_format       TEXT,

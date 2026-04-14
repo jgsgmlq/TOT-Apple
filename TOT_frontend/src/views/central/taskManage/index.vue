@@ -165,10 +165,12 @@
             <!-- 4. 任务覆盖范围 -->
             <n-form-item label="任务覆盖范围" path="coverage">
               <n-select
-                v-model:value="formValue.coverage"
+                :value="formValue.coverage"
                 :options="coverageOptions"
+                multiple
                 placeholder="请选择需要覆盖的人群范围"
                 :disabled="isDispatched"
+                @update:value="handleCoverageChange"
               />
             </n-form-item>
 
@@ -357,7 +359,7 @@
     startTime: null as number | null,
     endTime: null as number | null,
     platforms: ['MyPal'],
-    coverage: '全员',
+    coverage: ['全员'] as string[],
     alertRules: {
       laggingLifestyle: 3,
       laggingMono: 1,
@@ -378,7 +380,7 @@
     formValue.passScore = 80;
     formValue.endTime = null;
     formValue.platforms = ['MyPal'];
-    formValue.coverage = '全员';
+    formValue.coverage = ['全员'];
     formValue.mypalTaskWeek = '';
     formValue.mypalProductName = '';
     aiInputText.value = '';
@@ -403,9 +405,9 @@
 
       // 还原覆盖范围
       if (res.rtmFilter && res.rtmFilter.length > 0) {
-        formValue.coverage = res.rtmFilter[0].rtm; // 这里前端只做简单的单选 RTM 映射
+        formValue.coverage = res.rtmFilter.map((f: any) => f.rtm); // 支持多选
       } else {
-        formValue.coverage = '全员';
+        formValue.coverage = ['全员'];
       }
 
       formValue.platforms = [];
@@ -470,7 +472,25 @@
     { label: 'Carrier', value: 'Carrier' },
     { label: 'Education', value: 'Education' },
     { label: 'Enterprise', value: 'Enterprise' },
+    { label: '店长 (Store Manager)', value: '店长' },
   ];
+
+  const handleCoverageChange = (values: string[]) => {
+    if (isDispatched.value) return;
+
+    // 如果刚选择了“全员”，则排他
+    const wasAll = formValue.coverage.includes('全员');
+    const isAll = values.includes('全员');
+
+    if (isAll && !wasAll) {
+      formValue.coverage = ['全员'];
+    } else if (values.length > 1 && isAll) {
+      // 已经有全员了，又选了别的，则去掉全员
+      formValue.coverage = values.filter((v) => v !== '全员');
+    } else {
+      formValue.coverage = values;
+    }
+  };
 
   const rules = {
     taskName: { required: true, message: '请输入任务名称', trigger: 'blur' },
@@ -489,7 +509,12 @@
       message: '请至少选择一个学习平台',
       trigger: 'change',
     },
-    coverage: { required: true, message: '请选择覆盖范围', trigger: 'change' },
+    coverage: { 
+      required: true, 
+      type: 'array', 
+      message: '请选择覆盖范围', 
+      trigger: ['blur', 'change'] 
+    },
   };
 
   // --- 将 Markdown 格式转换为干净的纯文本 ---
@@ -611,7 +636,11 @@ ${userDesc}`;
       };
     }
 
-    const isAll = formValue.coverage === '全员';
+    const isAll = formValue.coverage.includes('全员') || formValue.coverage.length === 0;
+    
+    // 过滤掉非 RTM 的特殊选项
+    const rtmList = formValue.coverage.filter((c: string) => c !== '全员' && c !== '店长');
+    const isGlobal = isAll || (formValue.coverage.includes('店长') && rtmList.length === 0);
 
     const draft: Record<string, unknown> = {
       title: formValue.taskName,
@@ -623,8 +652,8 @@ ${userDesc}`;
       startAt,
       passScore: formValue.passScore ?? 80,
       ddlAt,
-      storeScope: isAll ? 'all' : [],
-      rtmFilter: isAll ? null : [{ rtm: formValue.coverage }],
+      storeScope: isGlobal ? 'all' : [],
+      rtmFilter: isGlobal ? null : rtmList.map((c: string) => ({ rtm: c })),
       autoNudgeRules: toApiAutoNudgeRules(formValue.alertRules),
     };
 
@@ -733,7 +762,51 @@ ${userDesc}`;
   .publish-container {
     width: 100%;
     max-width: 1100px;
+    transition: max-width 0.3s ease;
   }
+
+  /* 全屏模式下自适应更宽 */
+  :global(.layout-content:fullscreen) .publish-container {
+    max-width: 1600px;
+    padding: 0 24px;
+  }
+
+  /* 自定义 n-select 多选标签样式 (极致简约 Apple 风格) */
+  :deep(.n-base-selection-tag-wrapper) {
+    .n-tag {
+      background-color:rgb(255, 255, 255) !important;
+      border: none !important;
+      border-radius: 6px !important;
+      padding: 2px 10px !important;
+      height: 28px !important;
+      color:rgb(8, 8, 8) !important;
+      font-weight: 450 !important;
+      font-size: 13px !important;
+      transition: background-color 0.2s ease !important;
+
+      .n-tag__close {
+        font-size: 12px !important;
+        color:rgb(255, 255, 255) !important;
+        margin-left: 4px !important;
+        &:hover {
+          color: #0071e3 !important; /* 悬停关闭按钮时变为红色反馈 */
+          background-color: transparent !important;
+        }
+      }
+
+      &:hover {
+        background-color:rgb(247, 247, 247) !important;
+      }
+    }
+  }
+
+  /* 选中项特别样式（可选，如果需要 Apple Blue 风格可以开启） */
+  /*
+  :deep(.n-base-selection-tag-wrapper .n-tag--checked) {
+     background-color: #0071e3 !important;
+     color: #fff !important;
+  }
+  */
 
   .publish-header {
     margin-bottom: 32px;
