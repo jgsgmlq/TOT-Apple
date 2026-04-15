@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.4.23（2026-04-15）
+
+- **WebSocket `task_assigned`**：向在线店员推送成功时 **不再** 更新 `task_assignments.received_at`（避免与「详情已读」混淆）；改为更新 **`users.last_login_at`**，使看板 **`taskReachRate`** 中「下发后登录」条件覆盖 **WS 实时送达**（`u.last_login_at >= ta.created_at`）。`received_at` 仍由 **`POST /assignments/:id/viewed`**、**开始任务** 等路径按原语义写入。实现见 `server/ws/manager.js`。
+
 ### v1.4.22（2026-04-14）
 
 - **已读主路径**：移除 **`POST /api/v1/events/{eventId}/read`**（原 `notification_click`）。员工侧 **`POST /api/v1/assignments/{assignmentId}/viewed`** 为唯一写入 **`read_receipts`（`source=task_detail_open`）** 的入口；若此前无 `task_assigned` 通知行（如 batch-create），服务端在事务内**补建**与 dispatch 同 **`dedupe_key`** 的 `notification_events` 后再写回执。新建回执时向看板推送 **`operationType: assignment_viewed`**。

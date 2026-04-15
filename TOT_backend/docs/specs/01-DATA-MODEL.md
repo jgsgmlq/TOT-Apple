@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL,             -- central | employee | executive | admin
   store_id      TEXT REFERENCES stores(id),
   employee_id   TEXT UNIQUE REFERENCES employees(id),  -- ★ UNIQUE：一个 employee 只能对应一个 user
-  last_login_at TEXT,                      -- ★ 上次登录时间（UTC 文本 `YYYY-MM-DD HH:MM:SS`）
+  last_login_at TEXT,                      -- ★ 上次登录或 WS task_assigned 送达刷新（本地墙钟）；触达率用
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS users (
 | role | Y | 系统权限角色，决定前端入口和数据可见范围（见 08-PERMISSION-MODEL.md）|
 | store_id | N | 店员必填，指向所属门店；central / executive / admin 为 NULL |
 | employee_id | N | 店员必填，指向 employees 表中对应记录；UNIQUE 保证一对一；其他角色为 NULL |
-| last_login_at | N | 上次登录时间，结合 received_at 用于任务触达率的精准计算 |
+| last_login_at | N | 上次登录时间（`POST /auth/login` 成功时更新）；在线收到 **`task_assigned` WebSocket** 推送成功时亦刷新，用于看板触达率 **`u.last_login_at >= ta.created_at`**，与 **`received_at`**（详情/任务链路时间）解耦 |
 
 > **`role` 与 DB 约束：** 当前 `server/db/schema.sql` 中 **`users.role` 未加 `CHECK` 枚举**；合法取值以应用层校验与 **`08-PERMISSION-MODEL.md`** 为准（`central` \| `employee` \| `executive` \| `admin`）。
 
