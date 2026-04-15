@@ -531,7 +531,7 @@
                 font-weight: 400;
                 color: rgb(62, 64, 66);
                 letter-spacing: -0.3px;
-                padding: 4px 0;
+                padding: 2px 0;
                 font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
                   Helvetica, Arial, sans-serif;
               "
@@ -542,13 +542,13 @@
           <div
             style="
               white-space: pre-wrap;
-              line-height: 1.6;
+              line-height: 1.4;
               font-size: 14px;
               color: #4b5563;
               background: #f5f5f7;
               padding: 16px 20px;
               border-radius: 12px;
-              margin-top: 4px;
+              margin-top: 0px;
               margin-bottom: 8px;
             "
           >
@@ -587,7 +587,12 @@
         <div class="north-star-container ai-hover-trigger" style="position: relative;">
           <!-- 智能分析浮动按钮 -->
           <div class="ai-hover-btn-container" style="position: absolute; right: 24px; top: 24px;">
-            <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+            <n-popover
+              trigger="click"
+              placement="bottom"
+              style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+              @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('northStar')"
+            >
               <template #trigger>
                 <n-button size="small" class="ai-analyze-btn">
                   <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -596,16 +601,43 @@
               </template>
               <div class="ai-analyze-content">
                 <div class="ai-analyze-header">
-                  <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                  <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  <div style="display: flex; align-items: center;">
+                    <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                    <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  </div>
+                  <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                    <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('northStar')" />
+                  </div>
                 </div>
-                <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                  {{ getMockSectionAnalysis('northStar') }}
+                <div class="ai-analyze-body custom-scroll-ai">
+                  <n-spin :show="boardInsightCard.northStar.loading" size="small">                    <div
+                      v-if="!boardInsightCard.northStar.loading && !boardInsightCard.northStar.content"
+                      class="ai-insight-md-empty"
+                    >
+                      暂无内容
+                    </div>
+                    <div
+                      v-else-if="boardInsightCard.northStar.content"
+                      class="ai-insight-md"
+                      v-html="renderInsightMarkdown(boardInsightCard.northStar.content)"
+                    />
+                  </n-spin>
                 </div>
               <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('northStar'), 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.northStar.userVote === 'up' }"
+                            @click="handleAiFeedback('northStar', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.northStar.userVote === 'down' }"
+                            @click="handleAiFeedback('northStar', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
             </n-popover>
@@ -667,7 +699,12 @@
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <div class="chart-title">完成人数趋势</div>
                     <div class="ai-hover-btn-container">
-                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                      <n-popover
+                        trigger="click"
+                        placement="bottom"
+                        style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                        @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('trend')"
+                      >
                         <template #trigger>
                           <n-button size="small" class="ai-analyze-btn">
                             <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -676,16 +713,44 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('trend')" />
+                            </div>
                           </div>
-                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                            {{ getMockSectionAnalysis('trend') }}
+                          <div class="ai-analyze-body custom-scroll-ai">
+                            <n-spin :show="boardInsightCard.trend.loading" size="small">
+                              <div
+                                v-if="!boardInsightCard.trend.loading && !boardInsightCard.trend.content"
+                                class="ai-insight-md-empty"
+                              >
+                                暂无内容
+                              </div>
+                              <div
+                                v-else-if="boardInsightCard.trend.content"
+                                class="ai-insight-md"
+                                v-html="renderInsightMarkdown(boardInsightCard.trend.content)"
+                              />
+                            </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('trend'), 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.trend.userVote === 'up' }"
+                            @click="handleAiFeedback('trend', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.trend.userVote === 'down' }"
+                            @click="handleAiFeedback('trend', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.trend.content, 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                       </n-popover>
@@ -763,7 +828,12 @@
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <div class="chart-title">区域进度与门店排行</div>
                     <div class="ai-hover-btn-container">
-                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                      <n-popover
+                        trigger="click"
+                        placement="bottom"
+                        style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                        @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('rtm')"
+                      >
                         <template #trigger>
                           <n-button size="small" class="ai-analyze-btn">
                             <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -772,16 +842,44 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('rtm')" />
+                            </div>
                           </div>
-                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                            {{ getMockSectionAnalysis('rtm') }}
+                          <div class="ai-analyze-body custom-scroll-ai">
+                            <n-spin :show="boardInsightCard.rtm.loading" size="small">
+                              <div
+                                v-if="!boardInsightCard.rtm.loading && !boardInsightCard.rtm.content"
+                                class="ai-insight-md-empty"
+                              >
+                                暂无内容
+                              </div>
+                              <div
+                                v-else-if="boardInsightCard.rtm.content"
+                                class="ai-insight-md"
+                                v-html="renderInsightMarkdown(boardInsightCard.rtm.content)"
+                              />
+                            </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('rtm'), 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.rtm.userVote === 'up' }"
+                            @click="handleAiFeedback('rtm', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.rtm.userVote === 'down' }"
+                            @click="handleAiFeedback('rtm', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.rtm.content, 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                       </n-popover>
@@ -847,7 +945,12 @@
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <div class="chart-title">漏斗链路与预警监控</div>
                   <div class="ai-hover-btn-container">
-                    <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                    <n-popover
+                      trigger="click"
+                      placement="bottom"
+                      style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                      @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('linkAndWarning')"
+                    >
                       <template #trigger>
                         <n-button size="small" class="ai-analyze-btn">
                           <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -856,16 +959,44 @@
                       </template>
                       <div class="ai-analyze-content">
                         <div class="ai-analyze-header">
-                          <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                          <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          <div style="display: flex; align-items: center;">
+                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          </div>
+                          <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                            <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('linkAndWarning')" />
+                          </div>
                         </div>
-                        <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                          {{ getMockSectionAnalysis('linkAndWarning') }}
+                        <div class="ai-analyze-body custom-scroll-ai">
+                          <n-spin :show="boardInsightCard.linkAndWarning.loading" size="small">
+                            <div
+                              v-if="!boardInsightCard.linkAndWarning.loading && !boardInsightCard.linkAndWarning.content"
+                              class="ai-insight-md-empty"
+                            >
+                              暂无内容
+                            </div>
+                            <div
+                              v-else-if="boardInsightCard.linkAndWarning.content"
+                              class="ai-insight-md"
+                              v-html="renderInsightMarkdown(boardInsightCard.linkAndWarning.content)"
+                            />
+                          </n-spin>
                         </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('linkAndWarning'), 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.linkAndWarning.userVote === 'up' }"
+                            @click="handleAiFeedback('linkAndWarning', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.linkAndWarning.userVote === 'down' }"
+                            @click="handleAiFeedback('linkAndWarning', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.linkAndWarning.content, 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                     </n-popover>
@@ -923,14 +1054,10 @@
                 </div>
               </div>
 
-          <!-- 预警数据 -->
-          <n-card :bordered="false" class="metrics-card warning-card">
-            <template #header>
-              <div>
-                <div class="chart-title">预警率统计</div>
-                <div class="chart-sub">点击下方具体预警指标可查看风险门店名单</div>
-              </div>
-            </template>
+              <div class="vertical-divider"></div>
+
+              <!-- 预警数据 -->
+              <n-card :bordered="false" class="metrics-card warning-card" style="flex: 1;">
             <div class="metrics-grid">
               <div
                 class="metric-box warn-style is-clickable"
@@ -1029,12 +1156,19 @@
     getDashboardTrend,
     getDashboardStoreRank,
     getDashboardWarnings,
+    streamDashboardInsight,
+    postDashboardInsightVote,
     type TrendPoint,
+    type CreateDashboardInsightBody,
   } from '@/api/dashboard';
   import { useMessage, useDialog } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
   import { useGlobSetting } from '@/hooks/setting';
-  import { displayAutoNudgeRules, hasAutoNudgeRulesConfigured } from '@/utils/autoNudgeRules';
+  import {
+    displayAutoNudgeRules,
+    hasAutoNudgeRulesConfigured,
+  } from '@/utils/autoNudgeRules';
+  import { renderInsightMarkdown } from '@/utils/markdownRender';
 
   const message = useMessage();
   const dialog = useDialog();
@@ -1048,6 +1182,72 @@
   const drillDownLoading = ref(false);
   const drillDownList = ref<any[]>([]);
   const drillDownType = ref<'rank' | 'warning'>('rank');
+
+  type BoardInsightSection = 'northStar' | 'trend' | 'rtm' | 'linkAndWarning';
+
+  interface BoardInsightCardState {
+    content: string;
+    loading: boolean;
+    insightId: string | null;
+    up: number;
+    down: number;
+    /** 当前浏览器会话内对本条洞察的投票：与 sessionStorage 同步，用于互斥与取消 */
+    userVote: 'up' | 'down' | null;
+    /** 与当前筛选一致的缓存键，避免重复请求 */
+    fetchedKey: string;
+  }
+
+  const INSIGHT_VOTE_STORAGE_PREFIX = 'tot_insight_vote_';
+
+  function readStoredInsightVote(insightId: string): 'up' | 'down' | null {
+    if (typeof sessionStorage === 'undefined') return null;
+    try {
+      const v = sessionStorage.getItem(INSIGHT_VOTE_STORAGE_PREFIX + insightId);
+      if (v === 'up' || v === 'down') return v;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStoredInsightVote(insightId: string, v: 'up' | 'down' | null) {
+    if (typeof sessionStorage === 'undefined') return;
+    try {
+      const key = INSIGHT_VOTE_STORAGE_PREFIX + insightId;
+      if (v == null) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, v);
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }
+
+  function emptyBoardInsightCard(): BoardInsightCardState {
+    return {
+      content: '',
+      loading: false,
+      insightId: null,
+      up: 0,
+      down: 0,
+      userVote: null,
+      fetchedKey: '',
+    };
+  }
+
+  const boardInsightCard = ref<Record<BoardInsightSection, BoardInsightCardState>>({
+    northStar: emptyBoardInsightCard(),
+    trend: emptyBoardInsightCard(),
+    rtm: emptyBoardInsightCard(),
+    linkAndWarning: emptyBoardInsightCard(),
+  });
+
+  function resetBoardInsightCards() {
+    boardInsightCard.value = {
+      northStar: emptyBoardInsightCard(),
+      trend: emptyBoardInsightCard(),
+      rtm: emptyBoardInsightCard(),
+      linkAndWarning: emptyBoardInsightCard(),
+    };
+  }
 
   /** 打开门店排名下钻 (Top/Bottom) */
   async function openStoreRankDrillDown(type: 'top' | 'bottom') {
@@ -1148,10 +1348,7 @@
   }
 
 
-  const handleAiFeedback = (type: 'up' | 'down') => {
-    message.success(type === 'up' ? '感谢您的反馈！' : '已记录您的反馈，我们将持续优化。');
-  };
-
+  const globalReasoningEnabled = ref(false);
   const copiedStates = ref<Record<string, boolean>>({
     northStar: false, trend: false, rtm: false, linkAndWarning: false
   });
@@ -1191,59 +1388,6 @@
       }
     }
   };
-
-  /** 生成局部 Mock 智能分析 */
-  function getMockSectionAnalysis(type: string): string {
-    const t = activeTask.value;
-    if (!t) return '加载数据中...';
-
-    if (type === 'northStar') {
-      const onTime = t.northStar?.onTimeRate ?? 0;
-      const avgTime = t.northStar?.avgTime ?? '0';
-      if (onTime > 80) {
-        return `表现优秀 🚀\n当前按时完成率高达 ${onTime}%，高于历史平均水平。学员人均耗时仅 ${avgTime} 小时，展现出极高的学习热情。`;
-      } else {
-        return `需要关注 ⚠️\n按时完成率仅为 ${onTime}%。人均耗时 ${avgTime} 小时表明部分学员可能遇到了学习瓶颈，建议抽样回访。`;
-      }
-    }
-    if (type === 'trend') {
-      const total = t.overviewSummary?.totalAssignments ?? 0;
-      const completed = t.overviewSummary?.completedCount ?? 0;
-      return `趋势平稳 📈\n目前共有 ${total} 人参与，已完成 ${completed} 人。大部分完成动作集中在下发后的 24 小时内，符合典型的学习曲线。后续建议在下午 2 点推送催办以获得最佳转化。`;
-    }
-    if (type === 'rtm') {
-      let best = '无';
-      let worst = '无';
-      if (t.rtmData && t.rtmData.length > 0) {
-        const sorted = [...t.rtmData].sort((a: any, b: any) => (b.rate || 0) - (a.rate || 0));
-        best = sorted[0]?.name || '无';
-        worst = sorted[sorted.length - 1]?.name || '无';
-      }
-      return `区域极差显著 📊\n【${best}】表现最好，可作为标杆区域进行经验分享；而【${worst}】目前进度落后，建议重点跟进该区域的店长，排查执行阻力。`;
-    }
-    if (type === 'link') {
-      const readRate = t.linkData?.readRate ?? 0;
-      if (readRate < 70) {
-        return `转化流失 🔻\n尽管触达良好，但阅读转化率仅为 ${readRate}%，存在明显断层。建议优化企微推送文案，使用更具紧迫感的标题。`;
-      }
-      return `链路健康 🔗\n触达与读取率 (${readRate}%) 均维持在健康区间。员工对任务通知的响应迅速，无需额外调整策略。`;
-    }
-    if (type === 'warning') {
-      const p0 = t.warningData?.p0Crisis ?? 0;
-      const p1 = t.warningData?.p1Crisis ?? 0;
-      return `风险预警 ⚠️\n目前 P0 临期危机占比 ${p0}%，P1 危机占比 ${p1}%。危机情况主要集中在部分头部门店的兼职员工群体中，建议直接下发区域通报。`;
-    }
-        if (type === 'linkAndWarning') {
-      const readRate = t.linkData?.readRate ?? 0;
-      const p0 = t.warningData?.p0Crisis ?? 0;
-      const p1 = t.warningData?.p1Crisis ?? 0;
-      if (readRate < 70 || p0 > 10) {
-        return `高风险链路 ⚠️\n当前读取转化率(${readRate}%)偏低，且 P0 临期危机已达 ${p0}%。建议立即结合「门店排行」下钻，针对未读或起步异常人员下发强制性企微通报以拉升完课率。`;
-      }
-      return `链路健康 🔗\n整体触达与读取流转正常。P0/P1 风险人群占比较低，建议保持日常自动化催办频率即可，暂时无需人工干预。`;
-    }
-    return '分析生成中...';
-  }
 
   /** 生成 Mock 任务分析报告（基于当前 activeTask 数据） */
   function generateMockTaskAnalysis(): string {
@@ -1942,6 +2086,195 @@
   const trendSelectedDay = ref<string>('');
   const trendSelectedWeek = ref<string>('all');
 
+  function buildBoardInsightRequestKey(section: BoardInsightSection): string {
+    const tid = activeTaskId.value || '';
+    const r = globalReasoningEnabled.value ? 'R1' : 'V3';
+    if (section === 'northStar') return `north_star::${tid}::${r}`;
+    if (section === 'trend') {
+      const dim = trendTimeDimension.value;
+      const d = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
+      const w = trendSelectedWeek.value;
+      return `trend::${tid}::${dim}::${d}::${w}::${r}`;
+    }
+    if (section === 'rtm') return `channel::${tid}::${r}`;
+    return `funnel::${tid}::${r}`;
+  }
+
+  function buildBoardInsightPayload(section: BoardInsightSection): CreateDashboardInsightBody | null {
+    const tid = activeTaskId.value;
+    if (!tid) return null;
+    const base = { reasoning: globalReasoningEnabled.value };
+    if (section === 'northStar') {
+      return { ...base, insightType: 'north_star', taskId: tid };
+    }
+    if (section === 'trend') {
+      if (trendTimeDimension.value === 'hour') {
+        const date = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
+        return {
+          ...base,
+          insightType: 'completion_daily',
+          taskId: tid,
+          date,
+          trendType: 'hourly',
+        };
+      }
+      return {
+        ...base,
+        insightType: 'completion_weekly',
+        taskId: tid,
+        trendType: 'daily',
+      };
+    }
+    if (section === 'rtm') {
+      return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
+    }
+    return { ...base, insightType: 'funnel_alerts', taskId: tid };
+  }
+
+  async function ensureBoardInsightOnOpen(section: BoardInsightSection) {
+    const tid = activeTaskId.value;
+    if (!tid || !activeTask.value?.dispatched) {
+      message.warning('请先选择已下发的任务');
+      return;
+    }
+    const key = buildBoardInsightRequestKey(section);
+    const cur = boardInsightCard.value[section];
+    if (cur.fetchedKey === key && cur.content) return;
+
+    boardInsightCard.value[section] = { ...cur, loading: true };
+    try {
+      const payload = buildBoardInsightPayload(section);
+      if (!payload) {
+        boardInsightCard.value[section] = { ...boardInsightCard.value[section], loading: false };
+        message.error('无法构造洞察请求');
+        return;
+      }
+      boardInsightCard.value[section] = {
+        ...boardInsightCard.value[section],
+        loading: true,
+        content: '',
+        insightId: null,
+        userVote: null,
+        fetchedKey: key,
+      };
+
+      let isFirstChunk = true;
+      let wasReasoning = false;
+      let didReasoning = false;
+
+      await streamDashboardInsight(
+        payload,
+        (deltaData) => {
+          if (isFirstChunk) {
+            boardInsightCard.value[section].loading = false;
+            isFirstChunk = false;
+            if (deltaData.phase === 'reasoning') {
+              boardInsightCard.value[section].content += '> **思考过程：**\n> ';
+              wasReasoning = true;
+              didReasoning = true;
+            }
+          }
+          if (deltaData && deltaData.text) {
+            if (deltaData.phase === 'reasoning') {
+              const formattedText = deltaData.text.replace(/\n/g, '\n> ');
+              boardInsightCard.value[section].content += formattedText;
+              wasReasoning = true;
+              didReasoning = true;
+            } else {
+              if (wasReasoning) {
+                boardInsightCard.value[section].content += '\n\n---\n\n';
+                wasReasoning = false;
+              }
+              boardInsightCard.value[section].content += deltaData.text;
+            }
+          }
+        },
+        (fullData) => {
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: didReasoning ? boardInsightCard.value[section].content : fullData.content,
+            insightId: fullData.insightId,
+            up: fullData.voteSummary?.up ?? 0,
+            down: fullData.voteSummary?.down ?? 0,
+            userVote: readStoredInsightVote(fullData.insightId),
+          };
+        },
+        (error) => {
+          console.error('[dashboardInsight] stream error:', error);
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: boardInsightCard.value[section].content || '获取智能分析失败',
+          };
+        }
+      );
+    } catch {
+      boardInsightCard.value[section] = {
+        ...boardInsightCard.value[section],
+        loading: false,
+        content: '',
+        insightId: null,
+        userVote: null,
+        fetchedKey: '',
+      };
+    }
+  }
+
+  const insightVotePending = ref<Record<BoardInsightSection, boolean>>({
+    northStar: false,
+    trend: false,
+    rtm: false,
+    linkAndWarning: false,
+  });
+
+  async function toggleBoardInsightVote(section: BoardInsightSection, vote: 'up' | 'down') {
+    const card = boardInsightCard.value[section];
+    const id = card.insightId;
+    if (!id) {
+      message.warning('请等待洞察生成完成后再反馈');
+      return;
+    }
+    if (insightVotePending.value[section]) return;
+    insightVotePending.value[section] = true;
+
+    const prev = card.userVote ?? null;
+    try {
+      if (prev === vote) {
+        // 取消当前的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'remove' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = null;
+        writeStoredInsightVote(id, null);
+        message.info('已取消反馈');
+      } else {
+        // 如果有反向的操作，先移除
+        if (prev === 'up') {
+          await postDashboardInsightVote(id, { vote: 'up', action: 'remove' }).send();
+        } else if (prev === 'down') {
+          await postDashboardInsightVote(id, { vote: 'down', action: 'remove' }).send();
+        }
+
+        // 执行新的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'add' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = vote;
+        writeStoredInsightVote(id, vote);
+        message.success(vote === 'up' ? '感谢您的点赞！' : '已记录您的反馈，我们将持续优化。');
+      }
+    } catch {
+      // 错误已由拦截器处理
+    } finally {
+      insightVotePending.value[section] = false;
+    }
+  }
+
+  function handleAiFeedback(section: BoardInsightSection, vote: 'up' | 'down') {
+    void toggleBoardInsightVote(section, vote);
+  }
+
   const trendWeekOptions = computed(() => {
     const rows = activeTask.value?.trendDailyRows as TrendPoint[] | undefined;
     if (!rows?.length) return [{ label: '全部时间', value: 'all' }];
@@ -2214,6 +2547,14 @@
   watch(trendSelectedDay, () => {
     if (trendTimeDimension.value !== 'hour' || !activeTaskId.value) return;
     void fetchHourlyTrendForActiveTask().then(() => nextTick(() => renderChart()));
+  });
+
+  watch(activeTaskId, () => {
+    resetBoardInsightCards();
+  });
+
+  watch([trendTimeDimension, trendSelectedWeek, trendSelectedDay], () => {
+    boardInsightCard.value.trend = emptyBoardInsightCard();
   });
 
   watch(
@@ -3031,16 +3372,45 @@
     background: #dbeafe;
   }
 
+  .ai-analyze-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 300px;
+    max-height: 360px;
+    box-sizing: border-box;
+  }
+
   .ai-analyze-header {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     border-bottom: 1px solid #f3f4f6;
     padding-bottom: 10px;
+  }
+
+  .ai-analyze-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .ai-analyze-body .ai-insight-md,
+  .ai-analyze-body .ai-insight-md-empty {
+    margin-top: 0;
+  }
+
+  .ai-analyze-body :deep(.n-spin-container) {
+    min-height: min-content;
   }
 
   .ai-analyze-actions {
     display: flex;
     justify-content: flex-end;
+    flex-shrink: 0;
     gap: 16px;
     margin-top: 12px;
     padding-top: 12px;
@@ -3055,6 +3425,109 @@
 
   .ai-action-icon:hover {
     color: #0071e3;
+  }
+
+  .ai-action-icon.is-active-up {
+    color: #10b981 !important;
+  }
+
+  .ai-action-icon.is-active-down {
+    color: #f97316 !important;
+  }
+
+  .ai-insight-md-empty {
+    font-size: 14px;
+    color: #9ca3af;
+    margin-top: 12px;
+    min-height: 48px;
+  }
+
+  .ai-insight-md {
+    font-size: 14px;
+    color: #4b5563;
+    line-height: 1.65;
+    margin-top: 12px;
+    min-height: 48px;
+    word-break: break-word;
+
+    :deep(h1),
+    :deep(h2),
+    :deep(h3),
+    :deep(h4) {
+      font-weight: 600;
+      color: #1d1d1f;
+      margin: 12px 0 8px;
+      line-height: 1.35;
+      &:first-child {
+        margin-top: 0;
+      }
+    }
+    :deep(h1) {
+      font-size: 16px;
+    }
+    :deep(h2) {
+      font-size: 15px;
+    }
+    :deep(h3),
+    :deep(h4) {
+      font-size: 14px;
+    }
+    :deep(p) {
+      margin: 0 0 8px;
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+    :deep(ul),
+    :deep(ol) {
+      margin: 0 0 8px;
+      padding-left: 1.25em;
+    }
+    :deep(li) {
+      margin: 4px 0;
+    }
+    :deep(strong) {
+      font-weight: 600;
+      color: #374151;
+    }
+    :deep(code) {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      background: #f3f4f6;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    :deep(pre) {
+      margin: 8px 0;
+      padding: 10px 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      code {
+        padding: 0;
+        background: transparent;
+      }
+    }
+    :deep(blockquote) {
+      margin: 8px 0;
+      padding: 6px 0 6px 12px;
+      border-left: 3px solid #e5e7eb;
+      color: #6b7280;
+    }
+    :deep(hr) {
+      border: none;
+      border-top: 1px solid #e5e7eb;
+      margin: 10px 0;
+    }
+    :deep(a) {
+      color: #0071e3;
+      text-decoration: none;
+      &:hover {
+        text-decoration: underline;
+      }
+    }
   }
 
   /* 1. 概览 KPI（overview） */

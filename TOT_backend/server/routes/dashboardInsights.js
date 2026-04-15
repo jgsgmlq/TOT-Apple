@@ -34,8 +34,7 @@ router.post(
   requireRole(['central', 'executive', 'admin']),
   (req, res, next) => {
     try {
-      const { vote } = req.body || {};
-      const data = recordVote(req.params.insightId, vote);
+      const data = recordVote(req.params.insightId, req.body || {});
       res.json({ code: 200, message: 'success', data, requestId: req.requestId });
     } catch (err) {
       next(err);

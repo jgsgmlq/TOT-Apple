@@ -707,8 +707,15 @@ async function createInsight(body, userId, req, res) {
   res.end();
 }
 
-/** 仅累加汇总计数，不记录投票人。 */
-function recordVote(insightId, voteStr) {
+/**
+ * 累加/减少汇总计数，不记录投票人。
+ * body: { vote: 'up'|'down', action?: 'add'|'remove' }；兼容旧入参 vote 为纯字符串。
+ */
+function recordVote(insightId, body) {
+  const raw = typeof body === 'string' ? { vote: body } : body || {};
+  const voteStr = String(raw.vote || '').trim();
+  const action = raw.action === 'remove' ? 'remove' : 'add';
+
   if (voteStr !== 'up' && voteStr !== 'down') {
     throw createError(400, 'vote 必须为 up 或 down', 'INSIGHT_003');
   }
@@ -716,9 +723,21 @@ function recordVote(insightId, voteStr) {
   if (!row) throw createError(404, '洞察不存在', 'INSIGHT_404');
 
   if (voteStr === 'up') {
-    db.run('UPDATE dashboard_insights SET up_count = up_count + 1 WHERE id = ?', [insightId]);
-  } else {
+    if (action === 'add') {
+      db.run('UPDATE dashboard_insights SET up_count = up_count + 1 WHERE id = ?', [insightId]);
+    } else {
+      db.run(
+        'UPDATE dashboard_insights SET up_count = up_count - 1 WHERE id = ? AND up_count > 0',
+        [insightId]
+      );
+    }
+  } else if (action === 'add') {
     db.run('UPDATE dashboard_insights SET down_count = down_count + 1 WHERE id = ?', [insightId]);
+  } else {
+    db.run(
+      'UPDATE dashboard_insights SET down_count = down_count - 1 WHERE id = ? AND down_count > 0',
+      [insightId]
+    );
   }
 
   const after = db.get(
