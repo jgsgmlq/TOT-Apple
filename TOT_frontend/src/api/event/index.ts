@@ -25,10 +25,6 @@ export const getEvents = (params?: any) => {
   });
 };
 
-export const markEventRead = (eventId: string) => {
-  return Alova.Post(`/events/${eventId}/read`);
-};
-
 export const getUnreadCount = () => {
   return Alova.Get<{ unreadCount: number }>('/events/unread-count', { localCache: 0 });
 };

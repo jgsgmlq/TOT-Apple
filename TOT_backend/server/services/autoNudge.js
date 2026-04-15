@@ -162,8 +162,8 @@ async function evaluateAndTriggerAutoNudges(taskId) {
  * 文案为规则对应的固定话术，前缀拼接任务名称。
  */
 async function processAutoNudgeTargetsAsync(taskId, targets) {
-  const taskRow = db.get('SELECT name FROM tasks WHERE id = ?', [taskId]);
-  const taskName = taskRow && taskRow.name;
+  const taskRow = db.get('SELECT title FROM tasks WHERE id = ?', [taskId]);
+  const taskName = taskRow && taskRow.title;
 
   for (const target of targets) {
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;

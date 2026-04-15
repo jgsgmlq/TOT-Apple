@@ -32,7 +32,13 @@
         <template #toolbar> </template>
       </BasicTable>
 
-      <n-modal v-model:show="showModal" :show-icon="false" preset="dialog" title="新建">
+      <n-modal
+        v-model:show="showModal"
+        :to="overlayTeleportTarget"
+        :show-icon="false"
+        preset="dialog"
+        title="新建"
+      >
         <n-form
           :model="formParams"
           :rules="rules"
@@ -76,6 +82,7 @@
   import { PlusOutlined } from '@vicons/antd';
   import { useRouter } from 'vue-router';
   import { type FormRules } from 'naive-ui';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
 
   const rules: FormRules = {
     name: {

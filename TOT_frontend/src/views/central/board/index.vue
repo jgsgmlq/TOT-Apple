@@ -40,6 +40,7 @@
 
     <n-drawer
       v-model:show="showAiInsightDrawer"
+      :to="overlayTeleportTarget"
       :width="472"
       placement="right"
       :trap-focus="false"
@@ -149,6 +150,7 @@
     <!-- 已下发任务列表（瀑布流） -->
     <n-modal
       v-model:show="showDispatchedListModal"
+      :to="overlayTeleportTarget"
       preset="card"
       title="已布置的任务"
       :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
@@ -270,6 +272,7 @@
     <!-- 统一任务预警规则 -->
     <n-modal
       v-model:show="showAlertRulesModal"
+      :to="overlayTeleportTarget"
       preset="card"
       title="统一预警规则"
       :style="{ width: 'min(480px, 90vw)', maxHeight: '80vh' }"
@@ -353,105 +356,111 @@
       </div>
     </n-modal>
 
+    <!-- 区域进度详情下钻弹窗 -->
+    <n-modal
+      v-model:show="showRtmDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="`${currentRtmDrillDownName} - 数据明细`"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+        <n-radio-group v-model:value="rtmDrillDownLevel" size="small" @update:value="onRtmDrillDownLevelChange">
+          <n-radio-button value="dealer">按经销商</n-radio-button>
+          <n-radio-button value="store">按门店</n-radio-button>
+        </n-radio-group>
+      </div>
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="rtmDrillDownColumns"
+          :data="rtmDrillDownData"
+          :loading="rtmDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => `${row.name}-${row.assignmentCount}-${row.completedCount}`"
+        />
+      </div>
+    </n-modal>
+
+    <!-- 北极星指标（按时完成率/人均完成时间）下钻弹窗 -->
+    <n-modal
+      v-model:show="showNsDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="nsDrillDownTitle"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="nsDrillDownColumns"
+          :data="nsDrillDownData"
+          :loading="nsDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => `${row.name}-${row.assignmentCount}-${row.completedCount}`"
+        />
+      </div>
+    </n-modal>
+
+    <!-- 漏斗链路下钻弹窗（门店维度触达/读取/转化率） -->
+    <n-modal
+      v-model:show="showLinkDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="linkDrillDownTitle"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="linkDrillDownColumns"
+          :data="linkDrillDownData"
+          :loading="linkDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => row.name"
+        />
+      </div>
+    </n-modal>
+
     <!-- 下钻详情列表弹窗 (门店明细) -->
     <n-modal
       v-model:show="showDrillDownModal"
+      :to="overlayTeleportTarget"
       preset="card"
       :title="drillDownTitle"
-      :style="{ width: 'min(640px, 94vw)', maxHeight: '80vh' }"
+      :style="{ width: 'min(640px, 94vw)', height: 'min(640px, 88vh)' }"
       :segmented="{ content: 'soft', footer: 'soft' }"
-      class="hq-drilldown-modal"
+      class="hq-drilldown-modal hq-drilldown-modal--store flex-modal"
     >
-      <n-spin :show="drillDownLoading">
-        <div
-          class="drilldown-body custom-scroll"
-          style="max-height: 60vh; overflow-y: auto; padding: 4px"
-        >
-          <n-empty
-            v-if="!drillDownLoading && drillDownList.length === 0"
-            description="暂无符合条件的门店记录"
-          />
-
-          <div v-else class="drilldown-list">
-            <!-- 列表项：每一行代表一个门店 -->
-            <div
-              v-for="item in drillDownList"
-              :key="item.storeId"
-              class="dd-item"
-              style="
-                display: flex;
-                align-items: center;
-                padding: 16px;
-                border-bottom: 1px solid #f3f4f6;
-                transition: background 0.2s;
-              "
-            >
-              <!-- 1. 🧍‍♂️ 图标与门店名称 -->
-              <div
-                class="dd-col-info"
-                style="flex: 1; display: flex; align-items: center; gap: 12px"
-              >
-                <div
-                  class="dd-avatar"
-                  style="
-                    background: #f5f5f7;
-                    width: 36px;
-                    height: 36px;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #86868b;
-                  "
-                >
-                  <n-icon size="20"><UserOutlined /></n-icon>
-                </div>
-                <div style="display: flex; flex-direction: column">
-                  <span style="font-weight: 600; color: #1d1d1f; font-size: 14px">{{
-                    item.storeName
-                  }}</span>
-                  <span style="font-size: 12px; color: #86868b">ID: {{ item.storeId }}</span>
-                </div>
-              </div>
-
-              <!-- 2. 进度信息 -->
-              <div class="dd-col-progress" style="width: 240px; text-align: right">
-                <div
-                  style="
-                    margin-bottom: 4px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: baseline;
-                  "
-                >
-                  <span style="font-size: 12px; color: #6b7280">
-                    已完成: <strong>{{ item.completedCount }}</strong> /
-                    {{ item.assignmentCount || item.totalCount }}
-                  </span>
-                  <span style="font-weight: 700; color: #0071e3; font-size: 15px"
-                    >{{ formatPct2(item.completionRate) }}%</span
-                  >
-                </div>
-                <n-progress
-                  type="line"
-                  :percentage="pctForBar(item.completionRate)"
-                  :indicator-placement="'hide'"
-                  :color="item.completionRate >= 100 ? '#34c759' : '#0071e3'"
-                  processing
-                  style="height: 8px"
-                />
-                <!-- 预警模式下额外显示逾期数 -->
-                <div
-                  v-if="drillDownType === 'warning' && item.overdueCount > 0"
-                  style="margin-top: 4px; font-size: 11px; color: #ef4444"
-                >
-                  ⚠️ {{ item.overdueCount }} 人已逾期
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </n-spin>
+      <div class="drilldown-body drilldown-body--store-list">
+        <n-data-table
+          :columns="drillDownTableColumns"
+          :data="drillDownList"
+          :loading="drillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          class="store-drilldown-table"
+          style="flex: 1; min-height: 0; width: 100%"
+          :row-key="(row: any) => String(row.storeId ?? '')"
+        />
+      </div>
       <template #footer>
         <div style="text-align: right; color: #86868b; font-size: 12px">
           * 数据更新于 {{ formatOverviewTime(activeTask?.overviewSummary?.updatedAt) }}
@@ -539,19 +548,7 @@
               AI洞察
             </div>
           </template>
-          <div
-            style="
-              white-space: pre-wrap;
-              line-height: 1.4;
-              font-size: 14px;
-              color: #4b5563;
-              background: #f5f5f7;
-              padding: 16px 20px;
-              border-radius: 12px;
-              margin-top: 0px;
-              margin-bottom: 8px;
-            "
-          >
+          <div class="ai-auto-insight-output custom-scroll-ai">
             {{ autoAiInsightContent }}
           </div>
         </n-collapse-item>
@@ -625,6 +622,12 @@
                   </n-spin>
                 </div>
               <div class="ai-analyze-actions">
+                          <div
+                            v-if="boardInsightCard.northStar.generatedAt && boardInsightCard.northStar.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.northStar.generatedAt) }}
+                          </div>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
@@ -643,20 +646,22 @@
             </n-popover>
           </div>
 
-          <div class="ns-card">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('onTime', '按时完成率 - 门店下钻')">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
               >{{ formatPct2(activeTask.northStar.onTimeRate) }}<span class="unit">%</span></div
             >
             <div class="ns-sub">在 Deadline 前完成的人数 / 应完成总人数</div>
+            <div class="ns-click-hint">点击下钻</div>
           </div>
           <div class="divider"></div>
-          <div class="ns-card">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('avgTime', '人均完成时间 - 门店下钻')">
             <div class="ns-label">人均完成时间</div>
             <div class="ns-value"
               >{{ activeTask.northStar.avgTime }}<span class="unit">小时</span></div
             >
             <div class="ns-sub">已完成学员从任务创建到标记完成的平均耗时</div>
+            <div class="ns-click-hint">点击下钻</div>
           </div>
         </div>
 
@@ -683,6 +688,10 @@
           <span class="kpi-dot">·</span>
           <span class="kpi-chip"
             >推送覆盖 <strong>{{ activeTask.overviewSummary.pushUserCount }}</strong> 人</span
+          >
+          <span class="kpi-dot">·</span>
+          <span class="kpi-chip"
+            >已读 <strong>{{ activeTask.overviewSummary.totalReadCount }}</strong> 人</span
           >
           <span v-if="activeTask.overviewSummary.updatedAt" class="kpi-updated">
             更新 {{ formatOverviewTime(activeTask.overviewSummary.updatedAt) }}
@@ -738,6 +747,12 @@
                             </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
+                          <div
+                            v-if="boardInsightCard.trend.generatedAt && boardInsightCard.trend.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.trend.generatedAt) }}
+                          </div>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
@@ -867,6 +882,12 @@
                             </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
+                          <div
+                            v-if="boardInsightCard.rtm.generatedAt && boardInsightCard.rtm.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.rtm.generatedAt) }}
+                          </div>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
@@ -895,7 +916,7 @@
                     @click="openStoreRankDrillDown('top')"
                     style="font-weight: 600; padding: 0 10px"
                   >
-                    Top 20 门店
+                    Top 5 门店
                   </n-button>
                   <n-button
                     type="error"
@@ -904,20 +925,25 @@
                     @click="openStoreRankDrillDown('bottom')"
                     style="font-weight: 600; padding: 0 10px"
                   >
-                    Bottom 20 门店
+                    Bottom 5 门店
                   </n-button>
                 </n-space>
               </div>
             </template>
             <div class="rtm-list">
               <div class="rtm-item header">
-                <span>维度</span>
+                <span>区域</span>
                 <span class="rtm-col-num">人数</span>
                 <span class="rtm-col-num">已完成</span>
                 <span>完成率</span>
                 <span class="rtm-col-time">人均耗时</span>
               </div>
-              <div class="rtm-item" v-for="(item, index) in activeTask.rtmData" :key="index">
+              <div 
+                class="rtm-item is-clickable" 
+                v-for="(item, index) in activeTask.rtmData" 
+                :key="index"
+                @click="openRtmDrillDownModal(item.name)"
+              >
                 <span class="rtm-name">{{ item.name }}</span>
                 <span class="rtm-col-num">{{ item.assignmentCount ?? '—' }}</span>
                 <span class="rtm-col-num">{{ item.completedCount ?? '—' }}</span>
@@ -984,6 +1010,17 @@
                           </n-spin>
                         </div>
                         <div class="ai-analyze-actions">
+                          <div
+                            v-if="
+                              boardInsightCard.linkAndWarning.generatedAt &&
+                              boardInsightCard.linkAndWarning.content
+                            "
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{
+                              formatInsightGeneratedTime(boardInsightCard.linkAndWarning.generatedAt)
+                            }}
+                          </div>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
@@ -1008,7 +1045,7 @@
             <div class="combined-metrics-container">
               <!-- 左侧：链路数据 -->
               <div class="metrics-grid funnel-grid" style="flex: 1;">
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('reach', '任务触达率 - 门店明细')">
                   <div class="m-label"
                     >任务触达率
                     <n-tooltip trigger="hover"
@@ -1025,7 +1062,7 @@
                   <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
                 </div>
 
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('read', '任务读取率 - 门店明细')">
                   <div class="m-label"
                     >任务读取率
                     <n-tooltip trigger="hover"
@@ -1040,7 +1077,7 @@
                   <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
                 </div>
 
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('nudge', '催办转化率 - 门店明细')">
                   <div class="m-label"
                     >催办转化率
                     <n-tooltip trigger="hover"
@@ -1059,10 +1096,7 @@
               <!-- 预警数据 -->
               <n-card :bordered="false" class="metrics-card warning-card" style="flex: 1;">
             <div class="metrics-grid">
-              <div
-                class="metric-box warn-style is-clickable"
-                @click="openWarningDrillDown('p2', '起步异常')"
-              >
+              <div class="metric-box warn-style">
                 <div class="m-label"
                   >起步异常
                   <n-tooltip trigger="hover"
@@ -1071,11 +1105,10 @@
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
                 <div class="m-value">{{ formatPct2(activeTask.warningData.startAbnormal) }}%</div>
-                <div class="m-click-hint">点击下钻</div>
               </div>
               <div
                 class="metric-box danger-style is-clickable"
-                @click="openWarningDrillDown('p2', '临期危机 (P1)')"
+                @click="openWarningDrillDown('p1', '临期危机 (P1)')"
               >
                 <div class="m-label"
                   >临期危机 (P1)
@@ -1089,7 +1122,7 @@
               </div>
               <div
                 class="metric-box fatal-style is-clickable"
-                @click="openWarningDrillDown('p1', '临期危机 (P0)')"
+                @click="openWarningDrillDown('p0', '临期危机 (P0)')"
               >
                 <div class="m-label"
                   >临期危机 (P0)
@@ -1121,6 +1154,7 @@
 <script lang="ts" setup>
   import {
     ref,
+    reactive,
     computed,
     onMounted,
     watch,
@@ -1128,6 +1162,7 @@
     nextTick,
     shallowRef,
     onActivated,
+    h,
   } from 'vue';
   import { useRouter } from 'vue-router';
   import * as echarts from 'echarts';
@@ -1145,6 +1180,7 @@
     DislikeOutlined,
     CopyOutlined,
     CheckOutlined,
+    RobotOutlined,
   } from '@vicons/antd';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import aiWatchIcon from '@/assets/icons/AI_watch.png';
@@ -1160,8 +1196,11 @@
     postDashboardInsightVote,
     type TrendPoint,
     type CreateDashboardInsightBody,
+    type HeatmapRow,
+    type DashboardOverview,
   } from '@/api/dashboard';
-  import { useMessage, useDialog } from 'naive-ui';
+  import { Alova } from '@/utils/http/alova/index';
+  import { useMessage, useDialog, NProgress } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
   import { useGlobSetting } from '@/hooks/setting';
   import {
@@ -1169,6 +1208,7 @@
     hasAutoNudgeRulesConfigured,
   } from '@/utils/autoNudgeRules';
   import { renderInsightMarkdown } from '@/utils/markdownRender';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
 
   const message = useMessage();
   const dialog = useDialog();
@@ -1181,6 +1221,7 @@
   const drillDownTitle = ref('');
   const drillDownLoading = ref(false);
   const drillDownList = ref<any[]>([]);
+  const drillDownEmptyDescription = ref('暂无符合条件的门店记录');
   const drillDownType = ref<'rank' | 'warning'>('rank');
 
   type BoardInsightSection = 'northStar' | 'trend' | 'rtm' | 'linkAndWarning';
@@ -1189,6 +1230,7 @@
     content: string;
     loading: boolean;
     insightId: string | null;
+    generatedAt: string | null;
     up: number;
     down: number;
     /** 当前浏览器会话内对本条洞察的投票：与 sessionStorage 同步，用于互斥与取消 */
@@ -1226,6 +1268,7 @@
       content: '',
       loading: false,
       insightId: null,
+      generatedAt: null,
       up: 0,
       down: 0,
       userVote: null,
@@ -1249,6 +1292,559 @@
     };
   }
 
+  /** 兼容 Alova 已解包 / 未解包、camelCase / snake_case 的热力图行 */
+  function unwrapHeatmapRows(res: unknown): HeatmapRow[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.heatmapData ?? layer.heatmap_data;
+    return Array.isArray(raw) ? (raw as HeatmapRow[]) : [];
+  }
+
+  /** 兼容嵌套 data、snake_case 的门店排行 */
+  function unwrapRankList(res: unknown): any[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.rankList ?? layer.rank_list;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  /** 兼容嵌套 data、未解包响应的预警门店列表 */
+  function unwrapWarningsList(res: unknown): any[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.list;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  /** 统一 camelCase / snake_case，避免表格列取不到字段 */
+  function normalizeWarningDrillRow(row: any) {
+    if (!row || typeof row !== 'object') return row;
+    return {
+      ...row,
+      storeId: row.storeId ?? row.store_id,
+      storeName: row.storeName ?? row.store_name ?? '—',
+      completionRate: Number(row.completionRate ?? row.completion_rate ?? 0),
+      completedCount: row.completedCount ?? row.completed_count ?? 0,
+      assignmentCount: row.assignmentCount ?? row.totalCount ?? row.total_count ?? 0,
+      overdueCount: row.overdueCount ?? row.overdue_count ?? 0,
+    };
+  }
+
+  // --- 北极星指标（按时完成率/人均完成时间）下钻 ---
+  const showNsDrillDownModal = ref(false);
+  const nsDrillDownLoading = ref(false);
+  const nsDrillDownTitle = ref('');
+  const nsDrillDownData = ref<any[]>([]);
+  const nsDrillDownMetric = ref<'onTime' | 'avgTime'>('onTime');
+
+  // --- 漏斗链路（触达/读取/催办转化）门店维度下钻 ---
+  const showLinkDrillDownModal = ref(false);
+  const linkDrillDownLoading = ref(false);
+  const linkDrillDownTitle = ref('');
+  const linkDrillDownData = ref<any[]>([]);
+  const linkDrillDownMetric = ref<'reach' | 'read' | 'nudge'>('reach');
+
+  interface StoreDrillMetricRow {
+    name: string;
+    storeId?: string;
+    assignmentCount: number;
+    completedCount: number;
+    completionRate: number;
+    avgTimeHours: number;
+    onTimeRate: number;
+    reachRate: number;
+    readRate: number;
+    nudgeRate: number;
+    totalReadCount: number;
+  }
+
+  const nsDrillDownColumns = computed(() => {
+    if (nsDrillDownMetric.value === 'onTime') {
+      return [
+        { 
+          title: '门店名称', 
+          key: 'name', 
+          width: 150 
+        },
+        { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+        { 
+          title: '已完成', 
+          key: 'completedCount', 
+          width: 90, 
+          align: 'right' as const,
+          render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+        },
+        {
+          title: '按时完成率',
+          key: 'onTimeRate',
+          width: 160,
+          render(row: any) {
+            return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+              h(
+                'span',
+                { style: 'width: 52px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+                `${formatPct2(row.onTimeRate)}%`
+              ),
+              h(NProgress, {
+                type: 'line',
+                percentage: pctForBar(row.onTimeRate),
+                indicatorPlacement: 'hide',
+                color: row.onTimeRate >= 100 ? '#10b981' : '#0071e3',
+                style: 'flex: 1;',
+              }),
+            ]);
+          },
+        },
+        {
+          title: '人均耗时',
+          key: 'avgTimeHours',
+          width: 100,
+          align: 'right' as const,
+          render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.avgTimeHours}h`),
+        },
+      ];
+    }
+
+    return [
+      { 
+        title: '门店名称', 
+        key: 'name', 
+        width: 150 
+      },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      { 
+        title: '已完成', 
+        key: 'completedCount', 
+        width: 90, 
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+      },
+      {
+        title: '完成率',
+        key: 'completionRate',
+        width: 140,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 44px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+              `${formatPct2(row.completionRate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.completionRate),
+              indicatorPlacement: 'hide',
+              color: row.completionRate >= 100 ? '#10b981' : '#0071e3',
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      {
+        title: '人均耗时',
+        key: 'avgTimeHours',
+        width: 100,
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.avgTimeHours}h`),
+      },
+    ];
+  });
+
+  /** 动态生成门店排名和预警的下钻表格列 */
+  const drillDownTableColumns = computed(() => {
+    const type = drillDownType.value;
+    const cols: any[] = [];
+
+    if (type === 'rank') {
+      cols.push({
+        title: '排名',
+        key: 'rank',
+        width: 80,
+        align: 'center',
+        render: (_: any, index: number) => {
+          const rank = index + 1;
+          const isTop3 = rank <= 3;
+          let bg = 'rgba(0, 0, 0, 0.04)';
+          let color = '#86868b';
+          let fw = '600';
+          
+          if (rank === 1) { bg = 'linear-gradient(135deg, #fef08a 0%, #f59e0b 100%)'; color = '#fff'; fw = '800'; }
+          else if (rank === 2) { bg = 'linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%)'; color = '#fff'; fw = '800'; }
+          else if (rank === 3) { bg = 'linear-gradient(135deg, #ffedd5 0%, #d97706 100%)'; color = '#fff'; fw = '800'; }
+          
+          return h('div', { 
+            style: { 
+              background: bg,
+              color, 
+              fontWeight: fw, 
+              fontSize: '14px',
+              width: '28px',
+              height: '28px',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto',
+              boxShadow: isTop3 ? '0 2px 8px rgba(0,0,0,0.1)' : 'none'
+            } 
+          }, rank);
+        }
+      });
+    }
+
+    cols.push({
+      title: '门店',
+      key: 'storeName',
+      minWidth: 150,
+      render: (row: any) =>
+        h('div', { style: 'display: flex; flex-direction: column; gap: 2px; min-width: 0;' }, [
+          h('span', { style: 'font-weight: 600; color: #1d1d1f; font-size: 14px; line-height: 1.35;' }, row.storeName || '—'),
+          h('span', { style: 'font-size: 11px; color: #86868b;' }, `ID: ${row.storeId ?? '—'}`),
+        ]),
+    });
+
+    cols.push({
+      title: '总人数',
+      key: 'progress',
+      width: 80,
+      align: 'right',
+      render: (row: any) => {
+        const total = row.assignmentCount ?? row.totalCount ?? 0;
+        return h('span', null, total);
+      }
+    });
+
+    cols.push({
+      title: '已完成',
+      key: 'completed',
+      width: 80,
+      align: 'right',
+      render: (row: any) => h('span', { style: 'font-weight: 600;' }, row.completedCount ?? 0)
+    });
+
+    cols.push({
+      title: '完成率',
+      key: 'rate',
+      width: 140,
+      render: (row: any) => {
+        const rate = row.completionRate ?? 0;
+        const color = rate >= 100 ? '#10b981' : (type === 'warning' ? '#ef4444' : '#3b82f6');
+        return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+          h('span', { style: 'width: 48px; font-weight: 600; font-size: 13px; text-align: right; color: #1e293b;' }, `${formatPct2(rate)}%`),
+          h(NProgress, {
+            type: 'line',
+            percentage: pctForBar(rate),
+            indicatorPlacement: 'hide',
+            color: color,
+            style: 'flex: 1;'
+          })
+        ]);
+      }
+    });
+
+    if (type === 'warning') {
+      cols.push({
+        title: '逾期人数',
+        key: 'overdue',
+        width: 100,
+        align: 'right',
+        render: (row: any) => {
+          const overdue = row.overdueCount ?? 0;
+          if (overdue > 0) {
+            return h('span', { style: 'color: #ef4444; font-weight: 600; font-size: 13px;' }, `⚠️ ${overdue} 人`);
+          }
+          return h('span', { style: 'color: #94a3b8; font-size: 13px;' }, '0');
+        }
+      });
+    }
+
+    return cols;
+  });
+
+  /** 漏斗链路下钻列（动态根据 metric 显示对应指标） */
+  const linkDrillDownColumns = computed(() => {
+    const metric = linkDrillDownMetric.value;
+    let rateTitle = '触达率';
+    let rateColor = '#0071e3';
+    let countTitle = '人数';
+
+    if (metric === 'reach') {
+      rateTitle = '触达率';
+      rateColor = '#10b981';
+      countTitle = '触达人数';
+    } else if (metric === 'read') {
+      rateTitle = '读取率';
+      rateColor = '#3b82f6';
+      countTitle = '已读人数';
+    } else if (metric === 'nudge') {
+      rateTitle = '转化率';
+      rateColor = '#f59e0b';
+      countTitle = '总人数';
+    }
+
+    return [
+      { title: '门店名称', key: 'name', width: 100 },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      {
+        title: rateTitle,
+        key: 'rate',
+        width: 150,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 55px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right;' },
+              `${formatPct2(row.rate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.rate),
+              indicatorPlacement: 'hide',
+              color: rateColor,
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      {
+        title: countTitle,
+        key: 'count',
+        width: 100,
+        align: 'right' as const,
+        render: (row: any) => (row.count == null ? '—' : row.count),
+      },
+    ];
+  });
+
+  async function fetchStoreDrillRows(taskId: string): Promise<StoreDrillMetricRow[]> {
+    const [heatmapRes, stores] = await Promise.all([
+      getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'store' }).send(),
+      Alova.Get<any[]>('/stores').send(),
+    ]);
+
+    const heatRows = unwrapHeatmapRows(heatmapRes);
+    const byName = new Map(
+      (stores || []).map((s: any) => [String(s?.name || '').trim().toLowerCase(), String(s?.id || '')])
+    );
+
+    const rows = await Promise.all(
+      heatRows.map(async (h) => {
+        const name = String(h.rtmValue || '—');
+        const storeId = byName.get(name.trim().toLowerCase());
+        const base: StoreDrillMetricRow = {
+          name,
+          storeId,
+          assignmentCount: h.assignmentCount ?? 0,
+          completedCount: h.completedCount ?? 0,
+          completionRate: h.completionRate ?? 0,
+          avgTimeHours:
+            h.avgCompletionTimeHours != null ? Number(Number(h.avgCompletionTimeHours).toFixed(1)) : 0,
+          onTimeRate: 0,
+          reachRate: 0,
+          readRate: 0,
+          nudgeRate: 0,
+          totalReadCount: 0,
+        };
+
+        if (!storeId) return base;
+
+        try {
+          const overview = (await getDashboardOverview({
+            taskId: String(taskId),
+            storeId: String(storeId),
+          }).send()) as DashboardOverview;
+
+          return {
+            ...base,
+            assignmentCount: overview.totalAssignments ?? base.assignmentCount,
+            completedCount: overview.completedCount ?? base.completedCount,
+            completionRate: overview.completionRate ?? base.completionRate,
+            avgTimeHours:
+              overview.avgCompletionTimeHours != null
+                ? Number(Number(overview.avgCompletionTimeHours).toFixed(1))
+                : base.avgTimeHours,
+            onTimeRate: overview.onTimeCompletionRate ?? 0,
+            reachRate: overview.taskReachRate ?? 0,
+            readRate: overview.taskReadRate ?? 0,
+            nudgeRate: overview.nudgeConversionRate ?? 0,
+            totalReadCount: overview.totalReadCount ?? 0,
+          };
+        } catch {
+          return base;
+        }
+      })
+    );
+
+    return rows;
+  }
+
+  async function openNsDrillDownModal(metric: 'onTime' | 'avgTime', title: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+
+    nsDrillDownMetric.value = metric;
+    nsDrillDownTitle.value = title;
+    showNsDrillDownModal.value = true;
+    nsDrillDownLoading.value = true;
+    nsDrillDownData.value = [];
+
+    try {
+      nsDrillDownData.value = await fetchStoreDrillRows(String(taskId));
+    } catch (e: any) {
+      message.error(e?.message || '获取门店明细数据失败');
+    } finally {
+      nsDrillDownLoading.value = false;
+    }
+  }
+
+  /** 漏斗链路门店维度下钻（触达率/读取率/转化率） */
+  async function openLinkDrillDown(metric: 'reach' | 'read' | 'nudge', title: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+
+    linkDrillDownMetric.value = metric;
+    linkDrillDownTitle.value = title;
+    showLinkDrillDownModal.value = true;
+    linkDrillDownLoading.value = true;
+    linkDrillDownData.value = [];
+
+    try {
+      const rows = await fetchStoreDrillRows(String(taskId));
+      linkDrillDownData.value = rows.map((row) => {
+        let rate = 0;
+        let count: number | null = null;
+        if (metric === 'reach') {
+          rate = row.reachRate;
+          count = Math.round((row.assignmentCount * row.reachRate) / 100);
+        } else if (metric === 'read') {
+          rate = row.readRate;
+          count = row.totalReadCount;
+        } else {
+          rate = row.nudgeRate;
+          count = row.assignmentCount;
+        }
+
+        return {
+          name: row.name,
+          rate,
+          assignmentCount: row.assignmentCount,
+          count,
+        };
+      });
+    } catch (e: any) {
+      message.error(e?.message || '获取链路明细数据失败');
+    } finally {
+      linkDrillDownLoading.value = false;
+    }
+  }
+
+  // --- RTM 区域进度下钻 ---
+  const showRtmDrillDownModal = ref(false);
+  const rtmDrillDownLoading = ref(false);
+  const rtmDrillDownLevel = ref<'dealer' | 'store'>('dealer');
+  const currentRtmDrillDownName = ref('');
+  const rtmDrillDownData = ref<any[]>([]);
+
+  const rtmDrillDownColumns = computed(() => {
+    return [
+      { 
+        title: rtmDrillDownLevel.value === 'dealer' ? '经销商' : '门店', 
+        key: 'name', 
+        minWidth: 150,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b; font-size: 14px;' }, row.name || '—')
+      },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      { 
+        title: '已完成', 
+        key: 'completedCount', 
+        width: 90, 
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+      },
+      {
+        title: '完成率',
+        key: 'rate',
+        width: 140,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 44px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+              `${formatPct2(row.rate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.rate),
+              indicatorPlacement: 'hide',
+              color: row.rate >= 100 ? '#10b981' : '#0071e3',
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      { 
+        title: '人均耗时', 
+        key: 'time', 
+        width: 100, 
+        align: 'right' as const, 
+        render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.time}h`) 
+      },
+    ];
+  });
+
+  async function fetchRtmDrillDownData() {
+    const taskId = activeTaskId.value;
+    if (!taskId || !currentRtmDrillDownName.value) return;
+    
+    rtmDrillDownLoading.value = true;
+    try {
+      const res = await getDashboardHeatmap({
+        taskId: String(taskId),
+        rtm: currentRtmDrillDownName.value,
+        rtmLevel: rtmDrillDownLevel.value,
+      }).send();
+      rtmDrillDownData.value = unwrapHeatmapRows(res).map((h) => ({
+        name: h.rtmValue || '—',
+        rate: h.completionRate ?? 0,
+        time: h.avgCompletionTimeHours != null ? Number(Number(h.avgCompletionTimeHours).toFixed(1)) : 0,
+        assignmentCount: h.assignmentCount ?? 0,
+        completedCount: h.completedCount ?? 0,
+      }));
+    } catch (e: any) {
+      message.error(e?.message || '获取明细数据失败');
+    } finally {
+      rtmDrillDownLoading.value = false;
+    }
+  }
+
+  async function openRtmDrillDownModal(rtmName: string) {
+    if (!rtmName || rtmName.includes('暂无')) return;
+    currentRtmDrillDownName.value = rtmName;
+    rtmDrillDownLevel.value = 'dealer';
+    showRtmDrillDownModal.value = true;
+    await fetchRtmDrillDownData();
+  }
+
+  function onRtmDrillDownLevelChange(val: 'dealer' | 'store') {
+    rtmDrillDownLevel.value = val;
+    fetchRtmDrillDownData();
+  }
+
   /** 打开门店排名下钻 (Top/Bottom) */
   async function openStoreRankDrillDown(type: 'top' | 'bottom') {
     const taskId = activeTaskId.value;
@@ -1256,23 +1852,27 @@
 
     drillDownType.value = 'rank';
     drillDownTitle.value =
-      type === 'top' ? '门店完成率排行 (Top 20)' : '门店完成率排行 (Bottom 20)';
+      type === 'top' ? '门店完成率排行 (Top 5)' : '门店完成率排行 (Bottom 5)';
     showDrillDownModal.value = true;
     drillDownLoading.value = true;
     drillDownList.value = [];
 
     try {
-      const res = await getDashboardStoreRank({ taskId, type, limit: 20 }).send();
-      drillDownList.value = res.rankList || [];
+      const res = await getDashboardStoreRank({
+        taskId: String(taskId),
+        type,
+        limit: 5,
+      }).send();
+      drillDownList.value = unwrapRankList(res);
     } catch (err: any) {
-      message.error('获取排名详情失败');
+      message.error(err?.message || '获取排名详情失败');
     } finally {
       drillDownLoading.value = false;
     }
   }
 
-  /** 打开预警门店下钻 */
-  async function openWarningDrillDown(level: 'p1' | 'p2', title: string) {
+  /** 打开预警门店下钻（仅临期 P0/P1，数据来自 /dashboard/warnings） */
+  async function openWarningDrillDown(level: 'p0' | 'p1', title: string) {
     const taskId = activeTaskId.value;
     if (!taskId) return;
 
@@ -1281,12 +1881,18 @@
     showDrillDownModal.value = true;
     drillDownLoading.value = true;
     drillDownList.value = [];
+    drillDownEmptyDescription.value = '暂无符合条件的门店记录';
 
     try {
-      const res = await getDashboardWarnings({ taskId, warningLevel: level, pageSize: 50 }).send();
-      drillDownList.value = res.list || [];
+      const res = await getDashboardWarnings({
+        taskId: String(taskId),
+        warningLevel: level,
+        pageNum: 1,
+        pageSize: 50,
+      }).send();
+      drillDownList.value = unwrapWarningsList(res).map(normalizeWarningDrillRow);
     } catch (err: any) {
-      message.error('获取预警详情失败');
+      message.error(err?.message || '获取预警详情失败');
     } finally {
       drillDownLoading.value = false;
     }
@@ -1776,6 +2382,7 @@
 
   /** 看板 KPI 加载（overview + heatmap + trend daily） */
   const boardStatsLoading = ref(false);
+
   /** 按小时趋势：当前选中日期的接口数据 */
   const activeHourlyTrendRows = ref<TrendPoint[]>([]);
   /** 缓存 key = `${taskId}::${date}` */
@@ -1795,6 +2402,18 @@
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(
       d.getMinutes()
     ).padStart(2, '0')}`;
+  }
+
+  function formatInsightGeneratedTime(iso?: string | null) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(
+      2,
+      '0'
+    )}`;
   }
 
   /** 百分比展示统一保留 2 位小数 */
@@ -1821,6 +2440,7 @@
         pendingCount: 0,
         overdueCount: 0,
         pushUserCount: 0,
+        totalReadCount: 0,
         updatedAt: '',
       },
       trendDailyRows: [] as TrendPoint[],
@@ -1854,13 +2474,13 @@
     boardStatsLoading.value = true;
     try {
       const [overview, heatmap, trendDailyRes] = await Promise.all([
-        getDashboardOverview({ taskId }).send(),
-        getDashboardHeatmap({ taskId }).send(),
-        getDashboardTrend({ taskId, type: 'daily' }).send(),
+        getDashboardOverview({ taskId: String(taskId) }).send(),
+        getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'rtm' }).send(),
+        getDashboardTrend({ taskId: String(taskId), type: 'daily' }).send(),
       ]);
 
       const trendRows: TrendPoint[] = trendDailyRes?.trendData ?? [];
-      const heatmapRows = heatmap?.heatmapData ?? [];
+      const heatmapRows = unwrapHeatmapRows(heatmap);
       const rtmData = heatmapRows.map((h) => ({
         name: h.rtmValue || '—',
         rate: h.completionRate ?? 0,
@@ -1902,6 +2522,7 @@
           pendingCount: overview.pendingCount ?? 0,
           overdueCount: overview.overdueCount ?? 0,
           pushUserCount: overview.pushUserCount ?? 0,
+          totalReadCount: overview.totalReadCount ?? 0,
           updatedAt: overview.updatedAt || '',
         },
         trendDailyRows: trendRows,
@@ -2103,7 +2724,9 @@
   function buildBoardInsightPayload(section: BoardInsightSection): CreateDashboardInsightBody | null {
     const tid = activeTaskId.value;
     if (!tid) return null;
-    const base = { reasoning: globalReasoningEnabled.value };
+    const base = { 
+      reasoning: globalReasoningEnabled.value,
+    };
     if (section === 'northStar') {
       return { ...base, insightType: 'north_star', taskId: tid };
     }
@@ -2154,6 +2777,7 @@
         loading: true,
         content: '',
         insightId: null,
+        generatedAt: null,
         userVote: null,
         fetchedKey: key,
       };
@@ -2195,6 +2819,7 @@
             loading: false,
             content: didReasoning ? boardInsightCard.value[section].content : fullData.content,
             insightId: fullData.insightId,
+            generatedAt: fullData.createdAt || null,
             up: fullData.voteSummary?.up ?? 0,
             down: fullData.voteSummary?.down ?? 0,
             userVote: readStoredInsightVote(fullData.insightId),
@@ -2215,6 +2840,7 @@
         loading: false,
         content: '',
         insightId: null,
+        generatedAt: null,
         userVote: null,
         fetchedKey: '',
       };
@@ -2591,6 +3217,24 @@
 </script>
 
 <style lang="less" scoped>
+  .board-filters {
+    padding: 0 40px 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #f3f4f6;
+    margin-bottom: 24px;
+    background: #fff;
+    .filter-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .filter-label {
+      font-size: 13px;
+      color: #86868b;
+      white-space: nowrap;
+    }
+  }
   /* 商业级 SaaS 风格 - 实时看板 */
   .board-stats-spin {
     display: block;
@@ -2802,6 +3446,22 @@
     &::-webkit-scrollbar-track {
       background: transparent;
     }
+  }
+
+  /* 页面顶部「AI洞察」自动输出：限制高度，超出部分滚动 */
+  .ai-auto-insight-output {
+    white-space: pre-wrap;
+    line-height: 1.4;
+    font-size: 14px;
+    color: #4b5563;
+    background: #f5f5f7;
+    padding: 14px 18px;
+    border-radius: 12px;
+    margin-top: 0;
+    margin-bottom: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .hq-ai-insight-empty {
@@ -3530,6 +4190,16 @@
     }
   }
 
+  .ai-insight-generated-at {
+    margin-top: 0;
+    margin-right: auto;
+    font-size: 10px;
+    color: #9ca3af;
+    text-align: left;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
   /* 1. 概览 KPI（overview） */
   .north-star-container {
     display: flex;
@@ -3556,6 +4226,37 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
+
+      &.is-clickable {
+        cursor: pointer;
+        position: relative;
+        border-radius: 10px;
+        padding: 6px 10px 16px;
+        transition: background-color 0.2s ease, transform 0.2s ease;
+
+        &:hover {
+          background: rgba(0, 113, 227, 0.04);
+          transform: translateY(-1px);
+        }
+
+        &:hover .ns-click-hint {
+          opacity: 1;
+        }
+      }
+    }
+
+    .ns-click-hint {
+      position: absolute;
+      left: 50%;
+      bottom: 2px;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+      letter-spacing: 0.3px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+      pointer-events: none;
     }
 
     .ns-label {
@@ -3729,7 +4430,7 @@
 
       .rtm-item {
         display: grid;
-        grid-template-columns: minmax(72px, 1.1fr) 44px 44px minmax(100px, 1.2fr) 52px;
+        grid-template-columns: minmax(110px, 1.1fr) 44px 44px minmax(100px, 1.2fr) 52px;
         align-items: center;
         gap: 10px;
         padding: 12px 16px;
@@ -4010,7 +4711,199 @@
     }
   }
 
+  .rtm-item.is-clickable {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    
+    &:hover {
+      background-color: rgba(0, 113, 227, 0.05) !important;
+    }
+  }
+
   .dd-item:hover {
     background: #f9f9fb;
+  }
+
+  @media (max-width: 760px) {
+    .dd-item {
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 10px !important;
+    }
+
+    .dd-col-progress {
+      width: 100% !important;
+    }
+  }
+
+  .drilldown-body {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* 门店排名 / 临期预警下钻：父级占满卡片内容区 + 隐藏溢出，表格 flex-height 在内部滚动 */
+  .drilldown-body--store-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .drilldown-list {
+    min-height: 0;
+  }
+
+  /* 下钻弹窗统一美化 */
+  .hq-drilldown-modal :deep(.n-card:not(.hq-drilldown-modal--store)) {
+    border-radius: 14px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+    overflow: visible;
+    background: #ffffff;
+  }
+
+  /* 门店明细下钻：与 n-card 同根的 modifier，限制整体高度，内容区 flex 交给表格 flex-height */
+  :global(.n-card.hq-drilldown-modal--store) {
+    border-radius: 14px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+    background: #ffffff;
+    min-height: 0;
+    max-height: min(640px, 88vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  :global(.n-card.hq-drilldown-modal--store .n-card__content) {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .hq-drilldown-modal :deep(.n-card-header) {
+    padding: 14px 18px !important;
+    border-bottom: 1px solid #eef2f7;
+    background: linear-gradient(180deg, #fbfdff 0%, #f8fafc 100%);
+  }
+
+  .hq-drilldown-modal :deep(.n-card-header__main) {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: #0f172a !important;
+  }
+
+  .hq-drilldown-modal :deep(.n-card__content) {
+    padding: 12px !important;
+    background: #fff;
+  }
+
+  .hq-drilldown-modal :deep(.n-card__footer) {
+    border-top: 1px solid #eef2f7;
+    background: #fafbfc;
+    padding: 8px 12px !important;
+  }
+
+  /* 统一高级商业表格样式 - Apple Minimalist */
+  :global(.hq-drilldown-modal .n-data-table) {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-th) {
+    background-color: transparent !important;
+    color: #86868b !important;
+    font-weight: 500 !important;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+    padding: 12px 16px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-td) {
+    padding: 14px 16px !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04) !important;
+    font-size: 14px;
+    color: #1d1d1f;
+    transition: background-color 0.2s ease;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-tr:hover .n-data-table-td) {
+    background-color: rgba(0, 113, 227, 0.04) !important;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table-wrapper) {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  
+  :global(.hq-drilldown-modal .n-data-table-base-table) {
+    background: transparent !important;
+  }
+
+  /* Fix for modal flex layout */
+  :global(.n-modal.flex-modal) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  :global(.n-modal.flex-modal > .n-card__content) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding-bottom: 12px;
+  }
+
+  :global(.n-modal.flex-modal .n-spin-container),
+  :global(.n-modal.flex-modal .n-spin-body),
+  :global(.n-modal.flex-modal .n-spin-content) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .dd-rank-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .dd-rank-top-1 {
+    background: linear-gradient(135deg, #fef08a 0%, #f59e0b 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(245, 158, 11, 0.2);
+  }
+
+  .dd-rank-top-2 {
+    background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(148, 163, 184, 0.2);
+  }
+
+  .dd-rank-top-3 {
+    background: linear-gradient(135deg, #ffedd5 0%, #d97706 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(217, 119, 6, 0.2);
+  }
+
+  .dd-rank-normal {
+    background: #f1f5f9;
+    color: #64748b;
   }
 </style>

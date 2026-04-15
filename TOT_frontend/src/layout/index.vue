@@ -67,6 +67,8 @@
             <MainView />
           </div>
         </div>
+        <!-- 全屏主内容区时，Naive 弹层默认挂 body 会落在全屏层外；统一挂此节点 -->
+        <div id="layout-fullscreen-teleport" class="layout-fullscreen-teleport" aria-hidden="true" />
         <!--1.15废弃，没啥用，占用操作空间-->
         <!--        <NLayoutFooter v-if="getShowFooter">-->
         <!--          <PageFooter />-->
@@ -79,6 +81,7 @@
 
 <script lang="ts" setup>
   import { ref, unref, computed, onMounted } from 'vue';
+  import { resolveOverlayTeleportTarget } from '@/utils/overlayTeleport';
   import { Logo } from './components/Logo';
   import { TabsView } from './components/TagsView';
   import { MainView } from './components/Main';
@@ -183,10 +186,26 @@
   onMounted(() => {
     checkMobileMode();
     window.addEventListener('resize', watchWidth);
+    resolveOverlayTeleportTarget();
   });
 </script>
 
 <style lang="less">
+  /* 全屏 .layout-content 时弹层挂在此节点。根节点 pointer-events:none 避免无弹层时挡住整页点击；
+     后代必须可点，否则关闭按钮等无法响应（仅 > * 不够覆盖 Naive 内部结构） */
+  #layout-fullscreen-teleport.layout-fullscreen-teleport {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 3000;
+  }
+
+  #layout-fullscreen-teleport.layout-fullscreen-teleport * {
+    pointer-events: auto;
+  }
+
   .layout-side-drawer {
     background-color: rgb(0, 20, 40);
 
