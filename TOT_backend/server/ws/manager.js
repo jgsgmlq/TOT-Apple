@@ -87,17 +87,15 @@ function broadcastToUser(employeeId, payload) {
     }
   }
 
-  // Update received_at for task_assigned events if we successfully found a connected client
+  // task_assigned 在线推送成功：不写入 task_assignments.received_at（详情/已读口径见 POST /assignments/:id/viewed）。
+  // 更新 users.last_login_at，使看板触达条件 u.last_login_at >= ta.created_at 覆盖「WS 实时送达」。
   if (payload.event === 'task_assigned' && payload.data && payload.data.taskId) {
     try {
       const { db } = require('../db');
       const now = formatNowSqliteLocal();
-      db.run(
-        'UPDATE task_assignments SET received_at = ?, updated_at = ? WHERE task_id = ? AND user_id = ? AND received_at IS NULL',
-        [now, now, payload.data.taskId, employeeId]
-      );
+      db.run('UPDATE users SET last_login_at = ? WHERE employee_id = ?', [now, employeeId]);
     } catch (err) {
-      console.error('Error updating received_at via websocket broadcast:', err);
+      console.error('Error updating last_login_at via websocket broadcast:', err);
     }
   }
 }
