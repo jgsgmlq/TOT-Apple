@@ -531,7 +531,7 @@
                 font-weight: 400;
                 color: rgb(62, 64, 66);
                 letter-spacing: -0.3px;
-                padding: 4px 0;
+                padding: 2px 0;
                 font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
                   Helvetica, Arial, sans-serif;
               "
@@ -542,13 +542,13 @@
           <div
             style="
               white-space: pre-wrap;
-              line-height: 1.6;
+              line-height: 1.4;
               font-size: 14px;
               color: #4b5563;
               background: #f5f5f7;
               padding: 16px 20px;
               border-radius: 12px;
-              margin-top: 4px;
+              margin-top: 0px;
               margin-bottom: 8px;
             "
           >
@@ -601,12 +601,17 @@
               </template>
               <div class="ai-analyze-content">
                 <div class="ai-analyze-header">
-                  <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                  <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  <div style="display: flex; align-items: center;">
+                    <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                    <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  </div>
+                  <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                    <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('northStar')" />
+                  </div>
                 </div>
                 <div class="ai-analyze-body custom-scroll-ai">
-                  <n-spin :show="boardInsightCard.northStar.loading" size="small">
-                    <div
+                  <n-spin :show="boardInsightCard.northStar.loading" size="small">                    <div
                       v-if="!boardInsightCard.northStar.loading && !boardInsightCard.northStar.content"
                       class="ai-insight-md-empty"
                     >
@@ -626,14 +631,12 @@
                             :class="{ 'is-active-up': boardInsightCard.northStar.userVote === 'up' }"
                             @click="handleAiFeedback('northStar', 'up')"
                           ><LikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.northStar.up }}</span>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
                             :class="{ 'is-active-down': boardInsightCard.northStar.userVote === 'down' }"
                             @click="handleAiFeedback('northStar', 'down')"
                           ><DislikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.northStar.down }}</span>
                           <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
@@ -710,8 +713,14 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('trend')" />
+                            </div>
                           </div>
                           <div class="ai-analyze-body custom-scroll-ai">
                             <n-spin :show="boardInsightCard.trend.loading" size="small">
@@ -735,14 +744,12 @@
                             :class="{ 'is-active-up': boardInsightCard.trend.userVote === 'up' }"
                             @click="handleAiFeedback('trend', 'up')"
                           ><LikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.trend.up }}</span>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
                             :class="{ 'is-active-down': boardInsightCard.trend.userVote === 'down' }"
                             @click="handleAiFeedback('trend', 'down')"
                           ><DislikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.trend.down }}</span>
                           <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.trend.content, 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
@@ -835,8 +842,14 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('rtm')" />
+                            </div>
                           </div>
                           <div class="ai-analyze-body custom-scroll-ai">
                             <n-spin :show="boardInsightCard.rtm.loading" size="small">
@@ -860,14 +873,12 @@
                             :class="{ 'is-active-up': boardInsightCard.rtm.userVote === 'up' }"
                             @click="handleAiFeedback('rtm', 'up')"
                           ><LikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.rtm.up }}</span>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
                             :class="{ 'is-active-down': boardInsightCard.rtm.userVote === 'down' }"
                             @click="handleAiFeedback('rtm', 'down')"
                           ><DislikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.rtm.down }}</span>
                           <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.rtm.content, 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
@@ -948,8 +959,14 @@
                       </template>
                       <div class="ai-analyze-content">
                         <div class="ai-analyze-header">
-                          <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                          <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          <div style="display: flex; align-items: center;">
+                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          </div>
+                          <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                            <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('linkAndWarning')" />
+                          </div>
                         </div>
                         <div class="ai-analyze-body custom-scroll-ai">
                           <n-spin :show="boardInsightCard.linkAndWarning.loading" size="small">
@@ -973,14 +990,12 @@
                             :class="{ 'is-active-up': boardInsightCard.linkAndWarning.userVote === 'up' }"
                             @click="handleAiFeedback('linkAndWarning', 'up')"
                           ><LikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.linkAndWarning.up }}</span>
                           <n-icon
                             size="16"
                             class="ai-action-icon"
                             :class="{ 'is-active-down': boardInsightCard.linkAndWarning.userVote === 'down' }"
                             @click="handleAiFeedback('linkAndWarning', 'down')"
                           ><DislikeOutlined /></n-icon>
-                          <span style="font-size: 12px; color: #9ca3af; min-width: 16px;">{{ boardInsightCard.linkAndWarning.down }}</span>
                           <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.linkAndWarning.content, 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
@@ -1141,7 +1156,7 @@
     getDashboardTrend,
     getDashboardStoreRank,
     getDashboardWarnings,
-    postDashboardInsight,
+    streamDashboardInsight,
     postDashboardInsightVote,
     type TrendPoint,
     type CreateDashboardInsightBody,
@@ -1333,6 +1348,7 @@
   }
 
 
+  const globalReasoningEnabled = ref(false);
   const copiedStates = ref<Record<string, boolean>>({
     northStar: false, trend: false, rtm: false, linkAndWarning: false
   });
@@ -2072,27 +2088,30 @@
 
   function buildBoardInsightRequestKey(section: BoardInsightSection): string {
     const tid = activeTaskId.value || '';
-    if (section === 'northStar') return `north_star::${tid}`;
+    const r = globalReasoningEnabled.value ? 'R1' : 'V3';
+    if (section === 'northStar') return `north_star::${tid}::${r}`;
     if (section === 'trend') {
       const dim = trendTimeDimension.value;
       const d = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
       const w = trendSelectedWeek.value;
-      return `trend::${tid}::${dim}::${d}::${w}`;
+      return `trend::${tid}::${dim}::${d}::${w}::${r}`;
     }
-    if (section === 'rtm') return `channel::${tid}`;
-    return `funnel::${tid}`;
+    if (section === 'rtm') return `channel::${tid}::${r}`;
+    return `funnel::${tid}::${r}`;
   }
 
   function buildBoardInsightPayload(section: BoardInsightSection): CreateDashboardInsightBody | null {
     const tid = activeTaskId.value;
     if (!tid) return null;
+    const base = { reasoning: globalReasoningEnabled.value };
     if (section === 'northStar') {
-      return { insightType: 'north_star', taskId: tid };
+      return { ...base, insightType: 'north_star', taskId: tid };
     }
     if (section === 'trend') {
       if (trendTimeDimension.value === 'hour') {
         const date = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
         return {
+          ...base,
           insightType: 'completion_daily',
           taskId: tid,
           date,
@@ -2100,15 +2119,16 @@
         };
       }
       return {
+        ...base,
         insightType: 'completion_weekly',
         taskId: tid,
         trendType: 'daily',
       };
     }
     if (section === 'rtm') {
-      return { insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
+      return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
     }
-    return { insightType: 'funnel_alerts', taskId: tid };
+    return { ...base, insightType: 'funnel_alerts', taskId: tid };
   }
 
   async function ensureBoardInsightOnOpen(section: BoardInsightSection) {
@@ -2129,16 +2149,66 @@
         message.error('无法构造洞察请求');
         return;
       }
-      const data = await postDashboardInsight(payload).send();
       boardInsightCard.value[section] = {
-        content: data.content,
-        loading: false,
-        insightId: data.insightId,
-        up: data.voteSummary?.up ?? 0,
-        down: data.voteSummary?.down ?? 0,
-        userVote: readStoredInsightVote(data.insightId),
+        ...boardInsightCard.value[section],
+        loading: true,
+        content: '',
+        insightId: null,
+        userVote: null,
         fetchedKey: key,
       };
+
+      let isFirstChunk = true;
+      let wasReasoning = false;
+      let didReasoning = false;
+
+      await streamDashboardInsight(
+        payload,
+        (deltaData) => {
+          if (isFirstChunk) {
+            boardInsightCard.value[section].loading = false;
+            isFirstChunk = false;
+            if (deltaData.phase === 'reasoning') {
+              boardInsightCard.value[section].content += '> **思考过程：**\n> ';
+              wasReasoning = true;
+              didReasoning = true;
+            }
+          }
+          if (deltaData && deltaData.text) {
+            if (deltaData.phase === 'reasoning') {
+              const formattedText = deltaData.text.replace(/\n/g, '\n> ');
+              boardInsightCard.value[section].content += formattedText;
+              wasReasoning = true;
+              didReasoning = true;
+            } else {
+              if (wasReasoning) {
+                boardInsightCard.value[section].content += '\n\n---\n\n';
+                wasReasoning = false;
+              }
+              boardInsightCard.value[section].content += deltaData.text;
+            }
+          }
+        },
+        (fullData) => {
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: didReasoning ? boardInsightCard.value[section].content : fullData.content,
+            insightId: fullData.insightId,
+            up: fullData.voteSummary?.up ?? 0,
+            down: fullData.voteSummary?.down ?? 0,
+            userVote: readStoredInsightVote(fullData.insightId),
+          };
+        },
+        (error) => {
+          console.error('[dashboardInsight] stream error:', error);
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: boardInsightCard.value[section].content || '获取智能分析失败',
+          };
+        }
+      );
     } catch {
       boardInsightCard.value[section] = {
         ...boardInsightCard.value[section],
@@ -2167,59 +2237,35 @@
     }
     if (insightVotePending.value[section]) return;
     insightVotePending.value[section] = true;
+
     const prev = card.userVote ?? null;
     try {
-      if (vote === 'up') {
-        if (prev === 'up') {
-          const res = await postDashboardInsightVote(id, { vote: 'up', action: 'remove' }).send();
-          boardInsightCard.value[section] = {
-            ...boardInsightCard.value[section],
-            up: res.up,
-            down: res.down,
-            userVote: null,
-          };
-          writeStoredInsightVote(id, null);
-          message.success('已取消赞');
-        } else {
-          if (prev === 'down') {
-            await postDashboardInsightVote(id, { vote: 'down', action: 'remove' }).send();
-          }
-          const res = await postDashboardInsightVote(id, { vote: 'up', action: 'add' }).send();
-          boardInsightCard.value[section] = {
-            ...boardInsightCard.value[section],
-            up: res.up,
-            down: res.down,
-            userVote: 'up',
-          };
-          writeStoredInsightVote(id, 'up');
-          message.success(prev === 'down' ? '已更新为赞' : '感谢您的反馈！');
-        }
-      } else if (prev === 'down') {
-        const res = await postDashboardInsightVote(id, { vote: 'down', action: 'remove' }).send();
-        boardInsightCard.value[section] = {
-          ...boardInsightCard.value[section],
-          up: res.up,
-          down: res.down,
-          userVote: null,
-        };
+      if (prev === vote) {
+        // 取消当前的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'remove' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = null;
         writeStoredInsightVote(id, null);
-        message.success('已取消踩');
+        message.info('已取消反馈');
       } else {
+        // 如果有反向的操作，先移除
         if (prev === 'up') {
           await postDashboardInsightVote(id, { vote: 'up', action: 'remove' }).send();
+        } else if (prev === 'down') {
+          await postDashboardInsightVote(id, { vote: 'down', action: 'remove' }).send();
         }
-        const res = await postDashboardInsightVote(id, { vote: 'down', action: 'add' }).send();
-        boardInsightCard.value[section] = {
-          ...boardInsightCard.value[section],
-          up: res.up,
-          down: res.down,
-          userVote: 'down',
-        };
-        writeStoredInsightVote(id, 'down');
-        message.success(prev === 'up' ? '已更新为踩' : '已记录您的反馈，我们将持续优化。');
+
+        // 执行新的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'add' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = vote;
+        writeStoredInsightVote(id, vote);
+        message.success(vote === 'up' ? '感谢您的点赞！' : '已记录您的反馈，我们将持续优化。');
       }
     } catch {
-      /* 全局错误提示由 Alova 处理 */
+      // 错误已由拦截器处理
     } finally {
       insightVotePending.value[section] = false;
     }
@@ -3330,7 +3376,7 @@
     display: flex;
     flex-direction: column;
     width: 100%;
-    height: 360px;
+    height: 300px;
     max-height: 360px;
     box-sizing: border-box;
   }
