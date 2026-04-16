@@ -292,7 +292,12 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
 
   let replyContent;
   try {
-    replyContent = await chatAnswerService.format(userMessage, toolResult, history);
+    replyContent = await chatAnswerService.format(
+      userMessage,
+      toolResult,
+      history,
+      options.streamFormatCallbacks || null
+    );
   } catch (err) {
     logger.warn('answer_format_failed', { error: err.message, intentType });
     replyContent = normalizeReplyContent(null, '当前请求已处理，但回答生成失败。请换个问法重试。');
@@ -308,7 +313,19 @@ async function runFunctionCalling(userMessage, history, regionScope, options = {
   const fallbackIntent = inferIntentFromMessage(userMessage);
 
   // Import lazily so MVP doesn't require chatWithTools to exist
-  const { chatWithTools } = require('../utils/ai');
+  const { chatWithTools, chatWithToolsStream } = require('../utils/ai');
+
+  /** FC 与 POST messages 流式 SSE 对齐：有 streamFormatCallbacks 时走 DeepSeek 流式 completion */
+  function callChatWithTools(opts) {
+    const sc = options.streamFormatCallbacks;
+    if (sc && typeof sc.onDelta === 'function') {
+      return chatWithToolsStream({
+        ...opts,
+        onDelta: (chunk, meta) => sc.onDelta(chunk, meta),
+      });
+    }
+    return chatWithTools(opts);
+  }
 
   const SYSTEM_PROMPT = `你是一个培训数据分析助手，专门回答关于门店培训进度的问题。
 
@@ -318,9 +335,13 @@ async function runFunctionCalling(userMessage, history, regionScope, options = {
 - 执行分位数、分布、相关性等统计分析
 
 【回答规则】
-当你调用工具查询数据后，输出一个 JSON 对象，包含以下四个字段：
+当你调用工具查询数据后，可先简短说明分析思路或工具结果（自然语言），然后**必须**将最终结构化答案放在单独一段 Markdown 代码块中，格式为：
+\`\`\`json
+{ "overview": "...", "keyNumbers": [], "attentionPoints": [], "followUpSuggestions": [] }
+\`\`\`
+JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，便于流式界面先出摘要再出指标）：
 - overview: 不超过 60 字的数据总结
-- keyNumbers: 最多 4 项数字，每项含 label/value/unit，数字必须来自工具返回
+- keyNumbers: 最多 4 项数字，每项含 label/value/unit，数字必须来自工具返回（value 可为数字或字符串）
 - attentionPoints: 最多 3 项风险或问题（无风险时为空数组）
 - followUpSuggestions: 最多 3 条建议追问，以"可追问："开头`;
 
@@ -341,7 +362,7 @@ async function runFunctionCalling(userMessage, history, regionScope, options = {
       await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
     }
 
-    const response = await chatWithTools({
+    const response = await callChatWithTools({
       messages,
       tools: chatToolsService.TOOL_SCHEMAS,
       tool_choice: 'auto',
@@ -434,7 +455,7 @@ async function runFunctionCalling(userMessage, history, regionScope, options = {
 
   // If we maxed out iterations and still have tools pending, force answer
   if (!finalContent && iterations >= MAX_ITERATIONS) {
-    const response = await chatWithTools({
+    const response = await callChatWithTools({
       messages,
       tools: chatToolsService.TOOL_SCHEMAS,
       tool_choice: 'none',

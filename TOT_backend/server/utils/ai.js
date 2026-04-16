@@ -424,10 +424,193 @@ async function chatWithTools(options) {
   });
 }
 
+/**
+ * 与 {@link chatWithTools} 相同请求体，但 `stream: true`；对每个增量调用 `onDelta`（含 reasoning / content），
+ * 用于 Executive Chat SSE；FC 模式下工具轮次与最终 JSON 均可流式输出 token。
+ * @param {object} options 同 chatWithTools，另需 `onDelta: (chunk: string, meta?: { phase: 'reasoning'|'content' }) => void`
+ * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
+ */
+async function chatWithToolsStream(options) {
+  const onDelta = options.onDelta;
+  if (typeof onDelta !== 'function') {
+    throw new Error('chatWithToolsStream requires options.onDelta');
+  }
+
+  return withRetry(async () => {
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey || String(apiKey).trim() === '') {
+      throw new Error('DEEPSEEK_API_KEY is not set');
+    }
+
+    const body = {
+      model: options.model || 'deepseek-chat',
+      messages: options.messages,
+      temperature: options.temperature ?? 0.1,
+      max_tokens: options.maxTokens ?? 2048,
+      stream: true,
+    };
+
+    if (options.tools && options.tools.length > 0) {
+      body.tools = options.tools;
+      body.tool_choice = options.tool_choice || 'auto';
+    }
+
+    if (options.response_format) {
+      body.response_format = options.response_format;
+    }
+
+    const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
+    const startTime = isDebugEnabled ? Date.now() : 0;
+
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': 'TOT-Apple-Backend/1.0',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (isDebugEnabled) {
+        appendDebugLog({
+          timestamp: new Date().toISOString(),
+          action: 'chatWithToolsStream',
+          request: body,
+          error: { status: response.status, text: errorText },
+          latencyMs: Date.now() - startTime,
+        });
+      }
+      throw Object.assign(
+        new Error(`DeepSeek chatWithToolsStream failed: ${response.status} ${String(errorText).slice(0, 300)}`),
+        { status: response.status }
+      );
+    }
+
+    if (!response.body) {
+      throw new Error('DeepSeek chatWithToolsStream: empty body');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let messageContent = '';
+    /** @type {Array<{ id: string, type: string, function: { name: string, arguments: string } }>} */
+    const toolCallSlots = [];
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+        if (!trimmed.startsWith('data: ')) continue;
+        const payload = trimmed.slice(6).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const json = JSON.parse(payload);
+          const d = json.choices?.[0]?.delta;
+          if (!d) continue;
+          if (d.reasoning_content) {
+            onDelta(d.reasoning_content, { phase: 'reasoning' });
+          }
+          if (d.content) {
+            messageContent += d.content;
+            onDelta(d.content, { phase: 'content' });
+          }
+          if (d.tool_calls && Array.isArray(d.tool_calls)) {
+            for (const p of d.tool_calls) {
+              const idx = typeof p.index === 'number' ? p.index : 0;
+              if (!toolCallSlots[idx]) {
+                toolCallSlots[idx] = {
+                  id: '',
+                  type: 'function',
+                  function: { name: '', arguments: '' },
+                };
+              }
+              if (p.id) toolCallSlots[idx].id = p.id;
+              if (p.type) toolCallSlots[idx].type = p.type;
+              if (p.function?.name) toolCallSlots[idx].function.name += p.function.name;
+              if (p.function?.arguments) toolCallSlots[idx].function.arguments += p.function.arguments;
+            }
+          }
+        } catch {
+          /* 忽略不完整 JSON */
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const trimmed = buffer.trim();
+      if (trimmed.startsWith('data: ')) {
+        const payload = trimmed.slice(6).trim();
+        if (payload && payload !== '[DONE]') {
+          try {
+            const json = JSON.parse(payload);
+            const d = json.choices?.[0]?.delta;
+            if (d) {
+              if (d.reasoning_content) onDelta(d.reasoning_content, { phase: 'reasoning' });
+              if (d.content) {
+                messageContent += d.content;
+                onDelta(d.content, { phase: 'content' });
+              }
+              if (d.tool_calls && Array.isArray(d.tool_calls)) {
+                for (const p of d.tool_calls) {
+                  const idx = typeof p.index === 'number' ? p.index : 0;
+                  if (!toolCallSlots[idx]) {
+                    toolCallSlots[idx] = {
+                      id: '',
+                      type: 'function',
+                      function: { name: '', arguments: '' },
+                    };
+                  }
+                  if (p.id) toolCallSlots[idx].id = p.id;
+                  if (p.type) toolCallSlots[idx].type = p.type;
+                  if (p.function?.name) toolCallSlots[idx].function.name += p.function.name;
+                  if (p.function?.arguments) toolCallSlots[idx].function.arguments += p.function.arguments;
+                }
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+
+    const tool_calls = toolCallSlots.length ? toolCallSlots.filter(Boolean) : null;
+
+    if (isDebugEnabled) {
+      appendDebugLog({
+        timestamp: new Date().toISOString(),
+        action: 'chatWithToolsStream',
+        request: body,
+        response: {
+          contentLen: messageContent?.length ?? 0,
+          toolCallCount: tool_calls?.length ?? 0,
+          latencyMs: Date.now() - startTime,
+        },
+      });
+    }
+
+    return {
+      content: messageContent || null,
+      tool_calls: tool_calls && tool_calls.length ? tool_calls : null,
+    };
+  });
+}
+
 module.exports = {
   generateText,
   generateTextDeepSeek,
   generateTextDeepSeekStream,
   chatWithTools,
+  chatWithToolsStream,
   withRetry,
 };

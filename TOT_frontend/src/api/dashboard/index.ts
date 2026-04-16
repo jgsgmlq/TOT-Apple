@@ -1,4 +1,5 @@
 import { Alova } from '@/utils/http/alova/index';
+import { streamSsePostJson } from '@/utils/http/ssePostStream';
 
 /** GET /api/v1/dashboard/overview — 概览 KPI（人均完成时间、按时完成率、预警率、触达/读取/催办转化等） */
 export interface DashboardOverview {
@@ -197,81 +198,21 @@ export const postDashboardInsight = (data: CreateDashboardInsightBody) => {
   return Alova.Post<DashboardInsightResult>('/dashboard/insights', data);
 };
 
-/** Streaming wrapper for POST /api/v1/dashboard/insights */
+/** Streaming wrapper for POST /api/v1/dashboard/insights（与 Executive Chat 共用 streamSsePostJson） */
 export const streamDashboardInsight = async (
   data: CreateDashboardInsightBody,
-  onMessage: (chunk: string) => void,
+  onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (fullData: DashboardInsightResult) => void,
-  onError: (error: any) => void
+  onError: (error: unknown) => void
 ) => {
-  const { useUserStore } = await import('@/store/modules/user');
-  const token = useUserStore().getToken;
-  const { useGlobSetting } = await import('@/hooks/setting');
-  const { apiUrl, urlPrefix } = useGlobSetting();
-  
-  let url = '/dashboard/insights';
-  if (urlPrefix) url = `${urlPrefix}${url}`;
-  if (apiUrl) url = `${apiUrl}${url}`;
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-    let partialMessage = '';
-    
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = (partialMessage + chunk).split('\n');
-        partialMessage = lines.pop() || '';
-
-        let currentEvent = 'message';
-        for (let line of lines) {
-          line = line.trim();
-          if (!line) {
-            currentEvent = 'message'; // reset after empty line
-            continue;
-          }
-
-          if (line.startsWith('event:')) {
-            currentEvent = line.replace(/^event:\s*/, '').trim();
-          } else if (line.startsWith('data:')) {
-            const dataStr = line.replace(/^data:\s*/, '').trim();
-            if (dataStr === '[DONE]') continue;
-
-            try {
-              const parsed = JSON.parse(dataStr);
-              if (currentEvent === 'delta') {
-                onMessage(parsed);
-              } else if (currentEvent === 'done') {
-                const resultData = parsed.data !== undefined ? parsed.data : parsed;
-                onComplete(resultData);
-              }
-            } catch (e) {
-              // Ignore parse errors for incomplete JSON or weird chunks
-            }
-          }
-        }
-      }
-    }
-  } catch (error) {
-    onError(error);
-  }
+  return streamSsePostJson({
+    path: '/dashboard/insights',
+    body: { ...data } as Record<string, unknown>,
+    onDelta: onMessage,
+    onDone: (d) => onComplete(d as DashboardInsightResult),
+    onError,
+    fallbackErrorMessage: '智能洞察流式生成失败',
+  });
 };
 
 /** POST /api/v1/dashboard/insights/{insightId}/vote — action 缺省为 add；remove 为取消对应计数 */
