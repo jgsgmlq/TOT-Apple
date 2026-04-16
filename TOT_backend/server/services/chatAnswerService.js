@@ -1,6 +1,8 @@
 'use strict';
 
 const { generateTextDeepSeek } = require('../utils/ai');
+const { compressAssistantContent } = require('../utils/chatHistoryCompress');
+const logger = require('../utils/logger');
 
 const SYSTEM_PROMPT = `你是一个培训数据分析助手，请根据以下查询结果，用中文回答用户问题。
 输出严格符合以下 JSON 格式（不加代码块标记，不加任何说明文字）:
@@ -36,12 +38,7 @@ async function format(userMessage, toolResult, history) {
     .map((m) => {
       // assistant messages in DB are JSON-stringified ReplyContent; extract overview for brevity
       if (m.role === 'assistant') {
-        try {
-          const rc = JSON.parse(m.content);
-          return `Assistant: ${rc.overview || m.content}`;
-        } catch {
-          return `Assistant: ${m.content ?? ''}`;
-        }
+        return `Assistant: ${compressAssistantContent(m.content ?? '')}`;
       }
       return `User: ${m.content ?? ''}`;
     })
@@ -61,12 +58,12 @@ async function format(userMessage, toolResult, history) {
       maxTokens: 1024,
     });
   } catch (err) {
-    console.error('[chatAnswerService] LLM call failed:', err.message);
+    logger.error('answer_llm_failed', { error: err.message });
     throw Object.assign(new Error('LLM inference failed'), { status: 503, code: 'CHAT_001' });
   }
 
   if (typeof raw !== 'string' || !raw.trim()) {
-    console.warn('[chatAnswerService] LLM returned empty/non-string response');
+    logger.warn('answer_llm_empty_response');
     throw Object.assign(new Error('LLM returned empty response'), { status: 503, code: 'CHAT_001' });
   }
 
@@ -76,7 +73,7 @@ async function format(userMessage, toolResult, history) {
   try {
     parsed = JSON.parse(cleaned);
   } catch (e) {
-    console.warn('[chatAnswerService] Failed to parse LLM response:', e.message, 'Raw:', raw);
+    logger.warn('answer_llm_parse_error', { error: e.message, raw: raw.slice(0, 200) });
     throw Object.assign(new Error('LLM returned non-JSON response'), { status: 503, code: 'CHAT_001' });
   }
 

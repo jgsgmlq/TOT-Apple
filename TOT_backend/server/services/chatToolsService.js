@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { db } = require('../db');
+const logger = require('../utils/logger');
 
 // ─── Dynamic Tool Loading ──────────────────────────────────────────────────────
 const TOOL_SCHEMAS = [];
@@ -11,14 +12,14 @@ const toolMetas = new Map(); // Store metadata for guardrails
 
 function loadTools() {
   const toolsDir = path.join(__dirname, '..', 'chat_tools');
-  console.log(`[chatToolsService] Loading tools from: ${toolsDir}`);
+  logger.info('tools_loading', { dir: toolsDir });
   if (!fs.existsSync(toolsDir)) {
-    console.warn(`[chatToolsService] Tools directory not found: ${toolsDir}`);
+    logger.warn('tools_dir_missing', { dir: toolsDir });
     return;
   }
 
   const files = fs.readdirSync(toolsDir).filter(f => f.endsWith('.js'));
-  console.log(`[chatToolsService] Found ${files.length} tool files: ${files.join(', ')}`);
+  let registered = 0;
 
   for (const file of files) {
     try {
@@ -27,7 +28,7 @@ function loadTools() {
         // Allow disabling tools via meta flag
         const meta = toolModule.meta || {};
         if (meta.enabled === false) {
-           console.log(`[chatToolsService] Skipping disabled tool in ${file}`);
+           logger.debug('tool_skipped_disabled', { file });
            continue;
         }
         const toolName = toolModule.schema.function.name;
@@ -39,14 +40,17 @@ function loadTools() {
           scopePolicy: meta.scopePolicy || 'any', // 'any', 'national_only'
           timeoutMs: meta.timeoutMs || 5000,
         });
-        console.log(`[chatToolsService] Registered tool: ${toolName}`);
+        registered += 1;
+        logger.debug('tool_registered', { toolName, file });
       } else {
-        console.warn(`[chatToolsService] Invalid tool schema in ${file}`);
+        logger.warn('tool_schema_invalid', { file });
       }
     } catch (err) {
-      console.error(`[chatToolsService] Failed to load tool ${file}:`, err.message);
+      logger.error('tool_load_failed', { file, error: err.message });
     }
   }
+
+  logger.info('tools_loaded', { count: registered, files: files.length });
 }
 
 // Load tools on module init
@@ -155,9 +159,6 @@ async function executeByName(toolName, params, regionScope) {
     return result;
   } catch (err) {
     // 5) 统一错误包装（避免裸栈信息泄漏给 LLM）
-    console.warn(`[chatToolsService] Tool execution blocked/failed (${toolName}):`, err.message);
-    
-    // Determine error type based on error message (naive approach without custom error classes)
     let code = 'EXECUTION_ERROR';
     let recommendation = 'Please explain the limitation to the user.';
     if (err.message.includes('Missing required parameter') || err.message.includes('must be a')) {
@@ -170,6 +171,8 @@ async function executeByName(toolName, params, regionScope) {
       code = 'TIMEOUT_ERROR';
       recommendation = 'The query took too long. Try narrowing the date range or filtering by a specific store/region.';
     }
+
+    logger.warn('tool_blocked', { toolName, error: err.message, code });
 
     return { 
       error: {

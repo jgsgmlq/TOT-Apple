@@ -5,6 +5,7 @@ const util = require('util');
 const fs = require('fs');
 const path = require('path');
 const execAsync = util.promisify(exec);
+const logger = require('./logger');
 
 const LOG_DIR = path.join(__dirname, '..', 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'ai_debug.log');
@@ -30,30 +31,74 @@ function appendDebugLog(logObject) {
   }
 }
 
+function isRetriableError(err) {
+  if (!err) return false;
+  const msg = String(err.message || '');
+  if (msg.includes('DEEPSEEK_API_KEY')) return false;
+  const st = err.status;
+  if (typeof st === 'number') {
+    if (st === 400 || st === 401 || st === 403 || st === 404) return false;
+    if (st === 429 || st >= 500) return true;
+  }
+  if (err.name === 'TypeError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {() => Promise<any>} fn
+ * @param {number} [maxRetries=2] max retries after first attempt (default 3 total attempts)
+ */
+async function withRetry(fn, maxRetries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxRetries || !isRetriableError(err)) throw err;
+      const delayMs = 300 * 2 ** attempt + Math.floor(Math.random() * 100);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 let cachedToken = null;
 let tokenExpiry = 0;
+let tokenPromise = null;
 
 /**
  * 获取 AppleConnect Token
  * 缓存 50 分钟，以减少重复调用 shell
  */
-function getToken() {
+async function getToken() {
   if (cachedToken && Date.now() < tokenExpiry) {
     return cachedToken;
   }
-  try {
-    const cmd = `appleconnect getToken -t oauth -G pkce -C hvys3fcwcteqrvw3qzkvtk86viuoqv -o openid,dsid,accountname,email,groups --interactivity-type none | grep id-token | cut -d ' ' -f 2`;
-    const token = execSync(cmd, { encoding: 'utf8' }).trim();
-    if (!token) {
-      throw new Error("Token output is empty");
-    }
-    cachedToken = token;
-    tokenExpiry = Date.now() + 50 * 60 * 1000; // 50 mins caching
-    return token;
-  } catch (err) {
-    console.error("Failed to get AppleConnect token:", err);
-    throw new Error("AI Authentication Failed: Please check your appleconnect configuration.");
+  if (tokenPromise) {
+    return tokenPromise;
   }
+  tokenPromise = (async () => {
+    try {
+      const cmd = `appleconnect getToken -t oauth -G pkce -C hvys3fcwcteqrvw3qzkvtk86viuoqv -o openid,dsid,accountname,email,groups --interactivity-type none | grep id-token | cut -d ' ' -f 2`;
+      const { stdout } = await execAsync(cmd, { encoding: 'utf8' });
+      const token = stdout.trim();
+      if (!token) {
+        throw new Error("Token output is empty");
+      }
+      cachedToken = token;
+      tokenExpiry = Date.now() + 50 * 60 * 1000; // 50 mins caching
+      return token;
+    } catch (err) {
+      console.error("Failed to get AppleConnect token:", err);
+      throw new Error("AI Authentication Failed: Please check your appleconnect configuration.");
+    } finally {
+      tokenPromise = null;
+    }
+  })();
+  return tokenPromise;
 }
 
 /**
@@ -62,7 +107,7 @@ function getToken() {
  * @returns {Promise<string>} 生成的文本内容
  */
 async function generateText(prompt) {
-  const token = getToken();
+  const token = await getToken();
   const url = "https://floodgate.g.apple.com/api/gemini/v1/publishers/google/models/gemini-2.5-pro:generateContent";
   const body = {
     contents: [{
@@ -105,69 +150,71 @@ async function generateText(prompt) {
  * @returns {Promise<string>} 助手回复正文
  */
 async function generateTextDeepSeek(prompt, options = {}) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey || String(apiKey).trim() === "") {
-    throw new Error("DEEPSEEK_API_KEY is not set");
-  }
+  return withRetry(async () => {
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey || String(apiKey).trim() === "") {
+      throw new Error("DEEPSEEK_API_KEY is not set");
+    }
 
-  const messages = [];
-  if (options.system) {
-    messages.push({ role: "system", content: options.system });
-  }
-  messages.push({ role: "user", content: prompt });
+    const messages = [];
+    if (options.system) {
+      messages.push({ role: "system", content: options.system });
+    }
+    messages.push({ role: "user", content: prompt });
 
-  const body = {
-    model: options.model || "deepseek-chat",
-    messages,
-    temperature: options.temperature ?? 0.1,
-    max_tokens: options.maxTokens ?? 2048,
-    stream: false
-  };
+    const body = {
+      model: options.model || "deepseek-chat",
+      messages,
+      temperature: options.temperature ?? 0.1,
+      max_tokens: options.maxTokens ?? 2048,
+      stream: false
+    };
 
-  const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
-  const startTime = isDebugEnabled ? Date.now() : 0;
+    const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
+    const startTime = isDebugEnabled ? Date.now() : 0;
 
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "User-Agent": "TOT-Apple-Backend/1.0"
-    },
-    body: JSON.stringify(body)
-  });
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "User-Agent": "TOT-Apple-Backend/1.0"
+      },
+      body: JSON.stringify(body)
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (isDebugEnabled) {
+        appendDebugLog({
+          timestamp: new Date().toISOString(),
+          action: 'generateTextDeepSeek',
+          request: body,
+          error: { status: response.status, text: errorText },
+          latencyMs: Date.now() - startTime
+        });
+      }
+      logger.error('deepseek_api_error', { status: response.status, statusText: response.statusText });
+      throw Object.assign(new Error(`DeepSeek API Failed: ${response.statusText}`), { status: response.status });
+    }
+
+    const data = await response.json();
+    const rawContent = data.choices?.[0]?.message?.content || "";
+
     if (isDebugEnabled) {
       appendDebugLog({
         timestamp: new Date().toISOString(),
         action: 'generateTextDeepSeek',
         request: body,
-        error: { status: response.status, text: errorText },
-        latencyMs: Date.now() - startTime
+        response: {
+          rawContent,
+          latencyMs: Date.now() - startTime
+        }
       });
     }
-    console.error(`DeepSeek API Error: ${response.status} ${response.statusText}`, errorText);
-    throw new Error(`DeepSeek API Failed: ${response.statusText}`);
-  }
 
-  const data = await response.json();
-  const rawContent = data.choices?.[0]?.message?.content || "";
-
-  if (isDebugEnabled) {
-    appendDebugLog({
-      timestamp: new Date().toISOString(),
-      action: 'generateTextDeepSeek',
-      request: body,
-      response: {
-        rawContent,
-        latencyMs: Date.now() - startTime
-      }
-    });
-  }
-
-  return rawContent;
+    return rawContent;
+  });
 }
 
 /**
@@ -199,88 +246,90 @@ function accumulateDeepSeekStreamDelta(json, onChunk) {
  * @returns {Promise<string>} 拼接后的 **content** 全文（不含 reasoning_content）
  */
 async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey || String(apiKey).trim() === '') {
-    throw new Error('DEEPSEEK_API_KEY is not set');
-  }
-
-  const messages = [];
-  if (options.system) {
-    messages.push({ role: 'system', content: options.system });
-  }
-  messages.push({ role: 'user', content: userPrompt });
-
-  const body = {
-    model: options.model || 'deepseek-chat',
-    messages,
-    temperature: options.temperature ?? 0.1,
-    max_tokens: options.maxTokens ?? 2048,
-    stream: true,
-  };
-
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'User-Agent': 'TOT-Apple-Backend/1.0',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`DeepSeek stream API Error: ${response.status}`, errorText);
-    throw new Error(`DeepSeek stream failed: ${response.statusText}`);
-  }
-
-  if (!response.body) {
-    throw new Error('DeepSeek stream: empty body');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let full = '';
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n');
-    buffer = parts.pop() || '';
-    for (const line of parts) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith(':')) continue;
-      if (!trimmed.startsWith('data: ')) continue;
-      const payload = trimmed.slice(6).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const json = JSON.parse(payload);
-        full += accumulateDeepSeekStreamDelta(json, onChunk);
-      } catch {
-        /* 忽略不完整 JSON 行 */
-      }
+  return withRetry(async () => {
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey || String(apiKey).trim() === '') {
+      throw new Error('DEEPSEEK_API_KEY is not set');
     }
-  }
 
-  if (buffer.trim()) {
-    const trimmed = buffer.trim();
-    if (trimmed.startsWith('data: ')) {
-      const payload = trimmed.slice(6).trim();
-      if (payload && payload !== '[DONE]') {
+    const messages = [];
+    if (options.system) {
+      messages.push({ role: 'system', content: options.system });
+    }
+    messages.push({ role: 'user', content: userPrompt });
+
+    const body = {
+      model: options.model || 'deepseek-chat',
+      messages,
+      temperature: options.temperature ?? 0.1,
+      max_tokens: options.maxTokens ?? 2048,
+      stream: true,
+    };
+
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': 'TOT-Apple-Backend/1.0',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`DeepSeek stream API Error: ${response.status}`, errorText);
+      throw Object.assign(new Error(`DeepSeek stream failed: ${response.statusText}`), { status: response.status });
+    }
+
+    if (!response.body) {
+      throw new Error('DeepSeek stream: empty body');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+        if (!trimmed.startsWith('data: ')) continue;
+        const payload = trimmed.slice(6).trim();
+        if (payload === '[DONE]') continue;
         try {
           const json = JSON.parse(payload);
           full += accumulateDeepSeekStreamDelta(json, onChunk);
         } catch {
-          /* ignore */
+          /* 忽略不完整 JSON 行 */
         }
       }
     }
-  }
 
-  return full;
+    if (buffer.trim()) {
+      const trimmed = buffer.trim();
+      if (trimmed.startsWith('data: ')) {
+        const payload = trimmed.slice(6).trim();
+        if (payload && payload !== '[DONE]') {
+          try {
+            const json = JSON.parse(payload);
+            full += accumulateDeepSeekStreamDelta(json, onChunk);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+
+    return full;
+  });
 }
 
 /**
@@ -298,72 +347,81 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
  * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
  */
 async function chatWithTools(options) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey || String(apiKey).trim() === '') {
-    throw new Error('DEEPSEEK_API_KEY is not set');
-  }
+  return withRetry(async () => {
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey || String(apiKey).trim() === '') {
+      throw new Error('DEEPSEEK_API_KEY is not set');
+    }
 
-  const body = {
-    model: options.model || 'deepseek-chat',
-    messages: options.messages,
-    temperature: options.temperature ?? 0.1,
-    max_tokens: options.maxTokens ?? 2048,
-    stream: false,
-  };
+    const body = {
+      model: options.model || 'deepseek-chat',
+      messages: options.messages,
+      temperature: options.temperature ?? 0.1,
+      max_tokens: options.maxTokens ?? 2048,
+      stream: false,
+    };
 
-  if (options.tools && options.tools.length > 0) {
-    body.tools = options.tools;
-    body.tool_choice = options.tool_choice || 'auto';
-  }
+    if (options.tools && options.tools.length > 0) {
+      body.tools = options.tools;
+      body.tool_choice = options.tool_choice || 'auto';
+    }
 
-  const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
-  const startTime = isDebugEnabled ? Date.now() : 0;
+    if (options.response_format) {
+      body.response_format = options.response_format;
+    }
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'User-Agent': 'TOT-Apple-Backend/1.0',
-    },
-    body: JSON.stringify(body),
-  });
+    const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
+    const startTime = isDebugEnabled ? Date.now() : 0;
 
-  if (!response.ok) {
-    const errorText = await response.text();
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'User-Agent': 'TOT-Apple-Backend/1.0',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (isDebugEnabled) {
+        appendDebugLog({
+          timestamp: new Date().toISOString(),
+          action: 'chatWithTools',
+          request: body,
+          error: { status: response.status, text: errorText },
+          latencyMs: Date.now() - startTime
+        });
+      }
+      throw Object.assign(
+        new Error(`DeepSeek chatWithTools failed: ${response.status} ${String(errorText).slice(0, 300)}`),
+        { status: response.status }
+      );
+    }
+
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    if (!choice) throw new Error('DeepSeek returned no choices');
+
     if (isDebugEnabled) {
       appendDebugLog({
         timestamp: new Date().toISOString(),
         action: 'chatWithTools',
         request: body,
-        error: { status: response.status, text: errorText },
-        latencyMs: Date.now() - startTime
+        response: {
+          content: choice.message?.content,
+          tool_calls: choice.message?.tool_calls,
+          latencyMs: Date.now() - startTime
+        }
       });
     }
-    throw new Error(`DeepSeek chatWithTools failed: ${response.status} ${errorText}`);
-  }
 
-  const data = await response.json();
-  const choice = data.choices?.[0];
-  if (!choice) throw new Error('DeepSeek returned no choices');
-
-  if (isDebugEnabled) {
-    appendDebugLog({
-      timestamp: new Date().toISOString(),
-      action: 'chatWithTools',
-      request: body,
-      response: {
-        content: choice.message?.content,
-        tool_calls: choice.message?.tool_calls,
-        latencyMs: Date.now() - startTime
-      }
-    });
-  }
-
-  return {
-    content:    choice.message?.content ?? null,
-    tool_calls: choice.message?.tool_calls ?? null,
-  };
+    return {
+      content:    choice.message?.content ?? null,
+      tool_calls: choice.message?.tool_calls ?? null,
+    };
+  });
 }
 
 module.exports = {
@@ -371,4 +429,5 @@ module.exports = {
   generateTextDeepSeek,
   generateTextDeepSeekStream,
   chatWithTools,
+  withRetry,
 };

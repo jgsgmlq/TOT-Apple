@@ -5,6 +5,14 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+# Local SQLite backups and junk copies
+*.db-shm.bak*
+*.db-wal.bak*
+*.db.bak*
+*.db.corrupt
 
 # Environment
 .env

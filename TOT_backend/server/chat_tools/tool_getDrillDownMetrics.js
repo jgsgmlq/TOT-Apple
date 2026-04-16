@@ -1,7 +1,6 @@
 'use strict';
 
 const { db } = require('../db');
-const { buildRegionFilter, resolveStoreId } = require('../utils/chatUtils');
 
 module.exports = {
   schema: {
@@ -23,10 +22,58 @@ module.exports = {
   handler: async (args, regionScope) => {
     let { storeId, taskId } = args;
 
-    // Fallback: if storeId looks like a name (no S prefix), try resolving
+    // Fallback: if storeId looks like a name (no S prefix), resolve by name.
     let resolvedId = storeId;
     if (storeId && !storeId.match(/^S\d+$/i)) {
-      resolvedId = resolveStoreId(storeId) || storeId;
+      const candidateParams = [`%${storeId}%`];
+      const scopeConditions = [];
+      if (regionScope && regionScope.type === 'regional') {
+        const regions = Array.isArray(regionScope.regions) ? regionScope.regions : [];
+        if (!regions.length) {
+          return {
+            needDisambiguation: true,
+            reason: 'store_not_found',
+            message: `未找到名称包含“${storeId}”且在当前权限范围内的门店。`,
+            storeQuery: storeId,
+            candidates: [],
+          };
+        }
+        scopeConditions.push(`region IN (${regions.map(() => '?').join(',')})`);
+        candidateParams.push(...regions);
+      } else if (regionScope && regionScope.type === 'rtm') {
+        scopeConditions.push('rtm = ?');
+        candidateParams.push(regionScope.rtm);
+      }
+      const whereScope = scopeConditions.length ? `AND ${scopeConditions.join(' AND ')}` : '';
+      const candidates = db.all(
+        `SELECT id, name, region, rtm, format
+         FROM stores
+         WHERE name LIKE ?
+         ${whereScope}
+         ORDER BY name ASC
+         LIMIT 6`,
+        candidateParams
+      );
+
+      if (candidates.length === 1) {
+        resolvedId = candidates[0].id;
+      } else if (candidates.length === 0) {
+        return {
+          needDisambiguation: true,
+          reason: 'store_not_found',
+          message: `未找到名称包含“${storeId}”且在当前权限范围内的门店。`,
+          storeQuery: storeId,
+          candidates: [],
+        };
+      } else {
+        return {
+          needDisambiguation: true,
+          reason: 'store_name_ambiguous',
+          message: `查询“${storeId}”命中多家门店，请指定 storeId 或更完整门店名称。`,
+          storeQuery: storeId,
+          candidates,
+        };
+      }
     }
 
     // Region access control: verify the store is within the executive's authorized scope
