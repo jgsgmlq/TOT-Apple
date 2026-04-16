@@ -121,7 +121,9 @@ export interface WarningStoreRow {
   taskId: string;
   storeId: string;
   storeName: string;
-  warningLevel: 'p1' | 'p0';
+  warningLevel: 'p1' | 'p0' | 'startDelay';
+  /** 与 GET /dashboard/overview 预警率同公式（单店范围）：起步异常=进度0未完成人数/店人数；临期=未完成人数/店人数（任务须在对应临期带） */
+  warningRate: number;
   completionRate: number;
   completedCount: number;
   totalCount: number;
@@ -131,10 +133,10 @@ export interface WarningStoreRow {
   calculatedAt: string;
 }
 
-/** GET /api/v1/dashboard/warnings — 预警门店下钻 */
+/** GET /api/v1/dashboard/warnings — 预警门店下钻（临期 p0/p1 或起步异常 startDelay） */
 export const getDashboardWarnings = (params: {
   taskId: string;
-  warningLevel?: 'p0' | 'p1';
+  warningLevel?: 'p0' | 'p1' | 'startDelay';
   pageNum?: number;
   pageSize?: number;
   rtm?: string;

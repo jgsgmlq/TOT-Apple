@@ -7,7 +7,7 @@
  *   GET /api/v1/dashboard/overview   §5.1 总部/Executive 概览 KPI
  *   GET /api/v1/dashboard/heatmap    §5.2 RTM/区域热力图
  *   GET /api/v1/dashboard/store-rank §5.3 Top/Bottom N 门店排行
- *   GET /api/v1/dashboard/warnings   §5.5 预警列表（P0，实时聚合，无独立存储表）
+ *   GET /api/v1/dashboard/warnings   §5.5 预警列表（临期 p0/p1 + 起步 startDelay）
  *
  * 门店层级下钻（可选 query，可组合，AND）：rtm、format、dealerName、storeId
  * 对应 stores：rtm → format → dealer_name → id。不传则与旧行为一致。
@@ -27,6 +27,10 @@ const {
   classifyDeadlineCrisisBand,
   getDeadlineCrisisHours,
 } = require('../services/autoNudgeRules');
+const {
+  computeAssignmentWarningRates,
+  ruleBasedStoreWarningRate,
+} = require('../utils/dashboardWarningRates');
 
 const router = express.Router();
 
@@ -59,6 +63,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
     const storeWhere = drill.hasDrill ? drill.sql : '';
     const allParams = [...taParams, ...drill.params];
+    const nowMs = Date.now();
 
     // ─ assignment 基础聚合 ──
     const base = db.get(
@@ -179,7 +184,6 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
        GROUP BY ta.store_id, ta.task_id`,
       allParams
     );
-    const nowMs = Date.now();
     let warnP1 = 0;
     let warnP0 = 0;
     for (const row of storeTaskRows) {
@@ -210,27 +214,20 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         ? parseFloat(((100 * nudgeRow.converted_nudged) / nudgeRow.total_nudged).toFixed(2))
         : 0;
 
-    // 起步异常/P0/P1预警统计 (基于 notification_events dedupe_key 包含的 ruleType 或事件类型)
-    const warnStatsRow = db.get(
-      `SELECT
-         SUM(CASE WHEN ne.dedupe_key LIKE '%startDelay%' THEN 1 ELSE 0 END) AS start_delay_cnt,
-         SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP0%' THEN 1 ELSE 0 END) AS p0_cnt,
-         SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP1%' THEN 1 ELSE 0 END) AS p1_cnt
-       FROM notification_events ne
-       JOIN task_assignments ta ON ne.assignment_id = ta.id
+    // 起步异常 / 临期 P0/P1：与 autoNudge 规则一致，按 assignment 计数 ÷ total（与 GET /dashboard/warnings 下钻门店率同口径）
+    const assignRateRows = db.all(
+      `SELECT ta.status, ta.progress, t.created_at, t.ddl_at, t.auto_nudge_rules
+       FROM task_assignments ta
+       JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
       allParams
     );
-    // 这里使用 total(即当次范围内的分配总数)作为分母计算占比
-    const startDelayRate =
-      total > 0
-        ? parseFloat(((100 * (warnStatsRow.start_delay_cnt || 0)) / total).toFixed(2))
-        : 0;
-    const crisisP0Rate =
-      total > 0 ? parseFloat(((100 * (warnStatsRow.p0_cnt || 0)) / total).toFixed(2)) : 0;
-    const crisisP1Rate =
-      total > 0 ? parseFloat(((100 * (warnStatsRow.p1_cnt || 0)) / total).toFixed(2)) : 0;
+    const {
+      startDelayRate,
+      crisisP0Rate,
+      crisisP1Rate,
+    } = computeAssignmentWarningRates(assignRateRows, total, nowMs);
 
     // 任务触达率：晚于下发时间(ta.created_at)登录就算触达，或者任务已经收到（ta.received_at有值），或者通过websocket收到了通知
     const reachRow = db.get(
@@ -430,16 +427,17 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 });
 
 // ─── GET /api/v1/dashboard/warnings ───────────────────────────────────────────
-// §5.5 预警列表（实时从 task_assignments 聚合，无独立存储表）
-// 临期分级与 autoNudge（tasks.auto_nudge_rules.deadlineCrisis）一致；未配置 deadlineCrisis 的不出现在本列表
+// §5.5 预警列表（实时聚合，无独立 alerts 表）
+// - p1/p0：task_assignments + deadlineCrisis 与 autoNudge 一致
+// - 门店 warningRate：与 §5.1 同公式在单店范围（起步异常=进度0人数/店人数；临期=未完成人数/店人数，且任务须落在对应临期带）
 
 router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
   try {
     const { taskId, warningLevel, pageNum = 1, pageSize = 20 } = req.query;
     const drill = parseStoreDrill(req.query);
 
-    if (warningLevel && !['p1', 'p0'].includes(warningLevel)) {
-      throw createError(400, 'warningLevel 非法（p1/p0）', 'DASH_003');
+    if (warningLevel && !['p1', 'p0', 'startDelay'].includes(warningLevel)) {
+      throw createError(400, 'warningLevel 非法（p1/p0/startDelay）', 'DASH_003');
     }
 
     const page  = Math.max(1, parseInt(pageNum,  10) || 1);
@@ -457,6 +455,86 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const whereClause = conditions.join(' AND ');
     const nowIso = formatNowSqliteLocal();
     const nowMs = Date.now();
+
+    if (warningLevel === 'startDelay') {
+      const startDelaySql = `
+      SELECT
+        ta.task_id,
+        ta.store_id,
+        s.name AS store_name,
+        MAX(t.created_at) AS task_created_at,
+        t.ddl_at,
+        t.auto_nudge_rules,
+        COUNT(ta.id) AS total_count,
+        SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
+        SUM(CASE WHEN ta.status!='completed' THEN 1 ELSE 0 END) AS uncompleted_count,
+        SUM(CASE WHEN ta.status!='completed' AND COALESCE(ta.progress, 0) = 0 THEN 1 ELSE 0 END) AS zero_prog_incomplete,
+        SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
+        ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
+        MAX(ta.updated_at) AS last_updated
+      FROM task_assignments ta
+      JOIN stores s ON s.id = ta.store_id
+      JOIN tasks t ON t.id = ta.task_id
+      WHERE ${whereClause}
+      GROUP BY ta.store_id, ta.task_id
+    `;
+      const rawRows = db.all(startDelaySql, [nowIso, ...params]);
+      const matchedStartDelay = [];
+      for (const r of rawRows) {
+        const rules = parseAutoNudgeRules(r.auto_nudge_rules);
+        if (!rules.startDelay) continue;
+        const zp = r.zero_prog_incomplete || 0;
+        if (!zp) continue;
+        const createdAtMs = new Date(r.task_created_at).getTime();
+        const ddlMs = new Date(r.ddl_at).getTime();
+        const totalDur = ddlMs - createdAtMs;
+        const passedPct = totalDur > 0 ? ((nowMs - createdAtMs) / totalDur) * 100 : 100;
+        if (passedPct < rules.startDelay) continue;
+        matchedStartDelay.push(r);
+      }
+      matchedStartDelay.forEach((r) => {
+        r._warningRate = ruleBasedStoreWarningRate('startDelay', r);
+      });
+      matchedStartDelay.sort((a, b) => (b._warningRate || 0) - (a._warningRate || 0));
+      const total = matchedStartDelay.length;
+      const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+      const pageSlice = matchedStartDelay.slice(offset, offset + limit);
+
+      const list = pageSlice.map((r) => {
+        const rules = parseAutoNudgeRules(r.auto_nudge_rules);
+        const completionRate = r.completion_rate || 0;
+        const warningRate = r._warningRate ?? 0;
+        const threshold = rules.startDelay;
+        const triggerDesc =
+          threshold != null && threshold !== ''
+            ? `任务时间进度已达 ${Number(threshold).toFixed(0)}% 阈值（startDelay），店内仍有学员进度为 0`
+            : '店内仍有学员进度为 0（起步异常 / startDelay）';
+        return {
+          taskId:         r.task_id,
+          storeId:        r.store_id,
+          storeName:      r.store_name,
+          warningLevel:   'startDelay',
+          warningRate,
+          completionRate,
+          completedCount: r.completed_count,
+          totalCount:     r.total_count,
+          overdueCount:   r.overdue_count || 0,
+          triggerDesc,
+          aiSuggestion:   aiSuggestion(completionRate),
+          calculatedAt:   nowIso,
+        };
+      });
+
+      return res.json({
+        code: 200,
+        message: 'success',
+        data: {
+          list,
+          pagination: { pageNum: page, pageSize: limit, total, totalPages },
+        },
+        requestId: req.requestId,
+      });
+    }
 
     const aggregateSql = `
       SELECT
@@ -492,7 +570,10 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       matched.push({ row: r, band });
     }
 
-    matched.sort((a, b) => (a.row.completion_rate || 0) - (b.row.completion_rate || 0));
+    matched.forEach(({ row: r, band }) => {
+      r._warningRate = ruleBasedStoreWarningRate(band, r);
+    });
+    matched.sort((a, b) => (b.row._warningRate || 0) - (a.row._warningRate || 0));
 
     const total = matched.length;
     const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
@@ -501,7 +582,8 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const list = pageSlice.map(({ row: r, band }) => {
       const rules = parseAutoNudgeRules(r.auto_nudge_rules);
       const h = getDeadlineCrisisHours(rules);
-      const rate = r.completion_rate || 0;
+      const completionRate = r.completion_rate || 0;
+      const warningRate = r._warningRate ?? 0;
       const triggerDesc = band === 'p0'
         ? `距 Deadline 不足${h.p0Hours}小时，仍未完成（P0）`
         : `距 Deadline 不足${h.p1Hours}小时，仍未完成（P1）`;
@@ -510,12 +592,13 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         storeId:        r.store_id,
         storeName:      r.store_name,
         warningLevel:   band,
-        completionRate: rate,
+        warningRate,
+        completionRate,
         completedCount: r.completed_count,
         totalCount:     r.total_count,
         overdueCount:   r.overdue_count || 0,
         triggerDesc,
-        aiSuggestion:   aiSuggestion(rate),
+        aiSuggestion:   aiSuggestion(completionRate),
         calculatedAt:   nowIso,
       };
     });

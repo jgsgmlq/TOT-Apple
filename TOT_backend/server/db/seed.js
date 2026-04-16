@@ -88,6 +88,42 @@ const TASKS = [
     pass_score: 80,
     created_by: 'central',
   },
+  {
+    id:          'TASK_WARN_START',
+    title:       'MacBook 销售技巧起步异常',
+    description: '测试起步异常预警，时间已过半。',
+    has_mypal: 1, has_smartsell: 0, has_ai_demo: 1, has_live_broadcast: 0,
+    status:    'dispatched',
+    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 4 * 24 * 3600 * 1000)),
+    created_at:parseDateToSqliteLocal(new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    pass_score: 80,
+    created_by: 'central',
+  },
+  {
+    id:          'TASK_WARN_P1',
+    title:       'iPad Pro P1临期预警',
+    description: '测试P1临期预警，剩余时间小于48小时。',
+    has_mypal: 1, has_smartsell: 1, has_ai_demo: 0, has_live_broadcast: 0,
+    status:    'dispatched',
+    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 1.5 * 24 * 3600 * 1000)),
+    created_at:parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    pass_score: 80,
+    created_by: 'central',
+  },
+  {
+    id:          'TASK_WARN_P0',
+    title:       'Apple Watch P0临期预警',
+    description: '测试P0临期预警，剩余时间小于24小时。',
+    has_mypal: 1, has_smartsell: 0, has_ai_demo: 0, has_live_broadcast: 1,
+    status:    'dispatched',
+    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 0.5 * 24 * 3600 * 1000)),
+    created_at:parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    pass_score: 80,
+    created_by: 'central',
+  },
 ];
 
 // ─── 员工姓名与职位池 ───────────────────────────────────────────────────────────
@@ -115,21 +151,33 @@ const ARCHETYPE_STATUS = {
     /* Task A */ ['completed','completed','completed','completed','completed','completed','completed','completed','completed','in_progress'],
     /* Task B */ ['completed','completed','completed','completed','completed','completed','completed','completed','in_progress','in_progress'],
     /* Task C */ ['completed','completed','in_progress','in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
+    /* Task Start */ ['completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P1 */    ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
+    /* Task P0 */    ['completed','completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending'   ],
   ],
   good: [
     /* Task A */ ['completed','completed','completed','completed','completed','completed','completed','in_progress','in_progress','pending'   ],
     /* Task B */ ['completed','completed','completed','completed','completed','in_progress','in_progress','in_progress','pending',    'pending'   ],
     /* Task C */ ['completed','in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task Start */ ['completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P1 */    ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P0 */    ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
   ],
   moderate: [
     /* Task A */ ['completed','completed','completed','completed','completed','in_progress','in_progress','in_progress','pending',    'pending'   ],
     /* Task B */ ['completed','completed','completed','in_progress','in_progress','in_progress','in_progress','pending',    'pending',    'pending'   ],
     /* Task C */ ['in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task Start */ ['in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P1 */    ['completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P0 */    ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
   ],
   warning: [
     /* Task A */ ['completed','completed','in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task B */ ['completed','in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task C */ ['in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task Start */ ['pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P1 */    ['completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task P0 */    ['completed','completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
   ],
 };
 
@@ -482,6 +530,17 @@ async function seed() {
     );
   }
   console.log(`  ✓ users: ${users.length} 条`);
+
+  console.log('⏳ 正在触发自动预警 (Auto Nudges)...');
+  const { evaluateAndTriggerAutoNudges } = require('../services/autoNudge');
+  for (const t of TASKS) {
+    if (t.status === 'dispatched') {
+      await evaluateAndTriggerAutoNudges(t.id);
+    }
+  }
+  // 等待异步自动催办落地
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  console.log('  ✓ 自动预警数据已生成');
 
   console.log('\n✅ Seed 完成');
   console.log('\n── 测试账号 ──────────────────────────────────────');
