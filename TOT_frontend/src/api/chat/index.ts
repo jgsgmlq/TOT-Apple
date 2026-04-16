@@ -1,4 +1,5 @@
 import { Alova } from '@/utils/http/alova/index';
+import { streamSsePostJson } from '@/utils/http/ssePostStream';
 
 export interface ReplyContent {
   overview: string;
@@ -87,6 +88,28 @@ export const sendChatMessage = (
     { content },
     options?.skipGlobalErrorMessage ? { meta: { skipGlobalErrorMessage: true } } : undefined
   );
+};
+
+/**
+ * Executive Chat 流式发送（SSE：`delta` / `done` / `error`），与智能洞察共用 {@link streamSsePostJson}。
+ * @param onMessage `event: delta` 的 JSON：`{ text, phase?: 'content'|'reasoning' }`
+ * @param onComplete `event: done` 的 `data` 字段，即 SendMessageResult
+ */
+export const streamExecutiveChatMessage = async (
+  sessionId: string,
+  content: string,
+  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onComplete: (data: SendMessageResult) => void,
+  onError: (error: unknown) => void
+) => {
+  return streamSsePostJson({
+    path: `/chat/executive/sessions/${sessionId}/messages`,
+    body: { content, stream: true },
+    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDone: (d) => onComplete(d as SendMessageResult),
+    onError,
+    fallbackErrorMessage: 'Executive Chat 处理失败',
+  });
 };
 
 /**

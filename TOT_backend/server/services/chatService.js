@@ -8,6 +8,7 @@ const { compressAssistantContent } = require('../utils/chatHistoryCompress');
 const chatAgentRunner = require('./chatAgentRunner');
 const { AGENT_MODE } = chatAgentRunner;
 const chatSessionStateService = require('./chatSessionStateService');
+const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 /**
@@ -184,6 +185,134 @@ async function sendMessage(sessionId, userMessage, userId) {
     contextId:    sessionId,
     timestamp:    now,
   };
+}
+
+// ─── sendMessageStream（SSE，与看板智能洞察一致：delta / done / error）──────────
+/**
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function sendMessageStream(sessionId, userMessage, userId, req, res) {
+  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) {
+    res.status(404).json({
+      code: 404,
+      message: '会话不存在',
+      errorCode: 'CHAT_003',
+      requestId: req.requestId,
+    });
+    return;
+  }
+  if (Number(session.user_id) !== Number(userId)) {
+    res.status(403).json({
+      code: 403,
+      message: '无权访问此会话',
+      errorCode: 'CHAT_004',
+      requestId: req.requestId,
+    });
+    return;
+  }
+
+  const regionScope = {
+    type: session.role_scope,
+    regions: parseSessionRegionsStored(session.regions, sessionId),
+    rtm: session.rtm || null,
+  };
+
+  const historyRows = db.all(
+    `SELECT role, content FROM chat_messages
+     WHERE session_id = ?
+     ORDER BY created_at DESC, rowid DESC LIMIT 6`,
+    [sessionId]
+  ).reverse();
+
+  const history = historyRows.map((r) => {
+    let content = r.content;
+    if (r.role === 'assistant') {
+      content = compressAssistantContent(r.content);
+    }
+    return { role: r.role, content };
+  });
+
+  writeSseHeaders(res);
+  const send = createSseSender(res);
+
+  const startMs = Date.now();
+  let replyContent;
+  try {
+    replyContent = await chatAgentRunner.run(userMessage, history, regionScope, {
+      sessionId,
+      streamFormatCallbacks: {
+        onDelta: (text, meta) => {
+          send('delta', {
+            text,
+            phase: meta && meta.phase ? meta.phase : 'content',
+          });
+        },
+      },
+    });
+  } catch (err) {
+    const code = err.code || 'CHAT_500';
+    const status = err.status || 500;
+    send('error', {
+      message: err.message || 'Executive Chat 处理失败',
+      code,
+      status,
+    });
+    res.end();
+    return;
+  }
+
+  const responseTime = Date.now() - startMs;
+  const now = formatNowSqliteLocal();
+  const userMsgId = nanoid();
+  const assistMsgId = nanoid();
+  const intentType = replyContent._intentType || null;
+  delete replyContent._intentType;
+
+  const intentResolvedBy = replyContent._intentResolvedBy || null;
+  delete replyContent._intentResolvedBy;
+
+  const toolMeta = replyContent._toolMeta || {};
+  delete replyContent._toolMeta;
+
+  logger.info('chat_turn', {
+    sessionId,
+    userId,
+    intentType,
+    agentMode: AGENT_MODE,
+    responseTimeMs: responseTime,
+    toolName: toolMeta.toolName ?? null,
+    toolCacheHit: toolMeta.cacheHit ?? null,
+    toolSkipped: toolMeta.skipped === true,
+    toolIterations: toolMeta.iterations || 0,
+    msgId: assistMsgId,
+    stream: true,
+  });
+
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    [userMsgId, sessionId, 'user', userMessage, now]
+  );
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [assistMsgId, sessionId, 'assistant', JSON.stringify(replyContent), intentType, now]
+  );
+  db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+
+  send('done', {
+    code: 200,
+    message: 'success',
+    data: {
+      messageId: assistMsgId,
+      replyContent,
+      responseTime,
+      contextId: sessionId,
+      timestamp: now,
+    },
+    requestId: req.requestId,
+  });
+  res.end();
 }
 
 // ─── getHistory ───────────────────────────────────────────────────────────────
@@ -405,4 +534,12 @@ function deleteSessionById(sessionId) {
   chatSessionStateService.clearSession(sessionId);
 }
 
-module.exports = { createSession, sendMessage, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant };
+module.exports = {
+  createSession,
+  sendMessage,
+  sendMessageStream,
+  getHistory,
+  deleteSessionById,
+  setMessageFeedback,
+  regenerateLastAssistant,
+};

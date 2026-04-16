@@ -49,10 +49,15 @@ router.post(
   async (req, res, next) => {
     try {
       const { sessionId } = req.params;
-      const { content } = req.body;
+      const { content, stream } = req.body;
 
       if (!content || !content.trim()) {
         throw createError(400, 'content 不能为空', 'CHAT_005');
+      }
+
+      if (stream === true) {
+        await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
+        return;
       }
 
       const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);

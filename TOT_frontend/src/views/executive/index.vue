@@ -217,7 +217,61 @@
                 </template>
               </div>
               <div class="message-content">
-                {{ msg.content }}
+                <template v-if="msg.role === 'user'">{{ msg.content }}</template>
+                <template v-else>
+                  <div v-if="msg.thinking" class="exec-thinking-wrap">
+                    <n-collapse :default-expanded-names="['think']">
+                      <n-collapse-item title="思考过程" name="think">
+                        <div class="exec-thinking-body">{{ msg.thinking }}</div>
+                      </n-collapse-item>
+                    </n-collapse>
+                  </div>
+
+                  <div
+                    v-if="msg.replyContent || msg.partialReply"
+                    class="exec-structured"
+                    :class="{ 'exec-structured--stream': !msg.replyContent && !!msg.partialReply }"
+                  >
+                    <p class="exec-overview">
+                      {{ (msg.replyContent || msg.partialReply)!.overview }}
+                    </p>
+                    <div
+                      v-if="(msg.replyContent || msg.partialReply)!.keyNumbers?.length"
+                      class="exec-keynums"
+                    >
+                      <div
+                        v-for="(kn, ki) in (msg.replyContent || msg.partialReply)!.keyNumbers"
+                        :key="ki"
+                        class="exec-keynum-row"
+                      >
+                        <span class="exec-k-label">{{ kn.label }}</span>
+                        <span class="exec-k-value">{{ kn.value }}{{ kn.unit || '' }}</span>
+                      </div>
+                    </div>
+                    <ul
+                      v-if="(msg.replyContent || msg.partialReply)!.attentionPoints?.length"
+                      class="exec-attn"
+                    >
+                      <li
+                        v-for="(ap, ai) in (msg.replyContent || msg.partialReply)!.attentionPoints"
+                        :key="ai"
+                      >
+                        {{ ap }}
+                      </li>
+                    </ul>
+                    <div
+                      v-if="(msg.replyContent || msg.partialReply)!.followUpSuggestions?.length"
+                      class="exec-follow"
+                    >
+                      💡
+                      {{
+                        (msg.replyContent || msg.partialReply)!.followUpSuggestions!.join(' / ')
+                      }}
+                    </div>
+                  </div>
+                  <pre v-else-if="msg.jsonStream" class="exec-json-fallback">{{ msg.jsonStream }}</pre>
+                  <div v-else-if="msg.content" class="exec-plain">{{ msg.content }}</div>
+                </template>
 
                 <!-- AI Feedback Actions -->
                 <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
@@ -317,7 +371,7 @@
   import { useUserStore } from '@/store/modules/user';
   import {
     createChatSession,
-    sendChatMessage,
+    streamExecutiveChatMessage,
     getChatHistory,
     deleteChatSession,
     formatReplyContentText,
@@ -325,7 +379,12 @@
     regenerateChatMessage,
     type ChatHistoryItem,
     type SendMessageResult,
+    type ReplyContent,
   } from '@/api/chat';
+  import {
+    splitPreambleAndJson,
+    parseReplyContentProgressive,
+  } from '@/utils/execChatStreamParts';
   import {
     LikeOutlined,
     LikeFilled,
@@ -343,6 +402,14 @@
     id?: string;
     role: 'user' | 'ai';
     content: string;
+    /** 思考过程：reasoning 流 + ` ```json` 前说明，不在正文重复 */
+    thinking?: string;
+    /** 流式阶段 JSON 尚未解析成功时的原始片段 */
+    jsonStream?: string;
+    /** 流式过程中已成功 parse 的结构化预览 */
+    partialReply?: ReplyContent | null;
+    /** 服务端落库后的最终结构化回答 */
+    replyContent?: ReplyContent | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
     isFeedbackLoading?: boolean;
@@ -495,6 +562,7 @@
           id: item.messageId,
           role: 'ai',
           content: formatReplyContentText(item.replyContent ?? undefined),
+          replyContent: item.replyContent ?? undefined,
           userFeedback: item.userFeedback,
         });
       }
@@ -714,11 +782,14 @@
     inputValue.value = '';
     scrollToBottom();
 
-    // 占位 loading 消息
-    messages.value.push({ role: 'ai', content: '正在查询数据，请稍候…' });
+    // 占位（流式开始后由 delta 覆盖）
+    messages.value.push({ role: 'ai', content: '正在生成…' });
     const loadingIndex = messages.value.length - 1;
     isSending.value = true;
     scrollToBottom();
+
+    /** reasoning + ` ```json` 前说明，完成后写入「思考过程」 */
+    let streamThinkingSnapshot = '';
 
     const applySendSuccess = (sid: string, result: SendMessageResult) => {
       const text = formatReplyContentText(result.replyContent);
@@ -726,6 +797,10 @@
         id: result.messageId,
         role: 'ai',
         content: text,
+        replyContent: result.replyContent,
+        thinking: streamThinkingSnapshot || undefined,
+        jsonStream: undefined,
+        partialReply: undefined,
         userFeedback: null,
       };
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
@@ -740,11 +815,70 @@
       persistSidebar();
     };
 
+    const runStreamSend = (sid: string) =>
+      new Promise<void>((resolve, reject) => {
+        let reasoningBuf = '';
+        let contentBuf = '';
+        let isFirstChunk = true;
+        let wasReasoning = false;
+
+        streamExecutiveChatMessage(
+          sid,
+          question,
+          (deltaData) => {
+            if (isFirstChunk) {
+              isFirstChunk = false;
+              if (deltaData.phase === 'reasoning') {
+                reasoningBuf += '> **模型推理：**\n> ';
+                wasReasoning = true;
+              }
+            }
+            if (deltaData?.text) {
+              if (deltaData.phase === 'reasoning') {
+                reasoningBuf += deltaData.text.replace(/\n/g, '\n> ');
+                wasReasoning = true;
+              } else {
+                if (wasReasoning) {
+                  reasoningBuf += '\n\n';
+                  wasReasoning = false;
+                }
+                contentBuf += deltaData.text;
+              }
+            }
+
+            const split = splitPreambleAndJson(contentBuf);
+            const jsonRaw = split.jsonRaw;
+            const preamble = split.preamble.trim();
+
+            const thinkingMerged = [reasoningBuf.trim(), preamble].filter(Boolean).join('\n\n').trim();
+            streamThinkingSnapshot = thinkingMerged;
+
+            const parsed = parseReplyContentProgressive(jsonRaw);
+
+            const narrativeDone = Boolean(thinkingMerged || jsonRaw);
+            messages.value[loadingIndex] = {
+              role: 'ai',
+              content: parsed
+                ? formatReplyContentText(parsed)
+                : narrativeDone
+                  ? ''
+                  : '正在生成…',
+              thinking: thinkingMerged || undefined,
+              jsonStream: !parsed && jsonRaw ? jsonRaw : undefined,
+              partialReply: parsed || undefined,
+            };
+            scrollToBottom();
+          },
+          (result) => {
+            applySendSuccess(sid, result);
+            resolve();
+          },
+          (err) => reject(err)
+        );
+      });
+
     try {
-      const result = await sendChatMessage(sessionId.value, question, {
-        skipGlobalErrorMessage: true,
-      }).send();
-      applySendSuccess(sessionId.value, result);
+      await runStreamSend(sessionId.value);
     } catch (e) {
       if (isStaleExecutiveSessionError(e) && sessionId.value) {
         const staleId = sessionId.value;
@@ -755,10 +889,7 @@
           applySessionApiResult(created);
           saveStoredPresets(created.exampleQuestions);
           ensureSidebarSession(created.sessionId, '新对话');
-          const result = await sendChatMessage(sessionId.value, question, {
-            skipGlobalErrorMessage: true,
-          }).send();
-          applySendSuccess(sessionId.value, result);
+          await runStreamSend(sessionId.value);
         } catch {
           messages.value[loadingIndex] = {
             role: 'ai',
@@ -807,6 +938,10 @@
         id: result.messageId,
         role: 'ai',
         content: text,
+        replyContent: result.replyContent,
+        thinking: undefined,
+        jsonStream: undefined,
+        partialReply: undefined,
         userFeedback: null,
       };
       scrollToBottom();
@@ -1134,6 +1269,85 @@
           Arial, sans-serif;
         word-wrap: break-word;
         white-space: pre-wrap;
+
+        .exec-thinking-wrap {
+          margin-bottom: 12px;
+
+          :deep(.n-collapse-item__header) {
+            font-size: 13px;
+            font-weight: 600;
+            color: rgba(0, 0, 0, 0.55);
+          }
+
+          .exec-thinking-body {
+            font-size: 14px;
+            color: rgba(0, 0, 0, 0.72);
+            white-space: pre-wrap;
+            line-height: 1.5;
+          }
+        }
+
+        .exec-structured {
+          .exec-overview {
+            margin: 0 0 12px;
+            font-size: 15px;
+          }
+
+          &.exec-structured--stream {
+            opacity: 0.92;
+          }
+
+          .exec-keynums {
+            display: grid;
+            gap: 8px;
+            margin-bottom: 12px;
+          }
+
+          .exec-keynum-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.65);
+            border-radius: 8px;
+            font-size: 14px;
+          }
+
+          .exec-k-label {
+            color: rgba(0, 0, 0, 0.55);
+          }
+
+          .exec-k-value {
+            font-weight: 600;
+            color: #1d1d1f;
+          }
+
+          .exec-attn {
+            margin: 0 0 12px;
+            padding-left: 18px;
+            color: #b45309;
+            font-size: 14px;
+          }
+
+          .exec-follow {
+            font-size: 13px;
+            color: rgba(0, 0, 0, 0.55);
+          }
+        }
+
+        .exec-json-fallback {
+          margin: 0;
+          padding: 10px;
+          background: rgba(0, 0, 0, 0.04);
+          border-radius: 8px;
+          font-size: 12px;
+          overflow-x: auto;
+          white-space: pre-wrap;
+        }
+
+        .exec-plain {
+          white-space: pre-wrap;
+        }
       }
     }
   }

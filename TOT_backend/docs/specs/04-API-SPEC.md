@@ -1964,10 +1964,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "messageId": "string", // 消息唯一ID（前端生成）
     "content": "string", // 自然语言问题，必填
     "executiveId": "string", // 发送人ID
-    "contextId": "string" // 上下文ID，必填（创建会话返回）
+    "contextId": "string", // 上下文ID，必填（创建会话返回）
+    "stream": false
   }
   ```
-- **响应体（成功）**：
+  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，与看板智能洞察 §5.7 一致：`event: delta` 推送模型增量（`data` 为 `{ "text": "...", "phase": "content"|"reasoning" }`）；成功结束时 `event: done`，`data` 为 `{ "code": 200, "message": "success", "data": { ...与下方 JSON 成功体 data 相同... }, "requestId": "..." }`；失败时 `event: error`。流式仅作用于 **intent_routing** 下最终「格式化回答」的 LLM；**function_calling** 模式仍可能在无增量后一次性返回 `done`。
+- **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
     "code": 200,
