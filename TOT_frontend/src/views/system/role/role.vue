@@ -31,7 +31,13 @@
       </BasicTable>
     </n-card>
 
-    <n-modal v-model:show="showModal" :show-icon="false" preset="dialog" :title="editRoleTitle">
+    <n-modal
+      v-model:show="showModal"
+      :to="overlayTeleportTarget"
+      :show-icon="false"
+      preset="dialog"
+      :title="editRoleTitle"
+    >
       <div class="py-3 menu-list">
         <n-tree
           block-line
@@ -67,6 +73,7 @@
 <script lang="ts" setup>
   import { reactive, ref, unref, h, onMounted } from 'vue';
   import { useMessage } from 'naive-ui';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
   import { BasicTable, TableAction } from '@/components/Table';
   import { getRoleList } from '@/api/system/role';
   import { getMenuList } from '@/api/system/menu';

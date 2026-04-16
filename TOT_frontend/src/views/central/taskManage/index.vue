@@ -245,6 +245,7 @@
     getTaskDetail,
     updateTask,
     aiGenerateTaskDescription,
+    postAiSmartPublish,
   } from '@/api/task';
   import { formFromAutoNudgeRules, toApiAutoNudgeRules } from '@/utils/autoNudgeRules';
 
@@ -275,56 +276,32 @@
     const loadingMsg = message.loading('AI 正在拆解意图并自动填充表单...', { duration: 0 });
 
     try {
-      // 模拟后端 API 延迟
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const res = await postAiSmartPublish(aiInputText.value).send();
+      // NOTE: Using Alova with this configuration likely returns the resolved JSON body.
+      // Since backend sends `{ code, message, data: { taskName, ...} }`
+      // We check if res.data exists, else fallback to res.
+      const aiData = (res as any).data || res;
 
-      // 模拟前端解析逻辑 (未来这里替换为调用你后端的新接口)
-      const inputText = aiInputText.value;
-
-      // 1. 提取平台
+      // 1. 提取平台 (如果用户没有提到，保留现有的或给个默认)
       const newPlatforms = [];
-      if (inputText.includes('MyPal')) newPlatforms.push('MyPal');
-      if (inputText.includes('直播')) newPlatforms.push('直播培训');
-      if (inputText.includes('Sales')) newPlatforms.push('Sales Coach');
-      if (inputText.includes('AI')) newPlatforms.push('AI Coach');
-      if (newPlatforms.length === 0) newPlatforms.push('MyPal'); // default
-      formValue.platforms = newPlatforms;
+      if (aiInputText.value.includes('MyPal')) newPlatforms.push('MyPal');
+      if (aiInputText.value.includes('直播')) newPlatforms.push('直播培训');
+      if (aiInputText.value.includes('Sales')) newPlatforms.push('Sales Coach');
+      if (aiInputText.value.includes('AI')) newPlatforms.push('AI Coach');
+      if (newPlatforms.length > 0) {
+        formValue.platforms = newPlatforms;
+      }
 
-      // 2. 提取名称
-      let taskNameMatch = inputText.match(/的(.*?)培训/);
-      if (!taskNameMatch) taskNameMatch = inputText.match(/建立?(.*?)任务/);
-      formValue.taskName = taskNameMatch
-        ? `${taskNameMatch[1]}专项培训`
-        : 'MacBook Pro 新品销售培训';
+      formValue.taskName = aiData.taskName;
+      formValue.passScore = aiData.passingScore;
+      formValue.startTime = new Date(aiData.startAt).getTime();
+      formValue.endTime = new Date(aiData.ddlAt).getTime();
+      formValue.description = aiData.taskDetails;
 
-      // 3. 提取分数
-      const scoreMatch = inputText.match(/(\d+)分/);
-      if (scoreMatch) formValue.passScore = parseInt(scoreMatch[1], 10);
-
-      // 4. 提取时间 (模拟下周五)
-      const now = new Date();
-      formValue.startTime = now.getTime();
-      const nextFriday = new Date();
-      nextFriday.setDate(now.getDate() + ((5 - now.getDay() + 7) % 7) || 7);
-      nextFriday.setHours(23, 59, 59, 0);
-      formValue.endTime = nextFriday.getTime();
-
-      // 5. AI 自动润色任务描述
-      formValue.description = `🎯【学习目标】
-1. 深度掌握 ${formValue.taskName.replace('专项培训', '')} 的核心卖点与技术突破。
-2. 熟练运用FABE话术，提升转化率。
-
-💡【核心知识点】
-- M3 芯片架构优势深度解析
-- 针对创作者、开发者的场景化痛点攻克
-- Apple 生态互联优势及多产品连带销售技巧
-
-⏱️【预计耗时】
-约 25-30 分钟。请务必在截止日期前完成并通过考核。`;
-
-      message.success('解析成功，表单已自动填充！');
-    } catch (e) {
-      message.error('解析失败，请重试');
+      message.success('AI 解析与润色成功，表单已自动填充！');
+    } catch (e: any) {
+      console.error('AI Parse Error:', e);
+      message.error(e.message || '解析失败，请重试');
     } finally {
       loadingMsg.destroy();
       aiParsing.value = false;

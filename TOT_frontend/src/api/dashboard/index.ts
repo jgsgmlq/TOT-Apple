@@ -35,6 +35,8 @@ export const getDashboardOverview = (params: {
   taskId?: string;
   rtm?: string;
   format?: string;
+  dealerName?: string;
+  storeId?: string;
 }) => {
   return Alova.Get<DashboardOverview>('/dashboard/overview', {
     params,
@@ -52,7 +54,14 @@ export interface HeatmapRow {
 }
 
 /** GET /api/v1/dashboard/heatmap — 区域热力，含 avgCompletionTimeHours */
-export const getDashboardHeatmap = (params: { taskId: string; rtmLevel?: string }) => {
+export const getDashboardHeatmap = (params: { 
+  taskId: string; 
+  rtmLevel?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
+}) => {
   return Alova.Get<{
     taskId: string;
     rtmLevel: string;
@@ -74,6 +83,10 @@ export const getDashboardTrend = (params: {
   taskId: string;
   type: 'daily' | 'hourly';
   date?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
 }) => {
   return Alova.Get<{ taskId: string; type: string; date: string; trendData: TrendPoint[] }>(
     '/dashboard/trend',
@@ -94,7 +107,10 @@ export const getDashboardStoreRank = (params: {
   taskId: string;
   type: 'top' | 'bottom';
   limit?: number;
+  rtm?: string;
   format?: string;
+  dealerName?: string;
+  storeId?: string;
 }) => {
   return Alova.Get<{ rankList: StoreRankRow[] }>('/dashboard/store-rank', {
     params,
@@ -105,19 +121,26 @@ export interface WarningStoreRow {
   taskId: string;
   storeId: string;
   storeName: string;
+  warningLevel: 'p1' | 'p0';
   completionRate: number;
   completedCount: number;
   totalCount: number;
   overdueCount: number;
+  triggerDesc?: string;
+  aiSuggestion?: string;
   calculatedAt: string;
 }
 
 /** GET /api/v1/dashboard/warnings — 预警门店下钻 */
 export const getDashboardWarnings = (params: {
   taskId: string;
-  warningLevel?: 'p1' | 'p2';
+  warningLevel?: 'p0' | 'p1';
   pageNum?: number;
   pageSize?: number;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
 }) => {
   return Alova.Get<{
     list: WarningStoreRow[];
