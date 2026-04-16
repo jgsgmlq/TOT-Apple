@@ -1096,7 +1096,10 @@
               <!-- 预警数据 -->
               <n-card :bordered="false" class="metrics-card warning-card" style="flex: 1;">
             <div class="metrics-grid">
-              <div class="metric-box warn-style">
+              <div
+                class="metric-box warn-style is-clickable"
+                @click="openWarningDrillDown('startDelay', '起步异常')"
+              >
                 <div class="m-label"
                   >起步异常
                   <n-tooltip trigger="hover"
@@ -1105,6 +1108,7 @@
                       ><n-icon class="icon"><info-circle-outlined /></n-icon></template></n-tooltip
                 ></div>
                 <div class="m-value">{{ formatPct2(activeTask.warningData.startAbnormal) }}%</div>
+                <div class="m-click-hint">点击下钻</div>
               </div>
               <div
                 class="metric-box danger-style is-clickable"
@@ -1223,6 +1227,8 @@
   const drillDownList = ref<any[]>([]);
   const drillDownEmptyDescription = ref('暂无符合条件的门店记录');
   const drillDownType = ref<'rank' | 'warning'>('rank');
+  /** 预警下钻维度，用于表头「xx 率」 */
+  const warningDrillKind = ref<'p0' | 'p1' | 'startDelay'>('p1');
 
   type BoardInsightSection = 'northStar' | 'trend' | 'rtm' | 'linkAndWarning';
 
@@ -1339,6 +1345,7 @@
       storeId: row.storeId ?? row.store_id,
       storeName: row.storeName ?? row.store_name ?? '—',
       completionRate: Number(row.completionRate ?? row.completion_rate ?? 0),
+      warningRate: Number(row.warningRate ?? row.warning_rate ?? row.completionRate ?? row.completion_rate ?? 0),
       completedCount: row.completedCount ?? row.completed_count ?? 0,
       assignmentCount: row.assignmentCount ?? row.totalCount ?? row.total_count ?? 0,
       overdueCount: row.overdueCount ?? row.overdue_count ?? 0,
@@ -1468,6 +1475,7 @@
   /** 动态生成门店排名和预警的下钻表格列 */
   const drillDownTableColumns = computed(() => {
     const type = drillDownType.value;
+    const wk = warningDrillKind.value;
     const cols: any[] = [];
 
     if (type === 'rank') {
@@ -1538,11 +1546,21 @@
     });
 
     cols.push({
-      title: '完成率',
+      title:
+        type === 'warning'
+          ? wk === 'p0'
+            ? '临期危机 (P0) 率'
+            : wk === 'startDelay'
+              ? '起步异常率'
+              : '临期危机 (P1) 率'
+          : '完成率',
       key: 'rate',
-      width: 140,
+      width: 160,
       render: (row: any) => {
-        const rate = row.completionRate ?? 0;
+        const rate =
+          type === 'warning'
+            ? Number(row.warningRate ?? row.completionRate ?? 0)
+            : row.completionRate ?? 0;
         const color = rate >= 100 ? '#10b981' : (type === 'warning' ? '#ef4444' : '#3b82f6');
         return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
           h('span', { style: 'width: 48px; font-weight: 600; font-size: 13px; text-align: right; color: #1e293b;' }, `${formatPct2(rate)}%`),
@@ -1871,11 +1889,12 @@
     }
   }
 
-  /** 打开预警门店下钻（仅临期 P0/P1，数据来自 /dashboard/warnings） */
-  async function openWarningDrillDown(level: 'p0' | 'p1', title: string) {
+  /** 打开预警门店下钻（临期 P0/P1 或起步异常 startDelay，数据来自 /dashboard/warnings） */
+  async function openWarningDrillDown(level: 'p0' | 'p1' | 'startDelay', title: string) {
     const taskId = activeTaskId.value;
     if (!taskId) return;
 
+    warningDrillKind.value = level;
     drillDownType.value = 'warning';
     drillDownTitle.value = `${title} - 风险门店名单`;
     showDrillDownModal.value = true;
