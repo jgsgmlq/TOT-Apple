@@ -75,9 +75,15 @@
 - **taskReadRate：** `totalReadCount / totalAssignments * 100`（一位小数）。
 - **nudgeConversionRate：** 在 **`nudge_count > 0`** 的 assignment 中，已 **`started_at` 非空或状态为 `completed`** 的比例（整数百分比）；与 PRD「提醒转化率」命名可能不完全一致，以 **`04-API-SPEC`** 字段名为准。
 
-### 预警率（基于自动预警事件 `dedupe_key`）
+### 预警率（与 `evaluateAndTriggerAutoNudges` / `GET /dashboard/warnings` 规则一致）
 
-对范围内 `notification_events` 与 assignment 关联行，按 **`dedupe_key` 子串** 粗计 **`startDelay` / `deadlineCrisisP1` / `deadlineCrisisP0`** 命中次数，再除以 **totalAssignments** 得到 **startDelayRate、crisisP1Rate、crisisP0Rate**（百分比点数，一位小数）。规则与 `services/autoNudge.js` 写入的 `autonudge:…` 前缀一致。Dashboard 预警监控展示顺序为：起步异常（P1）→ 48h 临期（P1）→ 24h 临期（P0）。
+在筛选范围内对每条 **`task_assignments`**（带 `tasks.created_at` / `ddl_at` / `auto_nudge_rules`）实时判定，**按 assignment 计数**，再除以 **totalAssignments** 得到 **startDelayRate、crisisP1Rate、crisisP0Rate**（百分比点数，一位小数）。**不再**用 `notification_events` 事件条数作分子（与下钻门店 `warningRate` 为同一套公式，概览为全任务汇总）。口径简述：
+
+- **startDelayRate**：时间进度占比 ≥ `startDelay` 阈值，且未完成且 `progress=0` 的 assignment 数 / 总人数。
+- **crisisP1Rate**：任务处于 P1 临期带时，**未完成** assignment 数 / 总人数。
+- **crisisP0Rate**：任务处于 P0 临期带时，**未完成** assignment 数 / 总人数。
+
+三项可分别独立计数，同一 assignment 可能同时计入起步与临期（与自动预警落库时「每人只发一条」不同）。Dashboard 展示顺序仍为：起步异常 → 48h 临期（P1）→ 24h 临期（P0）。
 
 ### 其他
 

@@ -6,6 +6,7 @@ const { formatLocalDateYYYYMMDD } = require('../utils/ddlAt');
 const { parseStoreDrill } = require('../utils/storeDrill');
 const { generateTextDeepSeekStream } = require('../utils/ai');
 const { createError } = require('../middleware/errorHandler');
+const { computeAssignmentWarningRates } = require('../utils/dashboardWarningRates');
 
 const MODULE_TYPES = [
   'north_star',
@@ -170,17 +171,15 @@ function buildFunnelFacts(body) {
     allParams
   );
 
-  const warnStatsRow = db.get(
-    `SELECT
-       SUM(CASE WHEN ne.dedupe_key LIKE '%startDelay%' THEN 1 ELSE 0 END) AS start_delay_cnt,
-       SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP0%' THEN 1 ELSE 0 END) AS p0_cnt,
-       SUM(CASE WHEN ne.dedupe_key LIKE '%deadlineCrisisP1%' THEN 1 ELSE 0 END) AS p1_cnt
-     FROM notification_events ne
-     JOIN task_assignments ta ON ne.assignment_id = ta.id
+  const assignRateRows = db.all(
+    `SELECT ta.status, ta.progress, t.created_at, t.ddl_at, t.auto_nudge_rules
+     FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
      ${joinStore}
      WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
     allParams
-  ) || {};
+  );
+  const wr = computeAssignmentWarningRates(assignRateRows, total, Date.now());
 
   return {
     scope: baseFacts.scope,
@@ -194,9 +193,9 @@ function buildFunnelFacts(body) {
       (nudgeRow && nudgeRow.converted_nudged) || 0,
       (nudgeRow && nudgeRow.total_nudged) || 0
     ),
-    startDelayRate: toPct(warnStatsRow.start_delay_cnt || 0, total),
-    crisisP1Rate: toPct(warnStatsRow.p1_cnt || 0, total),
-    crisisP0Rate: toPct(warnStatsRow.p0_cnt || 0, total),
+    startDelayRate: wr.startDelayRate,
+    crisisP1Rate: wr.crisisP1Rate,
+    crisisP0Rate: wr.crisisP0Rate,
     pushUserCount: push,
     readUserDistinct: reads,
   };
