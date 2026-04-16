@@ -1,5 +1,10 @@
 # ToT API 接口定义文档
 
+### v1.5.0（2026-04-16）
+
+- **预警监控多维度下钻**：`GET /dashboard/warnings` 新增 **`level`** 查询参数，支持：`store`（默认）、`rtm`、`format`、`dealer`（或 `dealer_name`）。响应体 `data.list` 增加 **`targetId` / `targetName` / `targetType`** 统一字段（同时保留 `storeId`/`storeName` 兼容字段）。
+- **种子数据增强**：`seed.js` 扩展了 3 个专项预警测试任务（`TASK_WARN_START`, `TASK_WARN_P1`, `TASK_WARN_P0`）并配置了相应的员工进度画像；脚本末尾新增自动触发预警扫描逻辑，确保生成真实的 `notification_events` 以供看板概览率值对账。
+
 ### v1.4.23（2026-04-15）
 
 - **WebSocket `task_assigned`**：向在线店员推送成功时 **不再** 更新 `task_assignments.received_at`（避免与「详情已读」混淆）；改为更新 **`users.last_login_at`**，使看板 **`taskReachRate`** 中「下发后登录」条件覆盖 **WS 实时送达**（`u.last_login_at >= ta.created_at`）。`received_at` 仍由 **`POST /assignments/:id/viewed`**、**开始任务** 等路径按原语义写入。实现见 `server/ws/manager.js`。
@@ -1694,9 +1699,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
   | warningLevel | string | 否 | 预警级别：`p1` / `p0`（临期，未传则两者混合）；`startDelay`（起步异常，规则与 `evaluateAndTriggerAutoNudges` 的 startDelay 一致：任务时间进度占比 ≥ `tasks.auto_nudge_rules.startDelay` 且该店存在未完成且 `progress=0` 的 assignment；**不依赖**是否已写入 `notification_events`） |
+  | level | string | 否 | 聚合维度：`store`（默认，门店）、`rtm`（渠道）、`format`（业态）、`dealer`（经销商） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
-  | rtm | string | 否 | 可选门店下钻，同 §5.1 |
+  | rtm | string | 否 | 可选门店下钻过滤，同 §5.1 |
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
   | storeId | string | 否 | 同上 |
@@ -1711,17 +1717,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           // 预警数据从 task_assignments 实时聚合计算（无独立 alerts 存储表）
           // P1/P0：与 tasks.auto_nudge_rules.deadlineCrisis 及 autoNudge 扫描一致（默认 48h/24h 可配置）
           "taskId": "string",
-          "storeId": "string",      // stores.id
-          "storeName": "string",    // JOIN stores.name
+          "targetId": "string",    // 聚合维度 ID（如门店 ID 或 RTM 名称）
+          "targetName": "string",  // 聚合维度名称
+          "targetType": "string",  // 聚合维度类型 (store/rtm/format/dealer)
+          "storeId": "string",      // 兼容字段：同 targetId
+          "storeName": "string",    // 兼容字段：同 targetName
           "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
-          "warningRate": 20.0,      // 与 §5.1 同公式在单店：起步异常=（进度仍为0且未完成人数）/门店人数×100；临期 P0/P1=未完成人数/门店人数×100（且任务已落在对应临期带）
-          "completionRate": 45.0,   // 门店完成率（task_assignments），与 warningRate 不同
+          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0/P1=未完成人数/总人数×100（且任务已落在对应临期带）
+          "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
           "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
           "triggerDesc": "距 Deadline 不足N小时，仍未完成（P1）", // N 为任务配置的 p1 小时（默认 48）
           "aiSuggestion": "建议总部发起红牌催办，需重点跟进", // MVP 阶段为模板文案，非 AI 实时生成
-          "calculatedAt": "string"  // 本次聚合计算时间（ISO8601）
+          "calculatedAt": "string"  // 本次聚合计算时间（YYYY-MM-DD HH:MM:SS）
         }
       ],
       "pagination": {
