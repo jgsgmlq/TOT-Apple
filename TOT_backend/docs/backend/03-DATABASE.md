@@ -312,6 +312,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 **迁移说明：** `server/db/index.js` 的 `ensureChatTables` 自动建表（新库由 `schema.sql` 建）。
 
+**会话态缓存说明（Phase 3）：** `chatSessionStateService` 使用 `memory_then_redis` 策略缓存查询结果（TTL=30 分钟、容量=20、LRU），用于减少同会话重复查库。该能力当前为内存态，不新增数据库表结构。
+
 **删除（MVP 硬删除）：** `DELETE /api/v1/chat/executive/sessions/{sessionId}`（`routes/chat.js`）在校验 `user_id` 后调用 `services/chatService.deleteSessionById`：在**同一事务**内先 `DELETE FROM chat_messages WHERE session_id = ?`，再 `DELETE FROM chat_sessions WHERE id = ?`，数据从 `server/database.db` 中物理移除。若侧栏已删但库里仍有行，请确认后端已重启且前端请求命中该 API（非仅清 `localStorage`）。
 
 ---

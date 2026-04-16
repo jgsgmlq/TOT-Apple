@@ -1898,7 +1898,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
-> **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前实现模式为 `intent_routing`（MVP），通过环境变量 `CHAT_AGENT_MODE=function_calling` 可切换至 FC 模式（需完成 Task 9 升级步骤）。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
+> **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前支持 `intent_routing` 与 `function_calling` 两种模式（通过 `CHAT_AGENT_MODE` 切换）。会话态采用 `memory_then_redis` 设计：先内存缓存（TTL=30m，容量=20，LRU），再预留 Redis 扩展。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
 
 > **产品行为、意图清单、`stores.region` 权限、数据溯源、LLM 可插拔说明：** 见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)（与 PRD 4.0.5 §5.7 / §5.7.1 对齐）。
 
