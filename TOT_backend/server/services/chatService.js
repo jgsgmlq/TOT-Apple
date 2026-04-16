@@ -3,7 +3,11 @@
 const { nanoid }       = require('nanoid');
 const { db, getDb }    = require('../db');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
-const chatAgentRunner  = require('./chatAgentRunner');
+const logger = require('../utils/logger');
+const { compressAssistantContent } = require('../utils/chatHistoryCompress');
+const chatAgentRunner = require('./chatAgentRunner');
+const { AGENT_MODE } = chatAgentRunner;
+const chatSessionStateService = require('./chatSessionStateService');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 /**
@@ -27,6 +31,16 @@ function resolveRegionScope(user) {
     }
   }
   return { type: 'national', regions: null, rtm: null };
+}
+
+function parseSessionRegionsStored(regionsJson, sessionId = null) {
+  if (!regionsJson) return null;
+  try {
+    return JSON.parse(regionsJson);
+  } catch (e) {
+    logger.warn('session_regions_parse_error', { sessionId, error: e.message });
+    return null;
+  }
 }
 
 // ─── Dynamic example questions ────────────────────────────────────────────────
@@ -99,7 +113,7 @@ async function sendMessage(sessionId, userMessage, userId) {
   // Restore regionScope from session row
   const regionScope = {
     type: session.role_scope,
-    regions: session.regions ? JSON.parse(session.regions) : null,
+    regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
   };
 
@@ -114,14 +128,7 @@ async function sendMessage(sessionId, userMessage, userId) {
   const history = historyRows.map((r) => {
     let content = r.content;
     if (r.role === 'assistant') {
-      try {
-        const parsed = JSON.parse(r.content);
-        if (parsed && parsed.overview) {
-          content = parsed.overview;
-        }
-      } catch (e) {
-        // Not valid JSON, keep as is
-      }
+      content = compressAssistantContent(r.content);
     }
     return { role: r.role, content };
   });
@@ -129,7 +136,7 @@ async function sendMessage(sessionId, userMessage, userId) {
   const startMs = Date.now();
 
   // Call agent (async LLM calls happen inside)
-  const replyContent = await chatAgentRunner.run(userMessage, history, regionScope);
+  const replyContent = await chatAgentRunner.run(userMessage, history, regionScope, { sessionId });
   const responseTime = Date.now() - startMs;
 
   const now = formatNowSqliteLocal();
@@ -137,6 +144,25 @@ async function sendMessage(sessionId, userMessage, userId) {
   const assistMsgId = nanoid();
   const intentType  = replyContent._intentType || null;
   delete replyContent._intentType; // don't leak internal field
+
+  const intentResolvedBy = replyContent._intentResolvedBy || null;
+  delete replyContent._intentResolvedBy;
+
+  const toolMeta = replyContent._toolMeta || {};
+  delete replyContent._toolMeta;
+
+  logger.info('chat_turn', {
+    sessionId,
+    userId,
+    intentType,
+    agentMode: AGENT_MODE,
+    responseTimeMs: responseTime,
+    toolName: toolMeta.toolName ?? null,
+    toolCacheHit: toolMeta.cacheHit ?? null,
+    toolSkipped: toolMeta.skipped === true,
+    toolIterations: toolMeta.iterations || 0,
+    msgId: assistMsgId,
+  });
 
   // Persist both messages (synchronous)
   db.run(
@@ -303,32 +329,44 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   const history = historyRows.map((r) => {
     let content = r.content;
     if (r.role === 'assistant') {
-      try {
-        const parsed = JSON.parse(r.content);
-        if (parsed && parsed.overview) {
-          content = parsed.overview;
-        }
-      } catch (e) {
-        // Not valid JSON, keep as is
-      }
+      content = compressAssistantContent(r.content);
     }
     return { role: r.role, content };
   });
   
   const regionScope = {
     type: session.role_scope,
-    regions: session.regions ? JSON.parse(session.regions) : null,
+    regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
   };
 
   const startMs = Date.now();
-  const replyContent = await chatAgentRunner.run(userMessage, history, regionScope);
+  const replyContent = await chatAgentRunner.run(userMessage, history, regionScope, { sessionId });
   const responseTime = Date.now() - startMs;
 
   const now = formatNowSqliteLocal();
   const newAssistMsgId = nanoid();
   const intentType = replyContent._intentType || null;
   delete replyContent._intentType;
+
+  const intentResolvedBy = replyContent._intentResolvedBy || null;
+  delete replyContent._intentResolvedBy;
+
+  const toolMeta = replyContent._toolMeta || {};
+  delete replyContent._toolMeta;
+
+  logger.info('chat_turn', {
+    sessionId,
+    userId,
+    intentType,
+    agentMode: AGENT_MODE,
+    responseTimeMs: responseTime,
+    toolName: toolMeta.toolName ?? null,
+    toolCacheHit: toolMeta.cacheHit ?? null,
+    toolSkipped: toolMeta.skipped === true,
+    toolIterations: toolMeta.iterations || 0,
+    msgId: newAssistMsgId,
+  });
 
   db.run(
     'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -364,6 +402,7 @@ function deleteSessionById(sessionId) {
     database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
   });
   runDelete();
+  chatSessionStateService.clearSession(sessionId);
 }
 
 module.exports = { createSession, sendMessage, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant };

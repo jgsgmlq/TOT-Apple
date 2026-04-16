@@ -13,6 +13,16 @@ function sameChatUser(sessionUserId, reqUserId) {
   return Number(sessionUserId) === Number(reqUserId);
 }
 
+/** 校验会话归属权中间件 */
+function requireSessionOwnership(req, res, next) {
+  const { sessionId } = req.params;
+  if (!sessionId) return next();
+  const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) return next(createError(404, '会话不存在', 'CHAT_003'));
+  if (!sameChatUser(session.user_id, req.user.id)) return next(createError(403, '无权访问此会话', 'CHAT_004'));
+  next();
+}
+
 // POST /api/v1/chat/executive/sessions
 // Creates a new chat session for the authenticated executive.
 router.post(
@@ -35,6 +45,7 @@ router.post(
   '/executive/sessions/:sessionId/messages',
   authenticate,
   requireRole(['executive']),
+  requireSessionOwnership,
   async (req, res, next) => {
     try {
       const { sessionId } = req.params;
@@ -43,11 +54,6 @@ router.post(
       if (!content || !content.trim()) {
         throw createError(400, 'content 不能为空', 'CHAT_005');
       }
-
-      // Ownership check: ensure session belongs to this user
-      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
-      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
 
       const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);
       res.json({ code: 200, message: 'success', data: result, requestId: req.requestId });
@@ -63,6 +69,7 @@ router.post(
   '/executive/sessions/:sessionId/messages/:messageId/feedback',
   authenticate,
   requireRole(['executive']),
+  requireSessionOwnership,
   (req, res, next) => {
     try {
       const { sessionId, messageId } = req.params;
@@ -71,11 +78,6 @@ router.post(
       if (!['like', 'dislike', 'none'].includes(feedback)) {
         throw createError(400, '无效的反馈类型', 'CHAT_006');
       }
-
-      // Ownership check
-      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
-      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
 
       chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
 
@@ -101,15 +103,10 @@ router.post(
   '/executive/sessions/:sessionId/messages/:messageId/regenerate',
   authenticate,
   requireRole(['executive']),
+  requireSessionOwnership,
   async (req, res, next) => {
     try {
       const { sessionId, messageId } = req.params;
-
-      // Ownership check
-      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
-      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
-
       const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
       
       res.json({
@@ -130,13 +127,10 @@ router.delete(
   '/executive/sessions/:sessionId',
   authenticate,
   requireRole(['executive']),
+  requireSessionOwnership,
   (req, res, next) => {
     try {
       const { sessionId } = req.params;
-      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
-      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
-
       chatService.deleteSessionById(sessionId);
       res.json({
         code: 200,
@@ -156,16 +150,12 @@ router.get(
   '/executive/sessions/:sessionId/history',
   authenticate,
   requireRole(['executive']),
+  requireSessionOwnership,
   (req, res, next) => {
     try {
       const { sessionId } = req.params;
       const pageNum  = Math.max(1, parseInt(req.query.pageNum, 10) || 1);
       const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
-
-      // Ownership check
-      const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-      if (!session) throw createError(404, '会话不存在', 'CHAT_003');
-      if (!sameChatUser(session.user_id, req.user.id)) throw createError(403, '无权访问此会话', 'CHAT_004');
 
       const data = chatService.getHistory(sessionId, pageNum, pageSize);
       res.json({
