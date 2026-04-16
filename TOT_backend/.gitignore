@@ -5,6 +5,12 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+*.db-shm.bak*
+*.db-wal.bak*
+*.db.bak*
 
 # Environment
 .env

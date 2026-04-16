@@ -125,3 +125,17 @@ export const aiGenerateTaskDescription = (data: {
 }) => {
   return Alova.Post<{ description: string }>('/tasks/ai-generate-description', data);
 };
+
+export interface AiSmartPublishResponse {
+  taskName: string;
+  passingScore: number;
+  startTime: string;
+  endTime: string;
+  taskDetails: string;
+  startAt: string;
+  ddlAt: string;
+}
+
+export const postAiSmartPublish = (input: string) => {
+  return Alova.Post<AiSmartPublishResponse>('/tasks/ai-smart-publish', { input });
+};

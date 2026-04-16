@@ -19,6 +19,7 @@ logs/
 
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # Build output
 TOT_frontend/build/
@@ -28,6 +29,10 @@ TOT_frontend/dist/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.db.bak*
+*.sqlite
+*.sqlite3
 
 # PM2
 .pm2/

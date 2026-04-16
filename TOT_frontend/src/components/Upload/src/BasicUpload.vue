@@ -59,6 +59,7 @@
   <!--预览图片-->
   <n-modal
     v-model:show="showModal"
+    :to="overlayTeleportTarget"
     preset="card"
     title="预览"
     :bordered="false"
@@ -77,6 +78,7 @@
   import componentSetting from '@/settings/componentSetting';
   import { useGlobSetting } from '@/hooks/setting';
   import { isString } from '@/utils/is';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
 
   const globSetting = useGlobSetting();
 
@@ -195,6 +197,7 @@
         remove,
         beforeUpload,
         getCSSProperties,
+        overlayTeleportTarget,
       };
     },
   });

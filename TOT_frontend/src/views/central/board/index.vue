@@ -40,6 +40,7 @@
 
     <n-drawer
       v-model:show="showAiInsightDrawer"
+      :to="overlayTeleportTarget"
       :width="472"
       placement="right"
       :trap-focus="false"
@@ -149,6 +150,7 @@
     <!-- 已下发任务列表（瀑布流） -->
     <n-modal
       v-model:show="showDispatchedListModal"
+      :to="overlayTeleportTarget"
       preset="card"
       title="已布置的任务"
       :style="{ width: 'min(580px, 94vw)', maxHeight: '78vh' }"
@@ -270,6 +272,7 @@
     <!-- 统一任务预警规则 -->
     <n-modal
       v-model:show="showAlertRulesModal"
+      :to="overlayTeleportTarget"
       preset="card"
       title="统一预警规则"
       :style="{ width: 'min(480px, 90vw)', maxHeight: '80vh' }"
@@ -353,105 +356,111 @@
       </div>
     </n-modal>
 
+    <!-- 区域进度详情下钻弹窗 -->
+    <n-modal
+      v-model:show="showRtmDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="`${currentRtmDrillDownName} - 数据明细`"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+        <n-radio-group v-model:value="rtmDrillDownLevel" size="small" @update:value="onRtmDrillDownLevelChange">
+          <n-radio-button value="dealer">按经销商</n-radio-button>
+          <n-radio-button value="store">按门店</n-radio-button>
+        </n-radio-group>
+      </div>
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="rtmDrillDownColumns"
+          :data="rtmDrillDownData"
+          :loading="rtmDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => `${row.name}-${row.assignmentCount}-${row.completedCount}`"
+        />
+      </div>
+    </n-modal>
+
+    <!-- 北极星指标（按时完成率/人均完成时间）下钻弹窗 -->
+    <n-modal
+      v-model:show="showNsDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="nsDrillDownTitle"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="nsDrillDownColumns"
+          :data="nsDrillDownData"
+          :loading="nsDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => `${row.name}-${row.assignmentCount}-${row.completedCount}`"
+        />
+      </div>
+    </n-modal>
+
+    <!-- 漏斗链路下钻弹窗（门店维度触达/读取/转化率） -->
+    <n-modal
+      v-model:show="showLinkDrillDownModal"
+      :to="overlayTeleportTarget"
+      preset="card"
+      :title="linkDrillDownTitle"
+      :style="{ width: 'min(760px, 94vw)', height: '540px' }"
+      :segmented="{ content: 'soft', footer: 'soft' }"
+      class="hq-drilldown-modal flex-modal"
+    >
+      <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+        <n-data-table
+          :columns="linkDrillDownColumns"
+          :data="linkDrillDownData"
+          :loading="linkDrillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          style="flex: 1;"
+          :row-key="(row: any) => row.name"
+        />
+      </div>
+    </n-modal>
+
     <!-- 下钻详情列表弹窗 (门店明细) -->
     <n-modal
       v-model:show="showDrillDownModal"
+      :to="overlayTeleportTarget"
       preset="card"
       :title="drillDownTitle"
-      :style="{ width: 'min(640px, 94vw)', maxHeight: '80vh' }"
+      :style="{ width: 'min(640px, 94vw)', height: 'min(640px, 88vh)' }"
       :segmented="{ content: 'soft', footer: 'soft' }"
-      class="hq-drilldown-modal"
+      class="hq-drilldown-modal hq-drilldown-modal--store flex-modal"
     >
-      <n-spin :show="drillDownLoading">
-        <div
-          class="drilldown-body custom-scroll"
-          style="max-height: 60vh; overflow-y: auto; padding: 4px"
-        >
-          <n-empty
-            v-if="!drillDownLoading && drillDownList.length === 0"
-            description="暂无符合条件的门店记录"
-          />
-
-          <div v-else class="drilldown-list">
-            <!-- 列表项：每一行代表一个门店 -->
-            <div
-              v-for="item in drillDownList"
-              :key="item.storeId"
-              class="dd-item"
-              style="
-                display: flex;
-                align-items: center;
-                padding: 16px;
-                border-bottom: 1px solid #f3f4f6;
-                transition: background 0.2s;
-              "
-            >
-              <!-- 1. 🧍‍♂️ 图标与门店名称 -->
-              <div
-                class="dd-col-info"
-                style="flex: 1; display: flex; align-items: center; gap: 12px"
-              >
-                <div
-                  class="dd-avatar"
-                  style="
-                    background: #f5f5f7;
-                    width: 36px;
-                    height: 36px;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #86868b;
-                  "
-                >
-                  <n-icon size="20"><UserOutlined /></n-icon>
-                </div>
-                <div style="display: flex; flex-direction: column">
-                  <span style="font-weight: 600; color: #1d1d1f; font-size: 14px">{{
-                    item.storeName
-                  }}</span>
-                  <span style="font-size: 12px; color: #86868b">ID: {{ item.storeId }}</span>
-                </div>
-              </div>
-
-              <!-- 2. 进度信息 -->
-              <div class="dd-col-progress" style="width: 240px; text-align: right">
-                <div
-                  style="
-                    margin-bottom: 4px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: baseline;
-                  "
-                >
-                  <span style="font-size: 12px; color: #6b7280">
-                    已完成: <strong>{{ item.completedCount }}</strong> /
-                    {{ item.assignmentCount || item.totalCount }}
-                  </span>
-                  <span style="font-weight: 700; color: #0071e3; font-size: 15px"
-                    >{{ formatPct2(item.completionRate) }}%</span
-                  >
-                </div>
-                <n-progress
-                  type="line"
-                  :percentage="pctForBar(item.completionRate)"
-                  :indicator-placement="'hide'"
-                  :color="item.completionRate >= 100 ? '#34c759' : '#0071e3'"
-                  processing
-                  style="height: 8px"
-                />
-                <!-- 预警模式下额外显示逾期数 -->
-                <div
-                  v-if="drillDownType === 'warning' && item.overdueCount > 0"
-                  style="margin-top: 4px; font-size: 11px; color: #ef4444"
-                >
-                  ⚠️ {{ item.overdueCount }} 人已逾期
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </n-spin>
+      <div class="drilldown-body drilldown-body--store-list">
+        <n-data-table
+          :columns="drillDownTableColumns"
+          :data="drillDownList"
+          :loading="drillDownLoading"
+          size="small"
+          :bordered="false"
+          :striped="true"
+          flex-height
+          class="store-drilldown-table"
+          style="flex: 1; min-height: 0; width: 100%"
+          :row-key="(row: any) => String(row.storeId ?? '')"
+        />
+      </div>
       <template #footer>
         <div style="text-align: right; color: #86868b; font-size: 12px">
           * 数据更新于 {{ formatOverviewTime(activeTask?.overviewSummary?.updatedAt) }}
@@ -531,7 +540,7 @@
                 font-weight: 400;
                 color: rgb(62, 64, 66);
                 letter-spacing: -0.3px;
-                padding: 4px 0;
+                padding: 2px 0;
                 font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
                   Helvetica, Arial, sans-serif;
               "
@@ -539,19 +548,7 @@
               AI洞察
             </div>
           </template>
-          <div
-            style="
-              white-space: pre-wrap;
-              line-height: 1.6;
-              font-size: 14px;
-              color: #4b5563;
-              background: #f5f5f7;
-              padding: 16px 20px;
-              border-radius: 12px;
-              margin-top: 4px;
-              margin-bottom: 8px;
-            "
-          >
+          <div class="ai-auto-insight-output custom-scroll-ai">
             {{ autoAiInsightContent }}
           </div>
         </n-collapse-item>
@@ -587,7 +584,12 @@
         <div class="north-star-container ai-hover-trigger" style="position: relative;">
           <!-- 智能分析浮动按钮 -->
           <div class="ai-hover-btn-container" style="position: absolute; right: 24px; top: 24px;">
-            <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+            <n-popover
+              trigger="click"
+              placement="bottom"
+              style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+              @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('northStar')"
+            >
               <template #trigger>
                 <n-button size="small" class="ai-analyze-btn">
                   <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -596,35 +598,70 @@
               </template>
               <div class="ai-analyze-content">
                 <div class="ai-analyze-header">
-                  <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                  <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  <div style="display: flex; align-items: center;">
+                    <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                    <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                  </div>
+                  <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                    <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('northStar')" />
+                  </div>
                 </div>
-                <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                  {{ getMockSectionAnalysis('northStar') }}
+                <div class="ai-analyze-body custom-scroll-ai">
+                  <n-spin :show="boardInsightCard.northStar.loading" size="small">                    <div
+                      v-if="!boardInsightCard.northStar.loading && !boardInsightCard.northStar.content"
+                      class="ai-insight-md-empty"
+                    >
+                      暂无内容
+                    </div>
+                    <div
+                      v-else-if="boardInsightCard.northStar.content"
+                      class="ai-insight-md"
+                      v-html="renderInsightMarkdown(boardInsightCard.northStar.content)"
+                    />
+                  </n-spin>
                 </div>
               <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('northStar'), 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <div
+                            v-if="boardInsightCard.northStar.generatedAt && boardInsightCard.northStar.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.northStar.generatedAt) }}
+                          </div>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.northStar.userVote === 'up' }"
+                            @click="handleAiFeedback('northStar', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.northStar.userVote === 'down' }"
+                            @click="handleAiFeedback('northStar', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"><CheckOutlined v-if="copiedStates['northStar']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
             </n-popover>
           </div>
 
-          <div class="ns-card">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('onTime', '按时完成率 - 门店下钻')">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
               >{{ formatPct2(activeTask.northStar.onTimeRate) }}<span class="unit">%</span></div
             >
             <div class="ns-sub">在 Deadline 前完成的人数 / 应完成总人数</div>
+            <div class="ns-click-hint">点击下钻</div>
           </div>
           <div class="divider"></div>
-          <div class="ns-card">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('avgTime', '人均完成时间 - 门店下钻')">
             <div class="ns-label">人均完成时间</div>
             <div class="ns-value"
               >{{ activeTask.northStar.avgTime }}<span class="unit">小时</span></div
             >
             <div class="ns-sub">已完成学员从任务创建到标记完成的平均耗时</div>
+            <div class="ns-click-hint">点击下钻</div>
           </div>
         </div>
 
@@ -652,6 +689,10 @@
           <span class="kpi-chip"
             >推送覆盖 <strong>{{ activeTask.overviewSummary.pushUserCount }}</strong> 人</span
           >
+          <span class="kpi-dot">·</span>
+          <span class="kpi-chip"
+            >已读 <strong>{{ activeTask.overviewSummary.totalReadCount }}</strong> 人</span
+          >
           <span v-if="activeTask.overviewSummary.updatedAt" class="kpi-updated">
             更新 {{ formatOverviewTime(activeTask.overviewSummary.updatedAt) }}
           </span>
@@ -667,7 +708,12 @@
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <div class="chart-title">完成人数趋势</div>
                     <div class="ai-hover-btn-container">
-                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                      <n-popover
+                        trigger="click"
+                        placement="bottom"
+                        style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                        @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('trend')"
+                      >
                         <template #trigger>
                           <n-button size="small" class="ai-analyze-btn">
                             <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -676,16 +722,50 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('trend')" />
+                            </div>
                           </div>
-                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                            {{ getMockSectionAnalysis('trend') }}
+                          <div class="ai-analyze-body custom-scroll-ai">
+                            <n-spin :show="boardInsightCard.trend.loading" size="small">
+                              <div
+                                v-if="!boardInsightCard.trend.loading && !boardInsightCard.trend.content"
+                                class="ai-insight-md-empty"
+                              >
+                                暂无内容
+                              </div>
+                              <div
+                                v-else-if="boardInsightCard.trend.content"
+                                class="ai-insight-md"
+                                v-html="renderInsightMarkdown(boardInsightCard.trend.content)"
+                              />
+                            </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('trend'), 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <div
+                            v-if="boardInsightCard.trend.generatedAt && boardInsightCard.trend.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.trend.generatedAt) }}
+                          </div>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.trend.userVote === 'up' }"
+                            @click="handleAiFeedback('trend', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.trend.userVote === 'down' }"
+                            @click="handleAiFeedback('trend', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.trend.content, 'trend')"><CheckOutlined v-if="copiedStates['trend']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                       </n-popover>
@@ -763,7 +843,12 @@
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <div class="chart-title">区域进度与门店排行</div>
                     <div class="ai-hover-btn-container">
-                      <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                      <n-popover
+                        trigger="click"
+                        placement="bottom"
+                        style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                        @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('rtm')"
+                      >
                         <template #trigger>
                           <n-button size="small" class="ai-analyze-btn">
                             <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -772,16 +857,50 @@
                         </template>
                         <div class="ai-analyze-content">
                           <div class="ai-analyze-header">
-                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            <div style="display: flex; align-items: center;">
+                              <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                              <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                            </div>
+                            <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                              <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                              <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('rtm')" />
+                            </div>
                           </div>
-                          <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                            {{ getMockSectionAnalysis('rtm') }}
+                          <div class="ai-analyze-body custom-scroll-ai">
+                            <n-spin :show="boardInsightCard.rtm.loading" size="small">
+                              <div
+                                v-if="!boardInsightCard.rtm.loading && !boardInsightCard.rtm.content"
+                                class="ai-insight-md-empty"
+                              >
+                                暂无内容
+                              </div>
+                              <div
+                                v-else-if="boardInsightCard.rtm.content"
+                                class="ai-insight-md"
+                                v-html="renderInsightMarkdown(boardInsightCard.rtm.content)"
+                              />
+                            </n-spin>
                           </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('rtm'), 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <div
+                            v-if="boardInsightCard.rtm.generatedAt && boardInsightCard.rtm.content"
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{ formatInsightGeneratedTime(boardInsightCard.rtm.generatedAt) }}
+                          </div>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.rtm.userVote === 'up' }"
+                            @click="handleAiFeedback('rtm', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.rtm.userVote === 'down' }"
+                            @click="handleAiFeedback('rtm', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.rtm.content, 'rtm')"><CheckOutlined v-if="copiedStates['rtm']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                       </n-popover>
@@ -797,7 +916,7 @@
                     @click="openStoreRankDrillDown('top')"
                     style="font-weight: 600; padding: 0 10px"
                   >
-                    Top 20 门店
+                    Top 5 门店
                   </n-button>
                   <n-button
                     type="error"
@@ -806,20 +925,25 @@
                     @click="openStoreRankDrillDown('bottom')"
                     style="font-weight: 600; padding: 0 10px"
                   >
-                    Bottom 20 门店
+                    Bottom 5 门店
                   </n-button>
                 </n-space>
               </div>
             </template>
             <div class="rtm-list">
               <div class="rtm-item header">
-                <span>维度</span>
+                <span>区域</span>
                 <span class="rtm-col-num">人数</span>
                 <span class="rtm-col-num">已完成</span>
                 <span>完成率</span>
                 <span class="rtm-col-time">人均耗时</span>
               </div>
-              <div class="rtm-item" v-for="(item, index) in activeTask.rtmData" :key="index">
+              <div 
+                class="rtm-item is-clickable" 
+                v-for="(item, index) in activeTask.rtmData" 
+                :key="index"
+                @click="openRtmDrillDownModal(item.name)"
+              >
                 <span class="rtm-name">{{ item.name }}</span>
                 <span class="rtm-col-num">{{ item.assignmentCount ?? '—' }}</span>
                 <span class="rtm-col-num">{{ item.completedCount ?? '—' }}</span>
@@ -847,7 +971,12 @@
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <div class="chart-title">漏斗链路与预警监控</div>
                   <div class="ai-hover-btn-container">
-                    <n-popover trigger="click" placement="bottom" style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+                    <n-popover
+                      trigger="click"
+                      placement="bottom"
+                      style="border-radius: 12px; padding: 16px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"
+                      @update:show="(v: boolean) => v && ensureBoardInsightOnOpen('linkAndWarning')"
+                    >
                       <template #trigger>
                         <n-button size="small" class="ai-analyze-btn">
                           <template #icon><n-icon><ColorWandOutline /></n-icon></template>
@@ -856,16 +985,55 @@
                       </template>
                       <div class="ai-analyze-content">
                         <div class="ai-analyze-header">
-                          <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
-                          <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          <div style="display: flex; align-items: center;">
+                            <n-icon color="#0071e3" size="18"><ColorWandOutline /></n-icon>
+                            <span style="font-weight: 600; margin-left: 6px; color: #1d1d1f; font-size: 15px;">智能分析</span>
+                          </div>
+                          <div style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+                            <span style="font-size: 12px; color: #86868b;">深度思考</span>
+                            <n-switch v-model:value="globalReasoningEnabled" size="small" @update:value="() => ensureBoardInsightOnOpen('linkAndWarning')" />
+                          </div>
                         </div>
-                        <div style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 12px; white-space: pre-wrap;">
-                          {{ getMockSectionAnalysis('linkAndWarning') }}
+                        <div class="ai-analyze-body custom-scroll-ai">
+                          <n-spin :show="boardInsightCard.linkAndWarning.loading" size="small">
+                            <div
+                              v-if="!boardInsightCard.linkAndWarning.loading && !boardInsightCard.linkAndWarning.content"
+                              class="ai-insight-md-empty"
+                            >
+                              暂无内容
+                            </div>
+                            <div
+                              v-else-if="boardInsightCard.linkAndWarning.content"
+                              class="ai-insight-md"
+                              v-html="renderInsightMarkdown(boardInsightCard.linkAndWarning.content)"
+                            />
+                          </n-spin>
                         </div>
                         <div class="ai-analyze-actions">
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('up')"><LikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" @click="handleAiFeedback('down')"><DislikeOutlined /></n-icon>
-                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(getMockSectionAnalysis('linkAndWarning'), 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
+                          <div
+                            v-if="
+                              boardInsightCard.linkAndWarning.generatedAt &&
+                              boardInsightCard.linkAndWarning.content
+                            "
+                            class="ai-insight-generated-at"
+                          >
+                            分析生成时间：{{
+                              formatInsightGeneratedTime(boardInsightCard.linkAndWarning.generatedAt)
+                            }}
+                          </div>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-up': boardInsightCard.linkAndWarning.userVote === 'up' }"
+                            @click="handleAiFeedback('linkAndWarning', 'up')"
+                          ><LikeOutlined /></n-icon>
+                          <n-icon
+                            size="16"
+                            class="ai-action-icon"
+                            :class="{ 'is-active-down': boardInsightCard.linkAndWarning.userVote === 'down' }"
+                            @click="handleAiFeedback('linkAndWarning', 'down')"
+                          ><DislikeOutlined /></n-icon>
+                          <n-icon size="16" class="ai-action-icon" style="transition: color 0.2s" @click="handleCopyAiInsight(boardInsightCard.linkAndWarning.content, 'linkAndWarning')"><CheckOutlined v-if="copiedStates['linkAndWarning']" style="color: #10b981;" /><CopyOutlined v-else /></n-icon>
                         </div>
                       </div>
                     </n-popover>
@@ -877,7 +1045,7 @@
             <div class="combined-metrics-container">
               <!-- 左侧：链路数据 -->
               <div class="metrics-grid funnel-grid" style="flex: 1;">
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('reach', '任务触达率 - 门店明细')">
                   <div class="m-label"
                     >任务触达率
                     <n-tooltip trigger="hover"
@@ -894,7 +1062,7 @@
                   <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
                 </div>
 
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('read', '任务读取率 - 门店明细')">
                   <div class="m-label"
                     >任务读取率
                     <n-tooltip trigger="hover"
@@ -909,7 +1077,7 @@
                   <n-icon size="24" color="#9ca3af"><ArrowRightOutlined /></n-icon>
                 </div>
 
-                <div class="metric-box info-style">
+                <div class="metric-box info-style is-clickable" @click="openLinkDrillDown('nudge', '催办转化率 - 门店明细')">
                   <div class="m-label"
                     >催办转化率
                     <n-tooltip trigger="hover"
@@ -923,18 +1091,14 @@
                 </div>
               </div>
 
-          <!-- 预警数据 -->
-          <n-card :bordered="false" class="metrics-card warning-card">
-            <template #header>
-              <div>
-                <div class="chart-title">预警率统计</div>
-                <div class="chart-sub">点击下方具体预警指标可查看风险门店名单</div>
-              </div>
-            </template>
+              <div class="vertical-divider"></div>
+
+              <!-- 预警数据 -->
+              <n-card :bordered="false" class="metrics-card warning-card" style="flex: 1;">
             <div class="metrics-grid">
               <div
                 class="metric-box warn-style is-clickable"
-                @click="openWarningDrillDown('p2', '起步异常')"
+                @click="openWarningDrillDown('startDelay', '起步异常')"
               >
                 <div class="m-label"
                   >起步异常
@@ -948,7 +1112,7 @@
               </div>
               <div
                 class="metric-box danger-style is-clickable"
-                @click="openWarningDrillDown('p2', '临期危机 (P1)')"
+                @click="openWarningDrillDown('p1', '临期危机 (P1)')"
               >
                 <div class="m-label"
                   >临期危机 (P1)
@@ -962,7 +1126,7 @@
               </div>
               <div
                 class="metric-box fatal-style is-clickable"
-                @click="openWarningDrillDown('p1', '临期危机 (P0)')"
+                @click="openWarningDrillDown('p0', '临期危机 (P0)')"
               >
                 <div class="m-label"
                   >临期危机 (P0)
@@ -994,6 +1158,7 @@
 <script lang="ts" setup>
   import {
     ref,
+    reactive,
     computed,
     onMounted,
     watch,
@@ -1001,6 +1166,7 @@
     nextTick,
     shallowRef,
     onActivated,
+    h,
   } from 'vue';
   import { useRouter } from 'vue-router';
   import * as echarts from 'echarts';
@@ -1018,6 +1184,7 @@
     DislikeOutlined,
     CopyOutlined,
     CheckOutlined,
+    RobotOutlined,
   } from '@vicons/antd';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import aiWatchIcon from '@/assets/icons/AI_watch.png';
@@ -1029,12 +1196,23 @@
     getDashboardTrend,
     getDashboardStoreRank,
     getDashboardWarnings,
+    streamDashboardInsight,
+    postDashboardInsightVote,
     type TrendPoint,
+    type CreateDashboardInsightBody,
+    type HeatmapRow,
+    type DashboardOverview,
   } from '@/api/dashboard';
-  import { useMessage, useDialog } from 'naive-ui';
+  import { Alova } from '@/utils/http/alova/index';
+  import { useMessage, useDialog, NProgress } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
   import { useGlobSetting } from '@/hooks/setting';
-  import { displayAutoNudgeRules, hasAutoNudgeRulesConfigured } from '@/utils/autoNudgeRules';
+  import {
+    displayAutoNudgeRules,
+    hasAutoNudgeRulesConfigured,
+  } from '@/utils/autoNudgeRules';
+  import { renderInsightMarkdown } from '@/utils/markdownRender';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
 
   const message = useMessage();
   const dialog = useDialog();
@@ -1047,7 +1225,643 @@
   const drillDownTitle = ref('');
   const drillDownLoading = ref(false);
   const drillDownList = ref<any[]>([]);
+  const drillDownEmptyDescription = ref('暂无符合条件的门店记录');
   const drillDownType = ref<'rank' | 'warning'>('rank');
+  /** 预警下钻维度，用于表头「xx 率」 */
+  const warningDrillKind = ref<'p0' | 'p1' | 'startDelay'>('p1');
+
+  type BoardInsightSection = 'northStar' | 'trend' | 'rtm' | 'linkAndWarning';
+
+  interface BoardInsightCardState {
+    content: string;
+    loading: boolean;
+    insightId: string | null;
+    generatedAt: string | null;
+    up: number;
+    down: number;
+    /** 当前浏览器会话内对本条洞察的投票：与 sessionStorage 同步，用于互斥与取消 */
+    userVote: 'up' | 'down' | null;
+    /** 与当前筛选一致的缓存键，避免重复请求 */
+    fetchedKey: string;
+  }
+
+  const INSIGHT_VOTE_STORAGE_PREFIX = 'tot_insight_vote_';
+
+  function readStoredInsightVote(insightId: string): 'up' | 'down' | null {
+    if (typeof sessionStorage === 'undefined') return null;
+    try {
+      const v = sessionStorage.getItem(INSIGHT_VOTE_STORAGE_PREFIX + insightId);
+      if (v === 'up' || v === 'down') return v;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStoredInsightVote(insightId: string, v: 'up' | 'down' | null) {
+    if (typeof sessionStorage === 'undefined') return;
+    try {
+      const key = INSIGHT_VOTE_STORAGE_PREFIX + insightId;
+      if (v == null) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, v);
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }
+
+  function emptyBoardInsightCard(): BoardInsightCardState {
+    return {
+      content: '',
+      loading: false,
+      insightId: null,
+      generatedAt: null,
+      up: 0,
+      down: 0,
+      userVote: null,
+      fetchedKey: '',
+    };
+  }
+
+  const boardInsightCard = ref<Record<BoardInsightSection, BoardInsightCardState>>({
+    northStar: emptyBoardInsightCard(),
+    trend: emptyBoardInsightCard(),
+    rtm: emptyBoardInsightCard(),
+    linkAndWarning: emptyBoardInsightCard(),
+  });
+
+  function resetBoardInsightCards() {
+    boardInsightCard.value = {
+      northStar: emptyBoardInsightCard(),
+      trend: emptyBoardInsightCard(),
+      rtm: emptyBoardInsightCard(),
+      linkAndWarning: emptyBoardInsightCard(),
+    };
+  }
+
+  /** 兼容 Alova 已解包 / 未解包、camelCase / snake_case 的热力图行 */
+  function unwrapHeatmapRows(res: unknown): HeatmapRow[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.heatmapData ?? layer.heatmap_data;
+    return Array.isArray(raw) ? (raw as HeatmapRow[]) : [];
+  }
+
+  /** 兼容嵌套 data、snake_case 的门店排行 */
+  function unwrapRankList(res: unknown): any[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.rankList ?? layer.rank_list;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  /** 兼容嵌套 data、未解包响应的预警门店列表 */
+  function unwrapWarningsList(res: unknown): any[] {
+    if (res == null) return [];
+    const r = res as Record<string, unknown>;
+    const nested =
+      r.data && typeof r.data === 'object' && !Array.isArray(r.data)
+        ? (r.data as Record<string, unknown>)
+        : null;
+    const layer = nested ?? r;
+    const raw = layer.list;
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  /** 统一 camelCase / snake_case，避免表格列取不到字段 */
+  function normalizeWarningDrillRow(row: any) {
+    if (!row || typeof row !== 'object') return row;
+    return {
+      ...row,
+      storeId: row.storeId ?? row.store_id,
+      storeName: row.storeName ?? row.store_name ?? '—',
+      completionRate: Number(row.completionRate ?? row.completion_rate ?? 0),
+      warningRate: Number(row.warningRate ?? row.warning_rate ?? row.completionRate ?? row.completion_rate ?? 0),
+      completedCount: row.completedCount ?? row.completed_count ?? 0,
+      assignmentCount: row.assignmentCount ?? row.totalCount ?? row.total_count ?? 0,
+      overdueCount: row.overdueCount ?? row.overdue_count ?? 0,
+    };
+  }
+
+  // --- 北极星指标（按时完成率/人均完成时间）下钻 ---
+  const showNsDrillDownModal = ref(false);
+  const nsDrillDownLoading = ref(false);
+  const nsDrillDownTitle = ref('');
+  const nsDrillDownData = ref<any[]>([]);
+  const nsDrillDownMetric = ref<'onTime' | 'avgTime'>('onTime');
+
+  // --- 漏斗链路（触达/读取/催办转化）门店维度下钻 ---
+  const showLinkDrillDownModal = ref(false);
+  const linkDrillDownLoading = ref(false);
+  const linkDrillDownTitle = ref('');
+  const linkDrillDownData = ref<any[]>([]);
+  const linkDrillDownMetric = ref<'reach' | 'read' | 'nudge'>('reach');
+
+  interface StoreDrillMetricRow {
+    name: string;
+    storeId?: string;
+    assignmentCount: number;
+    completedCount: number;
+    completionRate: number;
+    avgTimeHours: number;
+    onTimeRate: number;
+    reachRate: number;
+    readRate: number;
+    nudgeRate: number;
+    totalReadCount: number;
+  }
+
+  const nsDrillDownColumns = computed(() => {
+    if (nsDrillDownMetric.value === 'onTime') {
+      return [
+        { 
+          title: '门店名称', 
+          key: 'name', 
+          width: 150 
+        },
+        { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+        { 
+          title: '已完成', 
+          key: 'completedCount', 
+          width: 90, 
+          align: 'right' as const,
+          render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+        },
+        {
+          title: '按时完成率',
+          key: 'onTimeRate',
+          width: 160,
+          render(row: any) {
+            return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+              h(
+                'span',
+                { style: 'width: 52px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+                `${formatPct2(row.onTimeRate)}%`
+              ),
+              h(NProgress, {
+                type: 'line',
+                percentage: pctForBar(row.onTimeRate),
+                indicatorPlacement: 'hide',
+                color: row.onTimeRate >= 100 ? '#10b981' : '#0071e3',
+                style: 'flex: 1;',
+              }),
+            ]);
+          },
+        },
+        {
+          title: '人均耗时',
+          key: 'avgTimeHours',
+          width: 100,
+          align: 'right' as const,
+          render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.avgTimeHours}h`),
+        },
+      ];
+    }
+
+    return [
+      { 
+        title: '门店名称', 
+        key: 'name', 
+        width: 150 
+      },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      { 
+        title: '已完成', 
+        key: 'completedCount', 
+        width: 90, 
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+      },
+      {
+        title: '完成率',
+        key: 'completionRate',
+        width: 140,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 44px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+              `${formatPct2(row.completionRate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.completionRate),
+              indicatorPlacement: 'hide',
+              color: row.completionRate >= 100 ? '#10b981' : '#0071e3',
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      {
+        title: '人均耗时',
+        key: 'avgTimeHours',
+        width: 100,
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.avgTimeHours}h`),
+      },
+    ];
+  });
+
+  /** 动态生成门店排名和预警的下钻表格列 */
+  const drillDownTableColumns = computed(() => {
+    const type = drillDownType.value;
+    const wk = warningDrillKind.value;
+    const cols: any[] = [];
+
+    if (type === 'rank') {
+      cols.push({
+        title: '排名',
+        key: 'rank',
+        width: 80,
+        align: 'center',
+        render: (_: any, index: number) => {
+          const rank = index + 1;
+          const isTop3 = rank <= 3;
+          let bg = 'rgba(0, 0, 0, 0.04)';
+          let color = '#86868b';
+          let fw = '600';
+          
+          if (rank === 1) { bg = 'linear-gradient(135deg, #fef08a 0%, #f59e0b 100%)'; color = '#fff'; fw = '800'; }
+          else if (rank === 2) { bg = 'linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%)'; color = '#fff'; fw = '800'; }
+          else if (rank === 3) { bg = 'linear-gradient(135deg, #ffedd5 0%, #d97706 100%)'; color = '#fff'; fw = '800'; }
+          
+          return h('div', { 
+            style: { 
+              background: bg,
+              color, 
+              fontWeight: fw, 
+              fontSize: '14px',
+              width: '28px',
+              height: '28px',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto',
+              boxShadow: isTop3 ? '0 2px 8px rgba(0,0,0,0.1)' : 'none'
+            } 
+          }, rank);
+        }
+      });
+    }
+
+    cols.push({
+      title: '门店',
+      key: 'storeName',
+      minWidth: 150,
+      render: (row: any) =>
+        h('div', { style: 'display: flex; flex-direction: column; gap: 2px; min-width: 0;' }, [
+          h('span', { style: 'font-weight: 600; color: #1d1d1f; font-size: 14px; line-height: 1.35;' }, row.storeName || '—'),
+          h('span', { style: 'font-size: 11px; color: #86868b;' }, `ID: ${row.storeId ?? '—'}`),
+        ]),
+    });
+
+    cols.push({
+      title: '总人数',
+      key: 'progress',
+      width: 80,
+      align: 'right',
+      render: (row: any) => {
+        const total = row.assignmentCount ?? row.totalCount ?? 0;
+        return h('span', null, total);
+      }
+    });
+
+    cols.push({
+      title: '已完成',
+      key: 'completed',
+      width: 80,
+      align: 'right',
+      render: (row: any) => h('span', { style: 'font-weight: 600;' }, row.completedCount ?? 0)
+    });
+
+    cols.push({
+      title:
+        type === 'warning'
+          ? wk === 'p0'
+            ? '临期危机 (P0) 率'
+            : wk === 'startDelay'
+              ? '起步异常率'
+              : '临期危机 (P1) 率'
+          : '完成率',
+      key: 'rate',
+      width: 160,
+      render: (row: any) => {
+        const rate =
+          type === 'warning'
+            ? Number(row.warningRate ?? row.completionRate ?? 0)
+            : row.completionRate ?? 0;
+        const color = rate >= 100 ? '#10b981' : (type === 'warning' ? '#ef4444' : '#3b82f6');
+        return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+          h('span', { style: 'width: 48px; font-weight: 600; font-size: 13px; text-align: right; color: #1e293b;' }, `${formatPct2(rate)}%`),
+          h(NProgress, {
+            type: 'line',
+            percentage: pctForBar(rate),
+            indicatorPlacement: 'hide',
+            color: color,
+            style: 'flex: 1;'
+          })
+        ]);
+      }
+    });
+
+    if (type === 'warning') {
+      cols.push({
+        title: '逾期人数',
+        key: 'overdue',
+        width: 100,
+        align: 'right',
+        render: (row: any) => {
+          const overdue = row.overdueCount ?? 0;
+          if (overdue > 0) {
+            return h('span', { style: 'color: #ef4444; font-weight: 600; font-size: 13px;' }, `⚠️ ${overdue} 人`);
+          }
+          return h('span', { style: 'color: #94a3b8; font-size: 13px;' }, '0');
+        }
+      });
+    }
+
+    return cols;
+  });
+
+  /** 漏斗链路下钻列（动态根据 metric 显示对应指标） */
+  const linkDrillDownColumns = computed(() => {
+    const metric = linkDrillDownMetric.value;
+    let rateTitle = '触达率';
+    let rateColor = '#0071e3';
+    let countTitle = '人数';
+
+    if (metric === 'reach') {
+      rateTitle = '触达率';
+      rateColor = '#10b981';
+      countTitle = '触达人数';
+    } else if (metric === 'read') {
+      rateTitle = '读取率';
+      rateColor = '#3b82f6';
+      countTitle = '已读人数';
+    } else if (metric === 'nudge') {
+      rateTitle = '转化率';
+      rateColor = '#f59e0b';
+      countTitle = '总人数';
+    }
+
+    return [
+      { title: '门店名称', key: 'name', width: 100 },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      {
+        title: rateTitle,
+        key: 'rate',
+        width: 150,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 55px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right;' },
+              `${formatPct2(row.rate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.rate),
+              indicatorPlacement: 'hide',
+              color: rateColor,
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      {
+        title: countTitle,
+        key: 'count',
+        width: 100,
+        align: 'right' as const,
+        render: (row: any) => (row.count == null ? '—' : row.count),
+      },
+    ];
+  });
+
+  async function fetchStoreDrillRows(taskId: string): Promise<StoreDrillMetricRow[]> {
+    const [heatmapRes, stores] = await Promise.all([
+      getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'store' }).send(),
+      Alova.Get<any[]>('/stores').send(),
+    ]);
+
+    const heatRows = unwrapHeatmapRows(heatmapRes);
+    const byName = new Map(
+      (stores || []).map((s: any) => [String(s?.name || '').trim().toLowerCase(), String(s?.id || '')])
+    );
+
+    const rows = await Promise.all(
+      heatRows.map(async (h) => {
+        const name = String(h.rtmValue || '—');
+        const storeId = byName.get(name.trim().toLowerCase());
+        const base: StoreDrillMetricRow = {
+          name,
+          storeId,
+          assignmentCount: h.assignmentCount ?? 0,
+          completedCount: h.completedCount ?? 0,
+          completionRate: h.completionRate ?? 0,
+          avgTimeHours:
+            h.avgCompletionTimeHours != null ? Number(Number(h.avgCompletionTimeHours).toFixed(1)) : 0,
+          onTimeRate: 0,
+          reachRate: 0,
+          readRate: 0,
+          nudgeRate: 0,
+          totalReadCount: 0,
+        };
+
+        if (!storeId) return base;
+
+        try {
+          const overview = (await getDashboardOverview({
+            taskId: String(taskId),
+            storeId: String(storeId),
+          }).send()) as DashboardOverview;
+
+          return {
+            ...base,
+            assignmentCount: overview.totalAssignments ?? base.assignmentCount,
+            completedCount: overview.completedCount ?? base.completedCount,
+            completionRate: overview.completionRate ?? base.completionRate,
+            avgTimeHours:
+              overview.avgCompletionTimeHours != null
+                ? Number(Number(overview.avgCompletionTimeHours).toFixed(1))
+                : base.avgTimeHours,
+            onTimeRate: overview.onTimeCompletionRate ?? 0,
+            reachRate: overview.taskReachRate ?? 0,
+            readRate: overview.taskReadRate ?? 0,
+            nudgeRate: overview.nudgeConversionRate ?? 0,
+            totalReadCount: overview.totalReadCount ?? 0,
+          };
+        } catch {
+          return base;
+        }
+      })
+    );
+
+    return rows;
+  }
+
+  async function openNsDrillDownModal(metric: 'onTime' | 'avgTime', title: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+
+    nsDrillDownMetric.value = metric;
+    nsDrillDownTitle.value = title;
+    showNsDrillDownModal.value = true;
+    nsDrillDownLoading.value = true;
+    nsDrillDownData.value = [];
+
+    try {
+      nsDrillDownData.value = await fetchStoreDrillRows(String(taskId));
+    } catch (e: any) {
+      message.error(e?.message || '获取门店明细数据失败');
+    } finally {
+      nsDrillDownLoading.value = false;
+    }
+  }
+
+  /** 漏斗链路门店维度下钻（触达率/读取率/转化率） */
+  async function openLinkDrillDown(metric: 'reach' | 'read' | 'nudge', title: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+
+    linkDrillDownMetric.value = metric;
+    linkDrillDownTitle.value = title;
+    showLinkDrillDownModal.value = true;
+    linkDrillDownLoading.value = true;
+    linkDrillDownData.value = [];
+
+    try {
+      const rows = await fetchStoreDrillRows(String(taskId));
+      linkDrillDownData.value = rows.map((row) => {
+        let rate = 0;
+        let count: number | null = null;
+        if (metric === 'reach') {
+          rate = row.reachRate;
+          count = Math.round((row.assignmentCount * row.reachRate) / 100);
+        } else if (metric === 'read') {
+          rate = row.readRate;
+          count = row.totalReadCount;
+        } else {
+          rate = row.nudgeRate;
+          count = row.assignmentCount;
+        }
+
+        return {
+          name: row.name,
+          rate,
+          assignmentCount: row.assignmentCount,
+          count,
+        };
+      });
+    } catch (e: any) {
+      message.error(e?.message || '获取链路明细数据失败');
+    } finally {
+      linkDrillDownLoading.value = false;
+    }
+  }
+
+  // --- RTM 区域进度下钻 ---
+  const showRtmDrillDownModal = ref(false);
+  const rtmDrillDownLoading = ref(false);
+  const rtmDrillDownLevel = ref<'dealer' | 'store'>('dealer');
+  const currentRtmDrillDownName = ref('');
+  const rtmDrillDownData = ref<any[]>([]);
+
+  const rtmDrillDownColumns = computed(() => {
+    return [
+      { 
+        title: rtmDrillDownLevel.value === 'dealer' ? '经销商' : '门店', 
+        key: 'name', 
+        minWidth: 150,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b; font-size: 14px;' }, row.name || '—')
+      },
+      { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
+      { 
+        title: '已完成', 
+        key: 'completedCount', 
+        width: 90, 
+        align: 'right' as const,
+        render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b;' }, row.completedCount ?? 0)
+      },
+      {
+        title: '完成率',
+        key: 'rate',
+        width: 140,
+        render(row: any) {
+          return h('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
+            h(
+              'span',
+              { style: 'width: 44px; font-weight: 600; font-size: 13px; display: inline-block; text-align: right; color: #1e293b;' },
+              `${formatPct2(row.rate)}%`
+            ),
+            h(NProgress, {
+              type: 'line',
+              percentage: pctForBar(row.rate),
+              indicatorPlacement: 'hide',
+              color: row.rate >= 100 ? '#10b981' : '#0071e3',
+              style: 'flex: 1;',
+            }),
+          ]);
+        },
+      },
+      { 
+        title: '人均耗时', 
+        key: 'time', 
+        width: 100, 
+        align: 'right' as const, 
+        render: (row: any) => h('span', { style: 'color: #64748b;' }, `${row.time}h`) 
+      },
+    ];
+  });
+
+  async function fetchRtmDrillDownData() {
+    const taskId = activeTaskId.value;
+    if (!taskId || !currentRtmDrillDownName.value) return;
+    
+    rtmDrillDownLoading.value = true;
+    try {
+      const res = await getDashboardHeatmap({
+        taskId: String(taskId),
+        rtm: currentRtmDrillDownName.value,
+        rtmLevel: rtmDrillDownLevel.value,
+      }).send();
+      rtmDrillDownData.value = unwrapHeatmapRows(res).map((h) => ({
+        name: h.rtmValue || '—',
+        rate: h.completionRate ?? 0,
+        time: h.avgCompletionTimeHours != null ? Number(Number(h.avgCompletionTimeHours).toFixed(1)) : 0,
+        assignmentCount: h.assignmentCount ?? 0,
+        completedCount: h.completedCount ?? 0,
+      }));
+    } catch (e: any) {
+      message.error(e?.message || '获取明细数据失败');
+    } finally {
+      rtmDrillDownLoading.value = false;
+    }
+  }
+
+  async function openRtmDrillDownModal(rtmName: string) {
+    if (!rtmName || rtmName.includes('暂无')) return;
+    currentRtmDrillDownName.value = rtmName;
+    rtmDrillDownLevel.value = 'dealer';
+    showRtmDrillDownModal.value = true;
+    await fetchRtmDrillDownData();
+  }
+
+  function onRtmDrillDownLevelChange(val: 'dealer' | 'store') {
+    rtmDrillDownLevel.value = val;
+    fetchRtmDrillDownData();
+  }
 
   /** 打开门店排名下钻 (Top/Bottom) */
   async function openStoreRankDrillDown(type: 'top' | 'bottom') {
@@ -1056,37 +1870,48 @@
 
     drillDownType.value = 'rank';
     drillDownTitle.value =
-      type === 'top' ? '门店完成率排行 (Top 20)' : '门店完成率排行 (Bottom 20)';
+      type === 'top' ? '门店完成率排行 (Top 5)' : '门店完成率排行 (Bottom 5)';
     showDrillDownModal.value = true;
     drillDownLoading.value = true;
     drillDownList.value = [];
 
     try {
-      const res = await getDashboardStoreRank({ taskId, type, limit: 20 }).send();
-      drillDownList.value = res.rankList || [];
+      const res = await getDashboardStoreRank({
+        taskId: String(taskId),
+        type,
+        limit: 5,
+      }).send();
+      drillDownList.value = unwrapRankList(res);
     } catch (err: any) {
-      message.error('获取排名详情失败');
+      message.error(err?.message || '获取排名详情失败');
     } finally {
       drillDownLoading.value = false;
     }
   }
 
-  /** 打开预警门店下钻 */
-  async function openWarningDrillDown(level: 'p1' | 'p2', title: string) {
+  /** 打开预警门店下钻（临期 P0/P1 或起步异常 startDelay，数据来自 /dashboard/warnings） */
+  async function openWarningDrillDown(level: 'p0' | 'p1' | 'startDelay', title: string) {
     const taskId = activeTaskId.value;
     if (!taskId) return;
 
+    warningDrillKind.value = level;
     drillDownType.value = 'warning';
     drillDownTitle.value = `${title} - 风险门店名单`;
     showDrillDownModal.value = true;
     drillDownLoading.value = true;
     drillDownList.value = [];
+    drillDownEmptyDescription.value = '暂无符合条件的门店记录';
 
     try {
-      const res = await getDashboardWarnings({ taskId, warningLevel: level, pageSize: 50 }).send();
-      drillDownList.value = res.list || [];
+      const res = await getDashboardWarnings({
+        taskId: String(taskId),
+        warningLevel: level,
+        pageNum: 1,
+        pageSize: 50,
+      }).send();
+      drillDownList.value = unwrapWarningsList(res).map(normalizeWarningDrillRow);
     } catch (err: any) {
-      message.error('获取预警详情失败');
+      message.error(err?.message || '获取预警详情失败');
     } finally {
       drillDownLoading.value = false;
     }
@@ -1148,10 +1973,7 @@
   }
 
 
-  const handleAiFeedback = (type: 'up' | 'down') => {
-    message.success(type === 'up' ? '感谢您的反馈！' : '已记录您的反馈，我们将持续优化。');
-  };
-
+  const globalReasoningEnabled = ref(false);
   const copiedStates = ref<Record<string, boolean>>({
     northStar: false, trend: false, rtm: false, linkAndWarning: false
   });
@@ -1191,59 +2013,6 @@
       }
     }
   };
-
-  /** 生成局部 Mock 智能分析 */
-  function getMockSectionAnalysis(type: string): string {
-    const t = activeTask.value;
-    if (!t) return '加载数据中...';
-
-    if (type === 'northStar') {
-      const onTime = t.northStar?.onTimeRate ?? 0;
-      const avgTime = t.northStar?.avgTime ?? '0';
-      if (onTime > 80) {
-        return `表现优秀 🚀\n当前按时完成率高达 ${onTime}%，高于历史平均水平。学员人均耗时仅 ${avgTime} 小时，展现出极高的学习热情。`;
-      } else {
-        return `需要关注 ⚠️\n按时完成率仅为 ${onTime}%。人均耗时 ${avgTime} 小时表明部分学员可能遇到了学习瓶颈，建议抽样回访。`;
-      }
-    }
-    if (type === 'trend') {
-      const total = t.overviewSummary?.totalAssignments ?? 0;
-      const completed = t.overviewSummary?.completedCount ?? 0;
-      return `趋势平稳 📈\n目前共有 ${total} 人参与，已完成 ${completed} 人。大部分完成动作集中在下发后的 24 小时内，符合典型的学习曲线。后续建议在下午 2 点推送催办以获得最佳转化。`;
-    }
-    if (type === 'rtm') {
-      let best = '无';
-      let worst = '无';
-      if (t.rtmData && t.rtmData.length > 0) {
-        const sorted = [...t.rtmData].sort((a: any, b: any) => (b.rate || 0) - (a.rate || 0));
-        best = sorted[0]?.name || '无';
-        worst = sorted[sorted.length - 1]?.name || '无';
-      }
-      return `区域极差显著 📊\n【${best}】表现最好，可作为标杆区域进行经验分享；而【${worst}】目前进度落后，建议重点跟进该区域的店长，排查执行阻力。`;
-    }
-    if (type === 'link') {
-      const readRate = t.linkData?.readRate ?? 0;
-      if (readRate < 70) {
-        return `转化流失 🔻\n尽管触达良好，但阅读转化率仅为 ${readRate}%，存在明显断层。建议优化企微推送文案，使用更具紧迫感的标题。`;
-      }
-      return `链路健康 🔗\n触达与读取率 (${readRate}%) 均维持在健康区间。员工对任务通知的响应迅速，无需额外调整策略。`;
-    }
-    if (type === 'warning') {
-      const p0 = t.warningData?.p0Crisis ?? 0;
-      const p1 = t.warningData?.p1Crisis ?? 0;
-      return `风险预警 ⚠️\n目前 P0 临期危机占比 ${p0}%，P1 危机占比 ${p1}%。危机情况主要集中在部分头部门店的兼职员工群体中，建议直接下发区域通报。`;
-    }
-        if (type === 'linkAndWarning') {
-      const readRate = t.linkData?.readRate ?? 0;
-      const p0 = t.warningData?.p0Crisis ?? 0;
-      const p1 = t.warningData?.p1Crisis ?? 0;
-      if (readRate < 70 || p0 > 10) {
-        return `高风险链路 ⚠️\n当前读取转化率(${readRate}%)偏低，且 P0 临期危机已达 ${p0}%。建议立即结合「门店排行」下钻，针对未读或起步异常人员下发强制性企微通报以拉升完课率。`;
-      }
-      return `链路健康 🔗\n整体触达与读取流转正常。P0/P1 风险人群占比较低，建议保持日常自动化催办频率即可，暂时无需人工干预。`;
-    }
-    return '分析生成中...';
-  }
 
   /** 生成 Mock 任务分析报告（基于当前 activeTask 数据） */
   function generateMockTaskAnalysis(): string {
@@ -1632,6 +2401,7 @@
 
   /** 看板 KPI 加载（overview + heatmap + trend daily） */
   const boardStatsLoading = ref(false);
+
   /** 按小时趋势：当前选中日期的接口数据 */
   const activeHourlyTrendRows = ref<TrendPoint[]>([]);
   /** 缓存 key = `${taskId}::${date}` */
@@ -1651,6 +2421,18 @@
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(
       d.getMinutes()
     ).padStart(2, '0')}`;
+  }
+
+  function formatInsightGeneratedTime(iso?: string | null) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(
+      2,
+      '0'
+    )}`;
   }
 
   /** 百分比展示统一保留 2 位小数 */
@@ -1677,6 +2459,7 @@
         pendingCount: 0,
         overdueCount: 0,
         pushUserCount: 0,
+        totalReadCount: 0,
         updatedAt: '',
       },
       trendDailyRows: [] as TrendPoint[],
@@ -1710,13 +2493,13 @@
     boardStatsLoading.value = true;
     try {
       const [overview, heatmap, trendDailyRes] = await Promise.all([
-        getDashboardOverview({ taskId }).send(),
-        getDashboardHeatmap({ taskId }).send(),
-        getDashboardTrend({ taskId, type: 'daily' }).send(),
+        getDashboardOverview({ taskId: String(taskId) }).send(),
+        getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'rtm' }).send(),
+        getDashboardTrend({ taskId: String(taskId), type: 'daily' }).send(),
       ]);
 
       const trendRows: TrendPoint[] = trendDailyRes?.trendData ?? [];
-      const heatmapRows = heatmap?.heatmapData ?? [];
+      const heatmapRows = unwrapHeatmapRows(heatmap);
       const rtmData = heatmapRows.map((h) => ({
         name: h.rtmValue || '—',
         rate: h.completionRate ?? 0,
@@ -1758,6 +2541,7 @@
           pendingCount: overview.pendingCount ?? 0,
           overdueCount: overview.overdueCount ?? 0,
           pushUserCount: overview.pushUserCount ?? 0,
+          totalReadCount: overview.totalReadCount ?? 0,
           updatedAt: overview.updatedAt || '',
         },
         trendDailyRows: trendRows,
@@ -1941,6 +2725,200 @@
   const trendTimeDimension = ref<'day' | 'hour'>('day');
   const trendSelectedDay = ref<string>('');
   const trendSelectedWeek = ref<string>('all');
+
+  function buildBoardInsightRequestKey(section: BoardInsightSection): string {
+    const tid = activeTaskId.value || '';
+    const r = globalReasoningEnabled.value ? 'R1' : 'V3';
+    if (section === 'northStar') return `north_star::${tid}::${r}`;
+    if (section === 'trend') {
+      const dim = trendTimeDimension.value;
+      const d = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
+      const w = trendSelectedWeek.value;
+      return `trend::${tid}::${dim}::${d}::${w}::${r}`;
+    }
+    if (section === 'rtm') return `channel::${tid}::${r}`;
+    return `funnel::${tid}::${r}`;
+  }
+
+  function buildBoardInsightPayload(section: BoardInsightSection): CreateDashboardInsightBody | null {
+    const tid = activeTaskId.value;
+    if (!tid) return null;
+    const base = { 
+      reasoning: globalReasoningEnabled.value,
+    };
+    if (section === 'northStar') {
+      return { ...base, insightType: 'north_star', taskId: tid };
+    }
+    if (section === 'trend') {
+      if (trendTimeDimension.value === 'hour') {
+        const date = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
+        return {
+          ...base,
+          insightType: 'completion_daily',
+          taskId: tid,
+          date,
+          trendType: 'hourly',
+        };
+      }
+      return {
+        ...base,
+        insightType: 'completion_weekly',
+        taskId: tid,
+        trendType: 'daily',
+      };
+    }
+    if (section === 'rtm') {
+      return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
+    }
+    return { ...base, insightType: 'funnel_alerts', taskId: tid };
+  }
+
+  async function ensureBoardInsightOnOpen(section: BoardInsightSection) {
+    const tid = activeTaskId.value;
+    if (!tid || !activeTask.value?.dispatched) {
+      message.warning('请先选择已下发的任务');
+      return;
+    }
+    const key = buildBoardInsightRequestKey(section);
+    const cur = boardInsightCard.value[section];
+    if (cur.fetchedKey === key && cur.content) return;
+
+    boardInsightCard.value[section] = { ...cur, loading: true };
+    try {
+      const payload = buildBoardInsightPayload(section);
+      if (!payload) {
+        boardInsightCard.value[section] = { ...boardInsightCard.value[section], loading: false };
+        message.error('无法构造洞察请求');
+        return;
+      }
+      boardInsightCard.value[section] = {
+        ...boardInsightCard.value[section],
+        loading: true,
+        content: '',
+        insightId: null,
+        generatedAt: null,
+        userVote: null,
+        fetchedKey: key,
+      };
+
+      let isFirstChunk = true;
+      let wasReasoning = false;
+      let didReasoning = false;
+
+      await streamDashboardInsight(
+        payload,
+        (deltaData) => {
+          if (isFirstChunk) {
+            boardInsightCard.value[section].loading = false;
+            isFirstChunk = false;
+            if (deltaData.phase === 'reasoning') {
+              boardInsightCard.value[section].content += '> **思考过程：**\n> ';
+              wasReasoning = true;
+              didReasoning = true;
+            }
+          }
+          if (deltaData && deltaData.text) {
+            if (deltaData.phase === 'reasoning') {
+              const formattedText = deltaData.text.replace(/\n/g, '\n> ');
+              boardInsightCard.value[section].content += formattedText;
+              wasReasoning = true;
+              didReasoning = true;
+            } else {
+              if (wasReasoning) {
+                boardInsightCard.value[section].content += '\n\n---\n\n';
+                wasReasoning = false;
+              }
+              boardInsightCard.value[section].content += deltaData.text;
+            }
+          }
+        },
+        (fullData) => {
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: didReasoning ? boardInsightCard.value[section].content : fullData.content,
+            insightId: fullData.insightId,
+            generatedAt: fullData.createdAt || null,
+            up: fullData.voteSummary?.up ?? 0,
+            down: fullData.voteSummary?.down ?? 0,
+            userVote: readStoredInsightVote(fullData.insightId),
+          };
+        },
+        (error) => {
+          console.error('[dashboardInsight] stream error:', error);
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: boardInsightCard.value[section].content || '获取智能分析失败',
+          };
+        }
+      );
+    } catch {
+      boardInsightCard.value[section] = {
+        ...boardInsightCard.value[section],
+        loading: false,
+        content: '',
+        insightId: null,
+        generatedAt: null,
+        userVote: null,
+        fetchedKey: '',
+      };
+    }
+  }
+
+  const insightVotePending = ref<Record<BoardInsightSection, boolean>>({
+    northStar: false,
+    trend: false,
+    rtm: false,
+    linkAndWarning: false,
+  });
+
+  async function toggleBoardInsightVote(section: BoardInsightSection, vote: 'up' | 'down') {
+    const card = boardInsightCard.value[section];
+    const id = card.insightId;
+    if (!id) {
+      message.warning('请等待洞察生成完成后再反馈');
+      return;
+    }
+    if (insightVotePending.value[section]) return;
+    insightVotePending.value[section] = true;
+
+    const prev = card.userVote ?? null;
+    try {
+      if (prev === vote) {
+        // 取消当前的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'remove' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = null;
+        writeStoredInsightVote(id, null);
+        message.info('已取消反馈');
+      } else {
+        // 如果有反向的操作，先移除
+        if (prev === 'up') {
+          await postDashboardInsightVote(id, { vote: 'up', action: 'remove' }).send();
+        } else if (prev === 'down') {
+          await postDashboardInsightVote(id, { vote: 'down', action: 'remove' }).send();
+        }
+
+        // 执行新的赞/踩
+        const res = await postDashboardInsightVote(id, { vote, action: 'add' }).send();
+        boardInsightCard.value[section].up = res.up;
+        boardInsightCard.value[section].down = res.down;
+        boardInsightCard.value[section].userVote = vote;
+        writeStoredInsightVote(id, vote);
+        message.success(vote === 'up' ? '感谢您的点赞！' : '已记录您的反馈，我们将持续优化。');
+      }
+    } catch {
+      // 错误已由拦截器处理
+    } finally {
+      insightVotePending.value[section] = false;
+    }
+  }
+
+  function handleAiFeedback(section: BoardInsightSection, vote: 'up' | 'down') {
+    void toggleBoardInsightVote(section, vote);
+  }
 
   const trendWeekOptions = computed(() => {
     const rows = activeTask.value?.trendDailyRows as TrendPoint[] | undefined;
@@ -2216,6 +3194,14 @@
     void fetchHourlyTrendForActiveTask().then(() => nextTick(() => renderChart()));
   });
 
+  watch(activeTaskId, () => {
+    resetBoardInsightCards();
+  });
+
+  watch([trendTimeDimension, trendSelectedWeek, trendSelectedDay], () => {
+    boardInsightCard.value.trend = emptyBoardInsightCard();
+  });
+
   watch(
     () => [userStore.getToken, userStore.getUserInfo?.role] as const,
     () => {
@@ -2250,6 +3236,24 @@
 </script>
 
 <style lang="less" scoped>
+  .board-filters {
+    padding: 0 40px 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #f3f4f6;
+    margin-bottom: 24px;
+    background: #fff;
+    .filter-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .filter-label {
+      font-size: 13px;
+      color: #86868b;
+      white-space: nowrap;
+    }
+  }
   /* 商业级 SaaS 风格 - 实时看板 */
   .board-stats-spin {
     display: block;
@@ -2461,6 +3465,22 @@
     &::-webkit-scrollbar-track {
       background: transparent;
     }
+  }
+
+  /* 页面顶部「AI洞察」自动输出：限制高度，超出部分滚动 */
+  .ai-auto-insight-output {
+    white-space: pre-wrap;
+    line-height: 1.4;
+    font-size: 14px;
+    color: #4b5563;
+    background: #f5f5f7;
+    padding: 14px 18px;
+    border-radius: 12px;
+    margin-top: 0;
+    margin-bottom: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .hq-ai-insight-empty {
@@ -3031,16 +4051,45 @@
     background: #dbeafe;
   }
 
+  .ai-analyze-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 300px;
+    max-height: 360px;
+    box-sizing: border-box;
+  }
+
   .ai-analyze-header {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     border-bottom: 1px solid #f3f4f6;
     padding-bottom: 10px;
+  }
+
+  .ai-analyze-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .ai-analyze-body .ai-insight-md,
+  .ai-analyze-body .ai-insight-md-empty {
+    margin-top: 0;
+  }
+
+  .ai-analyze-body :deep(.n-spin-container) {
+    min-height: min-content;
   }
 
   .ai-analyze-actions {
     display: flex;
     justify-content: flex-end;
+    flex-shrink: 0;
     gap: 16px;
     margin-top: 12px;
     padding-top: 12px;
@@ -3055,6 +4104,119 @@
 
   .ai-action-icon:hover {
     color: #0071e3;
+  }
+
+  .ai-action-icon.is-active-up {
+    color: #10b981 !important;
+  }
+
+  .ai-action-icon.is-active-down {
+    color: #f97316 !important;
+  }
+
+  .ai-insight-md-empty {
+    font-size: 14px;
+    color: #9ca3af;
+    margin-top: 12px;
+    min-height: 48px;
+  }
+
+  .ai-insight-md {
+    font-size: 14px;
+    color: #4b5563;
+    line-height: 1.65;
+    margin-top: 12px;
+    min-height: 48px;
+    word-break: break-word;
+
+    :deep(h1),
+    :deep(h2),
+    :deep(h3),
+    :deep(h4) {
+      font-weight: 600;
+      color: #1d1d1f;
+      margin: 12px 0 8px;
+      line-height: 1.35;
+      &:first-child {
+        margin-top: 0;
+      }
+    }
+    :deep(h1) {
+      font-size: 16px;
+    }
+    :deep(h2) {
+      font-size: 15px;
+    }
+    :deep(h3),
+    :deep(h4) {
+      font-size: 14px;
+    }
+    :deep(p) {
+      margin: 0 0 8px;
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+    :deep(ul),
+    :deep(ol) {
+      margin: 0 0 8px;
+      padding-left: 1.25em;
+    }
+    :deep(li) {
+      margin: 4px 0;
+    }
+    :deep(strong) {
+      font-weight: 600;
+      color: #374151;
+    }
+    :deep(code) {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      background: #f3f4f6;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    :deep(pre) {
+      margin: 8px 0;
+      padding: 10px 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      code {
+        padding: 0;
+        background: transparent;
+      }
+    }
+    :deep(blockquote) {
+      margin: 8px 0;
+      padding: 6px 0 6px 12px;
+      border-left: 3px solid #e5e7eb;
+      color: #6b7280;
+    }
+    :deep(hr) {
+      border: none;
+      border-top: 1px solid #e5e7eb;
+      margin: 10px 0;
+    }
+    :deep(a) {
+      color: #0071e3;
+      text-decoration: none;
+      &:hover {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  .ai-insight-generated-at {
+    margin-top: 0;
+    margin-right: auto;
+    font-size: 10px;
+    color: #9ca3af;
+    text-align: left;
+    line-height: 1.4;
+    white-space: nowrap;
   }
 
   /* 1. 概览 KPI（overview） */
@@ -3083,6 +4245,37 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
+
+      &.is-clickable {
+        cursor: pointer;
+        position: relative;
+        border-radius: 10px;
+        padding: 6px 10px 16px;
+        transition: background-color 0.2s ease, transform 0.2s ease;
+
+        &:hover {
+          background: rgba(0, 113, 227, 0.04);
+          transform: translateY(-1px);
+        }
+
+        &:hover .ns-click-hint {
+          opacity: 1;
+        }
+      }
+    }
+
+    .ns-click-hint {
+      position: absolute;
+      left: 50%;
+      bottom: 2px;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: rgba(0, 0, 0, 0.3);
+      letter-spacing: 0.3px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+      pointer-events: none;
     }
 
     .ns-label {
@@ -3256,7 +4449,7 @@
 
       .rtm-item {
         display: grid;
-        grid-template-columns: minmax(72px, 1.1fr) 44px 44px minmax(100px, 1.2fr) 52px;
+        grid-template-columns: minmax(110px, 1.1fr) 44px 44px minmax(100px, 1.2fr) 52px;
         align-items: center;
         gap: 10px;
         padding: 12px 16px;
@@ -3537,7 +4730,199 @@
     }
   }
 
+  .rtm-item.is-clickable {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    
+    &:hover {
+      background-color: rgba(0, 113, 227, 0.05) !important;
+    }
+  }
+
   .dd-item:hover {
     background: #f9f9fb;
+  }
+
+  @media (max-width: 760px) {
+    .dd-item {
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 10px !important;
+    }
+
+    .dd-col-progress {
+      width: 100% !important;
+    }
+  }
+
+  .drilldown-body {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* 门店排名 / 临期预警下钻：父级占满卡片内容区 + 隐藏溢出，表格 flex-height 在内部滚动 */
+  .drilldown-body--store-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .drilldown-list {
+    min-height: 0;
+  }
+
+  /* 下钻弹窗统一美化 */
+  .hq-drilldown-modal :deep(.n-card:not(.hq-drilldown-modal--store)) {
+    border-radius: 14px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+    overflow: visible;
+    background: #ffffff;
+  }
+
+  /* 门店明细下钻：与 n-card 同根的 modifier，限制整体高度，内容区 flex 交给表格 flex-height */
+  :global(.n-card.hq-drilldown-modal--store) {
+    border-radius: 14px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+    background: #ffffff;
+    min-height: 0;
+    max-height: min(640px, 88vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  :global(.n-card.hq-drilldown-modal--store .n-card__content) {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .hq-drilldown-modal :deep(.n-card-header) {
+    padding: 14px 18px !important;
+    border-bottom: 1px solid #eef2f7;
+    background: linear-gradient(180deg, #fbfdff 0%, #f8fafc 100%);
+  }
+
+  .hq-drilldown-modal :deep(.n-card-header__main) {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: #0f172a !important;
+  }
+
+  .hq-drilldown-modal :deep(.n-card__content) {
+    padding: 12px !important;
+    background: #fff;
+  }
+
+  .hq-drilldown-modal :deep(.n-card__footer) {
+    border-top: 1px solid #eef2f7;
+    background: #fafbfc;
+    padding: 8px 12px !important;
+  }
+
+  /* 统一高级商业表格样式 - Apple Minimalist */
+  :global(.hq-drilldown-modal .n-data-table) {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-th) {
+    background-color: transparent !important;
+    color: #86868b !important;
+    font-weight: 500 !important;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+    padding: 12px 16px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-td) {
+    padding: 14px 16px !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04) !important;
+    font-size: 14px;
+    color: #1d1d1f;
+    transition: background-color 0.2s ease;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table .n-data-table-tr:hover .n-data-table-td) {
+    background-color: rgba(0, 113, 227, 0.04) !important;
+  }
+
+  :global(.hq-drilldown-modal .n-data-table-wrapper) {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  
+  :global(.hq-drilldown-modal .n-data-table-base-table) {
+    background: transparent !important;
+  }
+
+  /* Fix for modal flex layout */
+  :global(.n-modal.flex-modal) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  :global(.n-modal.flex-modal > .n-card__content) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding-bottom: 12px;
+  }
+
+  :global(.n-modal.flex-modal .n-spin-container),
+  :global(.n-modal.flex-modal .n-spin-body),
+  :global(.n-modal.flex-modal .n-spin-content) {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .dd-rank-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .dd-rank-top-1 {
+    background: linear-gradient(135deg, #fef08a 0%, #f59e0b 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(245, 158, 11, 0.2);
+  }
+
+  .dd-rank-top-2 {
+    background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(148, 163, 184, 0.2);
+  }
+
+  .dd-rank-top-3 {
+    background: linear-gradient(135deg, #ffedd5 0%, #d97706 100%);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(217, 119, 6, 0.2);
+  }
+
+  .dd-rank-normal {
+    background: #f1f5f9;
+    color: #64748b;
   }
 </style>

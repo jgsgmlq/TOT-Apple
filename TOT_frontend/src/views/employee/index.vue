@@ -165,6 +165,7 @@
     <!-- 任务详情弹窗 -->
     <n-modal
       v-model:show="showTaskModal"
+      :to="overlayTeleportTarget"
       class="task-detail-modal"
       @update:show="onTaskModalShowChange"
       :style="{
@@ -329,6 +330,7 @@
     <!-- 自动弹出的预警提醒灯箱 -->
     <n-modal
       v-model:show="showWarningModal"
+      :to="overlayTeleportTarget"
       class="warning-detail-modal"
       :style="{
         width: '90%',
@@ -471,6 +473,7 @@
     <!-- 历史记录 Modal -->
     <n-modal
       v-model:show="showHistoryModal"
+      :to="overlayTeleportTarget"
       preset="card"
       title="已完成任务记录"
       class="history-modal"
@@ -514,11 +517,12 @@
     ShopOutlined,
   } from '@vicons/antd';
   import { getTaskList, getTaskDetail } from '@/api/task';
-  import { getEvents, markEventRead, type EventItem } from '@/api/event/index';
+  import { getEvents, type EventItem } from '@/api/event/index';
   import { putAssignmentStatus, postAssignmentViewed } from '@/api/assignment';
   import { Alova } from '@/utils/http/alova/index';
 
   import { useGlobSetting } from '@/hooks/setting';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
   const { apiUrl } = useGlobSetting();
 
   const userStore = useUserStore();
@@ -701,22 +705,6 @@
     return `${d} 天前`;
   }
 
-  // 关闭消息的方法 (只针对预警)；有 eventId 时同步标记已读
-  const closeMessage = async (id: string) => {
-    const msg = waterfallMessages.value.find((m) => m.id === id);
-    if (msg?.type === 'warning' && msg.eventId) {
-      try {
-        await markEventRead(msg.eventId).send();
-      } catch (e) {
-        console.warn('markEventRead failed', e);
-      }
-    }
-    const index = waterfallMessages.value.findIndex((m) => m.id === id);
-    if (index > -1) {
-      waterfallMessages.value.splice(index, 1);
-    }
-  };
-
   // 点击 Banner 定位到下方的任务卡片
   const jumpToMiniProgram = (task: any) => {
     message.success(`🚀 即将跳转: ${task.title}`, { duration: 2000 });
@@ -769,6 +757,12 @@
       const realTasks = taskRes || [];
       const eventList: EventItem[] = eventsPayload?.list || [];
 
+      // 提取被真实读过（有 read_receipt回执）的 task_id 集合
+      const taskAssignedEvents = eventList.filter((e) => e.eventType === 'task_assigned');
+      const readTaskIds = new Set(
+        taskAssignedEvents.filter((e) => e.readStatus).map((e) => e.taskId)
+      );
+
       const taskTitleById = new Map<string, string>(realTasks.map((t: any) => [t.id, t.title]));
 
       const nudgeEvents = eventList.filter(
@@ -778,11 +772,11 @@
 
       const warningsFromApi = nudgeEvents.map((ev) => {
         const taskTitle = taskTitleById.get(ev.taskId) || '学习任务';
-        const prefix = ev.severity === 'red' ? '⚠️ 紧急预警' : '⚠️ 催办提醒';
+        const prefix = ev.severity === 'red' ? '紧急预警' : '催办提醒';
         // 将任务名称与后端的具体预警原因拼接起来
         let rawContent = ev.content || nudgeCopyCache[ev.eventId];
         let nudgeContent = rawContent
-          ? `【${taskTitle}】触发了预警：${rawContent}`
+          ? `${rawContent}`
           : `【${taskTitle}】您有任务需要尽快处理。`;
 
         const severity = ev.severity === 'red' ? 'red' : 'yellow';
@@ -792,6 +786,7 @@
           type: 'warning' as const,
           severity,
           taskId: ev.taskId,
+          assignmentId: ev.assignmentId,
           readStatus: ev.readStatus,
           title: prefix,
           content: nudgeContent,
@@ -835,7 +830,7 @@
         return {
           id: t.id,
           assignmentId: t.assignment?.id as string | undefined,
-          isRead: !!t.assignment?.receivedAt,
+          isRead: readTaskIds.has(t.id) || (t.assignment && t.assignment.status !== 'pending'),
           type: 'task' as const,
           title: t.title,
           desc: t.description || '总部未提供详细描述',
@@ -1014,21 +1009,11 @@
           assignmentId: realTaskMsg ? realTaskMsg.assignmentId : undefined
         };
         handleViewTask(mockTaskMsg);
-        
-        // 顺便把该预警消息设为已读
-        closeMessage(warning.id);
       }
     }
   };
 
-  const onTaskModalShowChange = (show: boolean) => {
-    if (!show) {
-      currentTaskDetail.value = null;
-      currentTaskModalAssignmentId.value = undefined;
-      readConfirmDone.value = false;
-      readConfirmSending.value = false;
-    }
-  };
+  let readTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** 确认已读：写入 read_receipts（task_detail_open），计入总部看板「任务读取率」 */
   const handleConfirmTaskRead = async (silent = false) => {
@@ -1040,9 +1025,19 @@
       await postAssignmentViewed(aid).send();
       readConfirmDone.value = true;
 
-      // 更新外层瀑布流中的状态
-      const t = waterfallMessages.value.find((m) => m.assignmentId === aid);
-      if (t) t.isRead = true;
+      // 同步更新外层瀑布流中属于该 assignment 的所有卡片状态（包含学习任务和预警通知）
+      waterfallMessages.value.forEach((m) => {
+        if (m.assignmentId === aid) {
+          if (m.type === 'task') m.isRead = true;
+          if (m.type === 'warning') m.readStatus = true;
+        }
+      });
+      // 同时更新当前处于弹窗展示中的预警数组
+      currentWarnings.value.forEach((w) => {
+        if (w.assignmentId === aid) {
+          w.readStatus = true;
+        }
+      });
     } catch (err: any) {
       if (!silent) console.error(err);
     } finally {
@@ -1052,17 +1047,41 @@
 
   const onTaskModalScroll = (e: Event) => {
     const target = e.target as HTMLElement;
-    // 到底部留点容差（例如10px）
-    if (target.scrollHeight - target.scrollTop - target.clientHeight <= 10) {
+    if (target.clientHeight <= 0) return;
+    // 到底部留点极小容差（针对高清屏缩放或微小偏移）
+    const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight <= 5;
+    if (isAtBottom) {
       handleConfirmTaskRead(true);
     }
   };
 
   const checkScrollToBottom = () => {
     const el = document.querySelector('.td-container');
-    if (el) {
-      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 10) {
-        handleConfirmTaskRead(true);
+    if (el && el.clientHeight > 0) {
+      // 关键：判断是否有垂直滚动条
+      const hasScrollbar = el.scrollHeight > el.clientHeight + 5;
+      
+      if (!hasScrollbar) {
+        // 如果没有滚动条（说明内容很短），不马上标记已读
+        // 而是至少等待 7 秒（7000ms）后自动判定为已读
+        readTimer = setTimeout(() => {
+          if (showTaskModal.value) {
+            handleConfirmTaskRead(true);
+          }
+        }, 7000);
+      }
+    }
+  };
+
+  const onTaskModalShowChange = (show: boolean) => {
+    if (!show) {
+      currentTaskDetail.value = null;
+      currentTaskModalAssignmentId.value = undefined;
+      readConfirmDone.value = false;
+      readConfirmSending.value = false;
+      if (readTimer) {
+        clearTimeout(readTimer);
+        readTimer = null;
       }
     }
   };
@@ -1111,19 +1130,6 @@
     if (days > 0) return `剩 ${days}天 ${hours}时 ${minutes}分 ${seconds}秒`;
     if (hours > 0) return `剩 ${hours}时 ${minutes}分 ${seconds}秒`;
     return `剩 ${minutes}分 ${seconds}秒`;
-  };
-
-  const handleMarkRead = async (msg: any) => {
-    try {
-      if (msg.eventId) {
-        await markEventRead(msg.eventId).send();
-      }
-      closeMessage(msg.id);
-      message.success('已标记为已读');
-    } catch (e) {
-      console.error('标记已读失败', e);
-      message.error('标记已读失败');
-    }
   };
 
   const handleMarkComplete = (msg: any) => {

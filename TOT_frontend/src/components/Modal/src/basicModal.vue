@@ -25,6 +25,7 @@
   import { basicProps } from './props';
   import startDrag from '@/utils/Drag';
   import { deepMerge } from '@/utils';
+  import { overlayTeleportTarget } from '@/utils/overlayTeleport';
   import { FormProps } from '@/components/Form';
   import { ModalProps, ModalMethods } from './type';
 
@@ -55,6 +56,7 @@
       ...attrs,
       ...unref(getProps),
       ...unref(propsRef),
+      to: overlayTeleportTarget.value,
     };
   });
 

@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.4.23（2026-04-15）
+
+- **WebSocket `task_assigned`**：向在线店员推送成功时 **不再** 更新 `task_assignments.received_at`（避免与「详情已读」混淆）；改为更新 **`users.last_login_at`**，使看板 **`taskReachRate`** 中「下发后登录」条件覆盖 **WS 实时送达**（`u.last_login_at >= ta.created_at`）。`received_at` 仍由 **`POST /assignments/:id/viewed`**、**开始任务** 等路径按原语义写入。实现见 `server/ws/manager.js`。
+
 ### v1.4.22（2026-04-14）
 
 - **已读主路径**：移除 **`POST /api/v1/events/{eventId}/read`**（原 `notification_click`）。员工侧 **`POST /api/v1/assignments/{assignmentId}/viewed`** 为唯一写入 **`read_receipts`（`source=task_detail_open`）** 的入口；若此前无 `task_assigned` 通知行（如 batch-create），服务端在事务内**补建**与 dispatch 同 **`dedupe_key`** 的 `notification_events` 后再写回执。新建回执时向看板推送 **`operationType: assignment_viewed`**。
@@ -1482,10 +1486,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "taskReadRate": 60.0,         // 任务读取率：totalReadCount / totalAssignments
       "nudgeConversionRate": 50,    // 催办转化率：被催办后转化为在学或完成的比例
       
-      // 预警数据
-      "startDelayRate": 5.5,        // 起步异常预警人数 / 任务总人数
-      "crisisP1Rate": 4.0,          // 进度危机P1预警人数 / 任务总人数
-      "crisisP0Rate": 2.1,          // 进度危机P0预警人数 / 任务总人数
+      // 预警数据（与 §5.5 下钻 warningRate 同规则：按 assignment 命中规则计数 ÷ totalAssignments×100）
+      "startDelayRate": 5.5,        // 时间进度≥startDelay 阈值且 progress=0 且未完成的 assignment 数 / 总人数
+      "crisisP1Rate": 4.0,          // 任务处于 P1 临期带时，未完成 assignment 数 / 总人数
+      "crisisP0Rate": 2.1,          // 任务处于 P0 临期带时，未完成 assignment 数 / 总人数
 
       "inProgressCount": 60,
       "pendingCount": 24,
@@ -1689,7 +1693,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
-  | warningLevel | string | 否 | 预警级别：p1/p0（默认全部） |
+  | warningLevel | string | 否 | 预警级别：`p1` / `p0`（临期，未传则两者混合）；`startDelay`（起步异常，规则与 `evaluateAndTriggerAutoNudges` 的 startDelay 一致：任务时间进度占比 ≥ `tasks.auto_nudge_rules.startDelay` 且该店存在未完成且 `progress=0` 的 assignment；**不依赖**是否已写入 `notification_events`） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
   | rtm | string | 否 | 可选门店下钻，同 §5.1 |
@@ -1709,8 +1713,9 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "taskId": "string",
           "storeId": "string",      // stores.id
           "storeName": "string",    // JOIN stores.name
-          "warningLevel": "p1",     // p1（yellow）/ p0（red）
-          "completionRate": 45.0,   // 该门店当前完成率（%），从 task_assignments 聚合
+          "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
+          "warningRate": 20.0,      // 与 §5.1 同公式在单店：起步异常=（进度仍为0且未完成人数）/门店人数×100；临期 P0/P1=未完成人数/门店人数×100（且任务已落在对应临期带）
+          "completionRate": 45.0,   // 门店完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
           "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
@@ -1729,10 +1734,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：**预警无独立存储表**，由服务端对 `task_assignments` 按门店+任务聚合，**临期分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致**（阈值默认 48h/24h，已过期不计入临期档）。未配置 `deadlineCrisis` 的任务不出现在本列表。MVP 阶段 `aiSuggestion` 为静态模板文案。
+- **接口说明**：**预警无独立存储表**。**临期（p0/p1）**：对 `task_assignments` 按门店+任务聚合，分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致（阈值默认 48h/24h，已过期不计入临期档）；未配置 `deadlineCrisis` 的任务不出现在临期列表。**起步异常（`warningLevel=startDelay`）**：按店+任务聚合后筛选——任务需配置 `startDelay` 阈值；当前时间相对 `created_at`～`ddl_at` 的已过时间占比 ≥ 该阈值，且该店至少有一名未完成学员 `progress=0`。**`warningRate`** 与 §5.1 概览中对应 KPI **同一计算方式**，仅分子分母缩至该门店。MVP 阶段 `aiSuggestion` 为静态模板文案。
 - **权限要求**：仅总部角色（central）
 - **异常场景**：
-  - 400：warningLevel非法（非p1/p0）
+  - 400：warningLevel非法（非 p1/p0/startDelay）
   - 403：非总部角色
 
 ### 5.6 门店任务明细（下钻）**P0**
