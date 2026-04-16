@@ -288,6 +288,7 @@ git commit -m "feat: 简短说明"
 git push
 
 # 3) 定期同步 dev_joint（在线性历史下更新）
+# 在你自己的功能分支执行：把远程 dev_joint 的最新提交同步到当前分支
 git pull --rebase origin dev_joint
 
 # 4) 提 PR：base=dev_joint，compare=你的功能分支
