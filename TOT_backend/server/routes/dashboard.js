@@ -429,11 +429,11 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 // ─── GET /api/v1/dashboard/warnings ───────────────────────────────────────────
 // §5.5 预警列表（实时聚合，无独立 alerts 表）
 // - p1/p0：task_assignments + deadlineCrisis 与 autoNudge 一致
-// - 门店 warningRate：与 §5.1 同公式在单店范围（起步异常=进度0人数/店人数；临期=未完成人数/店人数，且任务须落在对应临期带）
+// - 实体 warningRate：与 §5.1 同公式在单实体范围（起步异常=进度0人数/总人数；临期=未完成人数/总人数，且任务须落在对应临期带）
 
 router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
   try {
-    const { taskId, warningLevel, pageNum = 1, pageSize = 20 } = req.query;
+    const { taskId, warningLevel, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
     const drill = parseStoreDrill(req.query);
 
     if (warningLevel && !['p1', 'p0', 'startDelay'].includes(warningLevel)) {
@@ -456,12 +456,33 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const nowIso = formatNowSqliteLocal();
     const nowMs = Date.now();
 
+    // 确定下钻聚合的维度
+    let selectId, selectName, groupByDim;
+    const lvl = level.toLowerCase();
+    if (lvl === 'rtm') {
+      selectId = 's.rtm AS target_id';
+      selectName = 's.rtm AS target_name';
+      groupByDim = 's.rtm';
+    } else if (lvl === 'format') {
+      selectId = 's.format AS target_id';
+      selectName = 's.format AS target_name';
+      groupByDim = 's.format';
+    } else if (lvl === 'dealer_name' || lvl === 'dealer') {
+      selectId = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'(未知)\') AS target_id';
+      selectName = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'(未知)\') AS target_name';
+      groupByDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'\')';
+    } else {
+      selectId = 'ta.store_id AS target_id';
+      selectName = 's.name AS target_name';
+      groupByDim = 'ta.store_id';
+    }
+
     if (warningLevel === 'startDelay') {
       const startDelaySql = `
       SELECT
         ta.task_id,
-        ta.store_id,
-        s.name AS store_name,
+        ${selectId},
+        ${selectName},
         MAX(t.created_at) AS task_created_at,
         t.ddl_at,
         t.auto_nudge_rules,
@@ -476,7 +497,13 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       JOIN stores s ON s.id = ta.store_id
       JOIN tasks t ON t.id = ta.task_id
       WHERE ${whereClause}
-      GROUP BY ta.store_id, ta.task_id
+      GROUP BY ${groupByDim}, ta.task_id
+      HAVING SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM notification_events ne
+          WHERE ne.dedupe_key LIKE '%startDelay%'
+            AND ne.task_id = ta.task_id
+            AND ne.store_id = ta.store_id
+        ) THEN 1 ELSE 0 END) > 0
     `;
       const rawRows = db.all(startDelaySql, [nowIso, ...params]);
       const matchedStartDelay = [];
@@ -493,7 +520,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         matchedStartDelay.push(r);
       }
       matchedStartDelay.forEach((r) => {
-        r._warningRate = ruleBasedStoreWarningRate('startDelay', r);
+        r._warningRate = r.total_count > 0 ? Number(((r.zero_prog_incomplete / r.total_count) * 100).toFixed(2)) : 0;
       });
       matchedStartDelay.sort((a, b) => (b._warningRate || 0) - (a._warningRate || 0));
       const total = matchedStartDelay.length;
@@ -507,12 +534,15 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         const threshold = rules.startDelay;
         const triggerDesc =
           threshold != null && threshold !== ''
-            ? `任务时间进度已达 ${Number(threshold).toFixed(0)}% 阈值（startDelay），店内仍有学员进度为 0`
-            : '店内仍有学员进度为 0（起步异常 / startDelay）';
+            ? `任务时间进度已达 ${Number(threshold).toFixed(0)}% 阈值（startDelay），仍有学员进度为 0`
+            : `仍有学员进度为 0（起步异常 / startDelay）`;
         return {
           taskId:         r.task_id,
-          storeId:        r.store_id,
-          storeName:      r.store_name,
+          targetId:       r.target_id,
+          targetName:     r.target_name,
+          targetType:     lvl,
+          storeId:        r.target_id,   // 保留兼容旧结构
+          storeName:      r.target_name, // 保留兼容旧结构
           warningLevel:   'startDelay',
           warningRate,
           completionRate,
@@ -539,8 +569,8 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const aggregateSql = `
       SELECT
         ta.task_id,
-        ta.store_id,
-        s.name AS store_name,
+        ${selectId},
+        ${selectName},
         t.ddl_at,
         t.auto_nudge_rules,
         COUNT(ta.id) AS total_count,
@@ -553,7 +583,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       JOIN stores s ON s.id = ta.store_id
       JOIN tasks t ON t.id = ta.task_id
       WHERE ${whereClause}
-      GROUP BY ta.store_id, ta.task_id
+      GROUP BY ${groupByDim}, ta.task_id
     `;
 
     const rawRows = db.all(aggregateSql, [nowIso, ...params]);
@@ -567,12 +597,11 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       const band = classifyDeadlineCrisisBand(rules, hoursLeft);
       if (!band) continue;
       if (warningLevel && band !== warningLevel) continue;
+
+      r._warningRate = r.total_count > 0 ? Number(((r.uncompleted_count / r.total_count) * 100).toFixed(2)) : 0;
       matched.push({ row: r, band });
     }
 
-    matched.forEach(({ row: r, band }) => {
-      r._warningRate = ruleBasedStoreWarningRate(band, r);
-    });
     matched.sort((a, b) => (b.row._warningRate || 0) - (a.row._warningRate || 0));
 
     const total = matched.length;
@@ -585,12 +614,15 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       const completionRate = r.completion_rate || 0;
       const warningRate = r._warningRate ?? 0;
       const triggerDesc = band === 'p0'
-        ? `距 Deadline 不足${h.p0Hours}小时，仍未完成（P0）`
-        : `距 Deadline 不足${h.p1Hours}小时，仍未完成（P1）`;
+        ? `距 Deadline 不足${h.p0Hours}小时，仍有 ${r.uncompleted_count} 人未完成（P0）`
+        : `距 Deadline 不足${h.p1Hours}小时，仍有 ${r.uncompleted_count} 人未完成（P1）`;
       return {
         taskId:         r.task_id,
-        storeId:        r.store_id,
-        storeName:      r.store_name,
+        targetId:       r.target_id,
+        targetName:     r.target_name,
+        targetType:     lvl,
+        storeId:        r.target_id,   // 保留兼容旧结构
+        storeName:      r.target_name, // 保留兼容旧结构
         warningLevel:   band,
         warningRate,
         completionRate,

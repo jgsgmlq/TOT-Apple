@@ -1,6 +1,6 @@
 # 看板指标规格
 
-**版本:** 1.4.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-14
+**版本:** 1.5.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-16
 
 ---
 
@@ -136,8 +136,9 @@ WHERE task_id = :taskId;
 
 - **角色：** 仅 `central` / `admin`。
 - **分页：** `pageNum` / `pageSize`。
-- **taskId：** 可选；**warningLevel：** `p1` | `p0`，按与上表相同的 **deadlineCrisis** 分级过滤（且均有未完成）。
-- 列表项含：`taskId`、`storeId`、`warningLevel`（`p1`/`p0`）、`completionRate`、`triggerDesc`、`aiSuggestion` 等。
+- **聚合维度 (`level`)：** `store`（默认）| `rtm` | `format` | `dealer`。支持按不同业务维度汇总预警数据。
+- **taskId：** 可选；**warningLevel：** `p1` | `p0` | `startDelay`。
+- 列表项含：`taskId`、`targetId`、`targetName`、`targetType`、`warningLevel`、`completionRate`、`warningRate`、`triggerDesc` 等。
 
 ---
 
@@ -195,6 +196,7 @@ ORDER BY strftime('%H', completed_at) ASC;
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.5.0 | 2026-04-16 | **预警列表多维度下钻**：`/dashboard/warnings` 新增 `level` 参数，支持按 `rtm`、`format`、`dealer` 聚合展示；响应增加 `targetId`/`targetName`/`targetType` 统一字段。同时更新 `seed.js` 以自动生成各预警带的模拟数据。 |
 | 1.4.0 | 2026-04-14 | **临期预警与 autoNudge 一致**：`warningCount` / `/warnings` 使用 `auto_nudge_rules.deadlineCrisis`（默认 24h/48h 可配置），与 `services/autoNudgeRules.js` / `autoNudge.js` 同源；未配置 `deadlineCrisis` 不计临期；已过期不计临期档。概览按门店+任务聚合。 |
 | 1.3.0 | 2026-04-09 | 与 `routes/dashboard.js`、PRD §5.3/§6.6 对齐：角色矩阵、`overview` 扩展 KPI、`/trend`、预警/热力图口径、移除过时 Day2 待办表述 |
 | 1.2.1 | 2026-03-28 | Day5 初版对齐 |
