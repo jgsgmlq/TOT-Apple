@@ -11,6 +11,8 @@ export async function streamSsePostJson(options: {
   onError: (error: unknown) => void;
   /** `event: error` 且 payload 无 `message` 时使用 */
   fallbackErrorMessage?: string;
+  /** 取消时中断 fetch / 读流，避免页面切换或关闭弹层后仍持续 delta 回调 */
+  signal?: AbortSignal;
 }): Promise<void> {
   const {
     path,
@@ -19,6 +21,7 @@ export async function streamSsePostJson(options: {
     onDone,
     onError,
     fallbackErrorMessage = '流式请求失败',
+    signal,
   } = options;
 
   const { useUserStore } = await import('@/store/modules/user');
@@ -38,6 +41,7 @@ export async function streamSsePostJson(options: {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -80,14 +84,11 @@ export async function streamSsePostJson(options: {
             if (currentEvent === 'delta') {
               onDelta(parsed);
             } else if (currentEvent === 'done') {
-              const resultData =
-                parsed.data !== undefined ? parsed.data : parsed;
+              const resultData = parsed.data !== undefined ? parsed.data : parsed;
               onDone(resultData);
             } else if (currentEvent === 'error') {
               const msg =
-                typeof parsed.message === 'string'
-                  ? parsed.message
-                  : fallbackErrorMessage;
+                typeof parsed.message === 'string' ? parsed.message : fallbackErrorMessage;
               onError(new Error(msg));
               return;
             }

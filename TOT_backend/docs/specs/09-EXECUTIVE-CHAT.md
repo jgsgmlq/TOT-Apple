@@ -296,6 +296,8 @@ Executive Chat 的可观测性分为两层：**业务运行日志**（结构化�
 
 **完整 URL 前缀：** 与全站一致，均为 **`/api/v1`**（例如 `POST /api/v1/chat/executive/sessions`）。
 
+**总部看板机器人对话**与上述 **同一套服务与数据表**，路径为 **`/api/v1/chat/dashboard/sessions/*`**，JWT 角色为 **`central` / `admin`**；产品语义与接口字段与 executive 一致，见 [04-API-SPEC.md](./04-API-SPEC.md) §6.1a。
+
 ---
 
 ## 角色与权限

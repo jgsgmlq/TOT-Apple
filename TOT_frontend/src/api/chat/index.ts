@@ -67,11 +67,19 @@ export function formatReplyContentText(rc: ReplyContent | null | undefined): str
   return text.trim() || '（暂无摘要）';
 }
 
+/** 总部看板机器人：路径前缀（与 Executive Chat 共用请求/响应类型） */
+const CHAT_DASHBOARD_SESSIONS = '/chat/dashboard/sessions';
+
 /**
  * 创建 Executive Chat 会话
  */
 export const createChatSession = () => {
   return Alova.Post<CreateSessionResult>('/chat/executive/sessions');
+};
+
+/** 创建总部看板机器人会话（central / admin） */
+export const createDashboardChatSession = () => {
+  return Alova.Post<CreateSessionResult>(CHAT_DASHBOARD_SESSIONS);
 };
 
 /**
@@ -100,7 +108,8 @@ export const streamExecutiveChatMessage = async (
   content: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
-  onError: (error: unknown) => void
+  onError: (error: unknown) => void,
+  streamOptions?: { signal?: AbortSignal }
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
@@ -109,6 +118,7 @@ export const streamExecutiveChatMessage = async (
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
+    signal: streamOptions?.signal,
   });
 };
 
@@ -161,5 +171,78 @@ export const submitChatFeedback = (
 export const regenerateChatMessage = (sessionId: string, messageId: string) => {
   return Alova.Post<SendMessageResult>(
     `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`
+  );
+};
+
+// ─── 总部看板机器人（与上列方法对称，仅路径为 /chat/dashboard/sessions）────────
+
+export const sendDashboardChatMessage = (
+  sessionId: string,
+  content: string,
+  options?: { skipGlobalErrorMessage?: boolean }
+) => {
+  return Alova.Post<SendMessageResult>(
+    `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages`,
+    { content },
+    options?.skipGlobalErrorMessage ? { meta: { skipGlobalErrorMessage: true } } : undefined
+  );
+};
+
+export const streamDashboardChatMessage = async (
+  sessionId: string,
+  content: string,
+  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onComplete: (data: SendMessageResult) => void,
+  onError: (error: unknown) => void,
+  streamOptions?: { signal?: AbortSignal }
+) => {
+  return streamSsePostJson({
+    path: `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages`,
+    body: { content, stream: true },
+    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDone: (d) => onComplete(d as SendMessageResult),
+    onError,
+    fallbackErrorMessage: '看板机器人对话处理失败',
+    signal: streamOptions?.signal,
+  });
+};
+
+export const getDashboardChatHistory = (
+  sessionId: string,
+  pageNum = 1,
+  pageSize = 200,
+  options?: { skipGlobalErrorMessage?: boolean }
+) => {
+  return Alova.Get<ChatHistoryResult>(`${CHAT_DASHBOARD_SESSIONS}/${sessionId}/history`, {
+    params: { pageNum, pageSize },
+    meta: options?.skipGlobalErrorMessage ? { skipGlobalErrorMessage: true } : undefined,
+  });
+};
+
+export const deleteDashboardChatSession = (
+  sessionId: string,
+  options?: { skipGlobalErrorMessage?: boolean }
+) => {
+  return Alova.Delete<{ sessionId: string }>(
+    `${CHAT_DASHBOARD_SESSIONS}/${sessionId}`,
+    undefined,
+    options?.skipGlobalErrorMessage ? { meta: { skipGlobalErrorMessage: true } } : undefined
+  );
+};
+
+export const submitDashboardChatFeedback = (
+  sessionId: string,
+  messageId: string,
+  feedback: 'like' | 'dislike' | 'none'
+) => {
+  return Alova.Post<SubmitFeedbackResult>(
+    `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages/${messageId}/feedback`,
+    { feedback }
+  );
+};
+
+export const regenerateDashboardChatMessage = (sessionId: string, messageId: string) => {
+  return Alova.Post<SendMessageResult>(
+    `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages/${messageId}/regenerate`
   );
 };
