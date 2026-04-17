@@ -1951,6 +1951,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 400：`roleScope=regional` 但 `regions` 为空或未传
   - 400：`roleScope=rtm` 但 `rtm` 为空
 
+### 6.1a 总部看板机器人会话（与 Executive 等价）**P1**
+
+- **说明**：与 **§6.1～6.2.1** 及消息相关接口 **同一套** `chatService`、同一 `chat_sessions` / `chat_messages` 表；仅路径前缀与角色不同，供 **总部端看板** 内嵌机器人对话使用。
+- **路径前缀**：`/chat/dashboard/sessions`（完整 URL：`/api/v1/chat/dashboard/sessions/...`）
+- **权限**：`central` 或 `admin`（与看板总部能力对齐）
+- **接口清单**（与 executive 一一对应，将路径中的 `executive` 换为 `dashboard` 即可）：
+  - `POST /chat/dashboard/sessions` — 创建会话
+  - `POST /chat/dashboard/sessions/{sessionId}/messages` — 发消息（支持 `stream: true` SSE，约定同 §6.2）
+  - `GET /chat/dashboard/sessions/{sessionId}/history` — 分页历史
+  - `DELETE /chat/dashboard/sessions/{sessionId}` — 删除会话
+  - `POST .../messages/{messageId}/feedback` — 反馈
+  - `POST .../messages/{messageId}/regenerate` — 重新生成
+- **会话隔离**：会话仍按 **当前登录用户 `user_id`** 归属；总部账号与 executive 账号各自会话互不可见。
+
 ### 6.2 发送聊天消息（Agent处理）**P1**
 
 - **接口名称**：发送消息给Executive Agent

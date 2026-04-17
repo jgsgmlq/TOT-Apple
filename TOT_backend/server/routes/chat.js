@@ -23,155 +23,171 @@ function requireSessionOwnership(req, res, next) {
   next();
 }
 
-// POST /api/v1/chat/executive/sessions
-// Creates a new chat session for the authenticated executive.
-router.post(
-  '/executive/sessions',
-  authenticate,
-  requireRole(['executive']),
-  (req, res, next) => {
-    try {
-      const result = chatService.createSession(req.user.id);
-      res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
-    } catch (err) {
-      next(err);
-    }
+// ─── 共享 handlers（Executive Chat 与总部看板机器人共用 chatService）────────────────
+
+function handleCreateSession(req, res, next) {
+  try {
+    const result = chatService.createSession(req.user.id);
+    res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
+  } catch (err) {
+    next(err);
   }
-);
+}
 
-// POST /api/v1/chat/executive/sessions/:sessionId/messages
-// Sends a message and returns the agent's structured reply.
-router.post(
-  '/executive/sessions/:sessionId/messages',
-  authenticate,
-  requireRole(['executive']),
-  requireSessionOwnership,
-  async (req, res, next) => {
-    try {
-      const { sessionId } = req.params;
-      const { content, stream } = req.body;
+async function handlePostMessage(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    const { content, stream } = req.body;
 
-      if (!content || !content.trim()) {
-        throw createError(400, 'content 不能为空', 'CHAT_005');
-      }
-
-      if (stream === true) {
-        await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
-        return;
-      }
-
-      const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);
-      res.json({ code: 200, message: 'success', data: result, requestId: req.requestId });
-    } catch (err) {
-      next(err);
+    if (!content || !content.trim()) {
+      throw createError(400, 'content 不能为空', 'CHAT_005');
     }
-  }
-);
 
-// POST /api/v1/chat/executive/sessions/:sessionId/messages/:messageId/feedback
-// Submit feedback for an AI message.
-router.post(
-  '/executive/sessions/:sessionId/messages/:messageId/feedback',
-  authenticate,
-  requireRole(['executive']),
-  requireSessionOwnership,
-  (req, res, next) => {
-    try {
-      const { sessionId, messageId } = req.params;
-      const { feedback } = req.body;
-
-      if (!['like', 'dislike', 'none'].includes(feedback)) {
-        throw createError(400, '无效的反馈类型', 'CHAT_006');
-      }
-
-      chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
-
-      res.json({
-        code: 200,
-        message: 'success',
-        data: {
-          sessionId,
-          messageId,
-          userFeedback: feedback === 'none' ? null : feedback,
-        },
-        requestId: req.requestId,
-      });
-    } catch (err) {
-      next(err);
+    if (stream === true) {
+      await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
+      return;
     }
-  }
-);
 
-// POST /api/v1/chat/executive/sessions/:sessionId/messages/:messageId/regenerate
-// Regenerate the last AI message.
-router.post(
-  '/executive/sessions/:sessionId/messages/:messageId/regenerate',
-  authenticate,
-  requireRole(['executive']),
-  requireSessionOwnership,
-  async (req, res, next) => {
-    try {
-      const { sessionId, messageId } = req.params;
-      const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
-      
-      res.json({
-        code: 200,
-        message: 'success',
-        data: result,
-        requestId: req.requestId,
-      });
-    } catch (err) {
-      next(err);
+    const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);
+    res.json({ code: 200, message: 'success', data: result, requestId: req.requestId });
+  } catch (err) {
+    next(err);
+  }
+}
+
+function handleFeedback(req, res, next) {
+  try {
+    const { sessionId, messageId } = req.params;
+    const { feedback } = req.body;
+
+    if (!['like', 'dislike', 'none'].includes(feedback)) {
+      throw createError(400, '无效的反馈类型', 'CHAT_006');
     }
-  }
-);
 
-// DELETE /api/v1/chat/executive/sessions/:sessionId
-// Removes session and all messages (ownership required).
-router.delete(
-  '/executive/sessions/:sessionId',
-  authenticate,
-  requireRole(['executive']),
-  requireSessionOwnership,
-  (req, res, next) => {
-    try {
-      const { sessionId } = req.params;
-      chatService.deleteSessionById(sessionId);
-      res.json({
-        code: 200,
-        message: '会话已删除',
-        data: { sessionId },
-        requestId: req.requestId,
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+    chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
 
-// GET /api/v1/chat/executive/sessions/:sessionId/history
-// Returns paginated chat message history.
-router.get(
-  '/executive/sessions/:sessionId/history',
-  authenticate,
-  requireRole(['executive']),
-  requireSessionOwnership,
-  (req, res, next) => {
-    try {
-      const { sessionId } = req.params;
-      const pageNum  = Math.max(1, parseInt(req.query.pageNum, 10) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
-
-      const data = chatService.getHistory(sessionId, pageNum, pageSize);
-      res.json({
-        code: 200, message: 'success',
-        data: { sessionId, ...data },
-        requestId: req.requestId,
-      });
-    } catch (err) {
-      next(err);
-    }
+    res.json({
+      code: 200,
+      message: 'success',
+      data: {
+        sessionId,
+        messageId,
+        userFeedback: feedback === 'none' ? null : feedback,
+      },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
   }
-);
+}
+
+async function handleRegenerate(req, res, next) {
+  try {
+    const { sessionId, messageId } = req.params;
+    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
+
+    res.json({
+      code: 200,
+      message: 'success',
+      data: result,
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+function handleDeleteSession(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    chatService.deleteSessionById(sessionId);
+    res.json({
+      code: 200,
+      message: '会话已删除',
+      data: { sessionId },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+function handleHistory(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    const pageNum  = Math.max(1, parseInt(req.query.pageNum, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+
+    const data = chatService.getHistory(sessionId, pageNum, pageSize);
+    res.json({
+      code: 200, message: 'success',
+      data: { sessionId, ...data },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * @param {string} prefix  如 `executive` 或 `dashboard`
+ * @param {string[]} roles  允许的角色
+ */
+function mountChatRoutes(prefix, roles) {
+  const base = `/${prefix}/sessions`;
+
+  router.post(
+    base,
+    authenticate,
+    requireRole(roles),
+    handleCreateSession
+  );
+
+  router.post(
+    `${base}/:sessionId/messages`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handlePostMessage
+  );
+
+  router.post(
+    `${base}/:sessionId/messages/:messageId/feedback`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleFeedback
+  );
+
+  router.post(
+    `${base}/:sessionId/messages/:messageId/regenerate`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleRegenerate
+  );
+
+  router.delete(
+    `${base}/:sessionId`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleDeleteSession
+  );
+
+  router.get(
+    `${base}/:sessionId/history`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleHistory
+  );
+}
+
+// Executive Chat（区域/高管）
+mountChatRoutes('executive', ['executive']);
+
+// 总部端看板机器人：与 E-chat 同一套 chatService / 数据表，路径前缀为 dashboard
+mountChatRoutes('dashboard', ['central', 'admin']);
 
 module.exports = router;
