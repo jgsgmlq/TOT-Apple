@@ -381,6 +381,7 @@
     >
       <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
         <n-radio-group v-model:value="rtmDrillDownLevel" size="small" @update:value="onRtmDrillDownLevelChange">
+          <n-radio-button value="format">按业态</n-radio-button>
           <n-radio-button value="dealer">按经销商</n-radio-button>
           <n-radio-button value="store">按门店</n-radio-button>
         </n-radio-group>
@@ -410,6 +411,14 @@
       :segmented="{ content: 'soft', footer: 'soft' }"
       class="hq-drilldown-modal flex-modal"
     >
+      <div style="margin-bottom: 16px; display: flex; justify-content: flex-start; align-items: center; flex-shrink: 0;">
+        <n-radio-group v-model:value="nsDrillDownLevel" size="small" @update:value="onNsDrillDownLevelChange">
+          <n-radio-button value="rtm">按 RTM</n-radio-button>
+          <n-radio-button value="format">按业态</n-radio-button>
+          <n-radio-button value="dealer">按经销商</n-radio-button>
+          <n-radio-button value="store">按门店</n-radio-button>
+        </n-radio-group>
+      </div>
       <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
         <n-data-table
           :columns="nsDrillDownColumns"
@@ -435,6 +444,14 @@
       :segmented="{ content: 'soft', footer: 'soft' }"
       class="hq-drilldown-modal flex-modal"
     >
+      <div style="margin-bottom: 16px; display: flex; justify-content: flex-start; align-items: center; flex-shrink: 0;">
+        <n-radio-group v-model:value="linkDrillDownLevel" size="small" @update:value="onLinkDrillDownLevelChange">
+          <n-radio-button value="rtm">按 RTM</n-radio-button>
+          <n-radio-button value="format">按业态</n-radio-button>
+          <n-radio-button value="dealer">按经销商</n-radio-button>
+          <n-radio-button value="store">按门店</n-radio-button>
+        </n-radio-group>
+      </div>
       <div class="drilldown-body custom-scroll" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
         <n-data-table
           :columns="linkDrillDownColumns"
@@ -659,7 +676,7 @@
             </n-popover>
           </div>
 
-          <div class="ns-card is-clickable" @click="openNsDrillDownModal('onTime', '按时完成率 - 门店下钻')">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('onTime', '按时完成率 - 详细数据')">
             <div class="ns-label">按时完成率</div>
             <div class="ns-value highlight"
               >{{ formatPct2(activeTask.northStar.onTimeRate) }}<span class="unit">%</span></div
@@ -668,7 +685,7 @@
             <div class="ns-click-hint">点击下钻</div>
           </div>
           <div class="divider"></div>
-          <div class="ns-card is-clickable" @click="openNsDrillDownModal('avgTime', '人均完成时间 - 门店下钻')">
+          <div class="ns-card is-clickable" @click="openNsDrillDownModal('avgTime', '人均完成时间 - 详细数据')">
             <div class="ns-label">人均完成时间</div>
             <div class="ns-value"
               >{{ activeTask.northStar.avgTime }}<span class="unit">小时</span></div
@@ -1383,6 +1400,7 @@
   const nsDrillDownTitle = ref('');
   const nsDrillDownData = ref<any[]>([]);
   const nsDrillDownMetric = ref<'onTime' | 'avgTime'>('onTime');
+  const nsDrillDownLevel = ref<'rtm' | 'format' | 'dealer' | 'store'>('store');
 
   // --- 漏斗链路（触达/读取/催办转化）门店维度下钻 ---
   const showLinkDrillDownModal = ref(false);
@@ -1390,6 +1408,7 @@
   const linkDrillDownTitle = ref('');
   const linkDrillDownData = ref<any[]>([]);
   const linkDrillDownMetric = ref<'reach' | 'read' | 'nudge'>('reach');
+  const linkDrillDownLevel = ref<'rtm' | 'format' | 'dealer' | 'store'>('store');
 
   interface StoreDrillMetricRow {
     name: string;
@@ -1406,10 +1425,18 @@
   }
 
   const nsDrillDownColumns = computed(() => {
+    const levelTitleMap: Record<string, string> = {
+      rtm: 'RTM',
+      format: '业态',
+      dealer: '经销商',
+      store: '门店名称',
+    };
+    const nameTitle = levelTitleMap[nsDrillDownLevel.value] || '名称';
+
     if (nsDrillDownMetric.value === 'onTime') {
       return [
         { 
-          title: '门店名称', 
+          title: nameTitle, 
           key: 'name', 
           width: 150 
         },
@@ -1454,7 +1481,7 @@
 
     return [
       { 
-        title: '门店名称', 
+        title: nameTitle, 
         key: 'name', 
         width: 150 
       },
@@ -1640,8 +1667,16 @@
       countTitle = '总人数';
     }
 
+    const levelTitleMap: Record<string, string> = {
+      rtm: 'RTM',
+      format: '业态',
+      dealer: '经销商',
+      store: '门店名称',
+    };
+    const nameTitle = levelTitleMap[linkDrillDownLevel.value] || '名称';
+
     return [
-      { title: '门店名称', key: 'name', width: 100 },
+      { title: nameTitle, key: 'name', width: 100 },
       { title: '总人数', key: 'assignmentCount', width: 90, align: 'right' as const },
       {
         title: rateTitle,
@@ -1674,24 +1709,44 @@
     ];
   });
 
-  async function fetchStoreDrillRows(taskId: string): Promise<StoreDrillMetricRow[]> {
-    const [heatmapRes, stores] = await Promise.all([
-      getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'store' }).send(),
-      Alova.Get<any[]>('/stores').send(),
-    ]);
+  async function fetchDrillRows(taskId: string, level: string = 'store'): Promise<StoreDrillMetricRow[]> {
+    const promises: Promise<any>[] = [
+      getDashboardHeatmap({ taskId: String(taskId), rtmLevel: level }).send(),
+    ];
+
+    if (level === 'store') {
+      promises.push(Alova.Get<any[]>('/stores').send());
+    }
+
+    const results = await Promise.all(promises);
+    const heatmapRes = results[0];
+    const stores = level === 'store' ? (results[1] || []) : [];
 
     const heatRows = unwrapHeatmapRows(heatmapRes);
     const byName = new Map(
-      (stores || []).map((s: any) => [String(s?.name || '').trim().toLowerCase(), String(s?.id || '')])
+      stores.map((s: any) => [String(s?.name || '').trim().toLowerCase(), String(s?.id || '')])
     );
 
     const rows = await Promise.all(
       heatRows.map(async (h) => {
         const name = String(h.rtmValue || '—');
-        const storeId = byName.get(name.trim().toLowerCase());
+        
+        let overviewParams: any = { taskId: String(taskId) };
+        if (level === 'store') {
+          const storeId = byName.get(name.trim().toLowerCase());
+          if (!storeId) return null; // fallback or skip if not found
+          overviewParams.storeId = String(storeId);
+        } else if (level === 'rtm') {
+          overviewParams.rtm = name;
+        } else if (level === 'format') {
+          overviewParams.format = name;
+        } else if (level === 'dealer') {
+          overviewParams.dealerName = name;
+        }
+
         const base: StoreDrillMetricRow = {
           name,
-          storeId,
+          storeId: overviewParams.storeId,
           assignmentCount: h.assignmentCount ?? 0,
           completedCount: h.completedCount ?? 0,
           completionRate: h.completionRate ?? 0,
@@ -1704,13 +1759,8 @@
           totalReadCount: 0,
         };
 
-        if (!storeId) return base;
-
         try {
-          const overview = (await getDashboardOverview({
-            taskId: String(taskId),
-            storeId: String(storeId),
-          }).send()) as DashboardOverview;
+          const overview = (await getDashboardOverview(overviewParams).send()) as DashboardOverview;
 
           return {
             ...base,
@@ -1733,7 +1783,7 @@
       })
     );
 
-    return rows;
+    return rows.filter(Boolean) as StoreDrillMetricRow[];
   }
 
   async function openNsDrillDownModal(metric: 'onTime' | 'avgTime', title: string) {
@@ -1742,14 +1792,30 @@
 
     nsDrillDownMetric.value = metric;
     nsDrillDownTitle.value = title;
+    nsDrillDownLevel.value = 'store';
     showNsDrillDownModal.value = true;
     nsDrillDownLoading.value = true;
     nsDrillDownData.value = [];
 
     try {
-      nsDrillDownData.value = await fetchStoreDrillRows(String(taskId));
+      nsDrillDownData.value = await fetchDrillRows(String(taskId), nsDrillDownLevel.value);
     } catch (e: any) {
-      message.error(e?.message || '获取门店明细数据失败');
+      message.error(e?.message || '获取明细数据失败');
+    } finally {
+      nsDrillDownLoading.value = false;
+    }
+  }
+
+  async function onNsDrillDownLevelChange(val: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+    
+    nsDrillDownLoading.value = true;
+    nsDrillDownData.value = [];
+    try {
+      nsDrillDownData.value = await fetchDrillRows(String(taskId), val);
+    } catch (e: any) {
+      message.error(e?.message || '获取明细数据失败');
     } finally {
       nsDrillDownLoading.value = false;
     }
@@ -1762,12 +1828,52 @@
 
     linkDrillDownMetric.value = metric;
     linkDrillDownTitle.value = title;
+    linkDrillDownLevel.value = 'store';
     showLinkDrillDownModal.value = true;
     linkDrillDownLoading.value = true;
     linkDrillDownData.value = [];
 
     try {
-      const rows = await fetchStoreDrillRows(String(taskId));
+      const rows = await fetchDrillRows(String(taskId), linkDrillDownLevel.value);
+      linkDrillDownData.value = rows.map((row) => {
+        let rate = 0;
+        let count: number | null = null;
+        if (metric === 'reach') {
+          rate = row.reachRate;
+          count = Math.round((row.assignmentCount * row.reachRate) / 100);
+        } else if (metric === 'read') {
+          rate = row.readRate;
+          count = row.totalReadCount;
+        } else {
+          rate = row.nudgeRate;
+          count = row.assignmentCount;
+        }
+
+        return {
+          name: row.name,
+          rate,
+          assignmentCount: row.assignmentCount,
+          count,
+        };
+      });
+    } catch (e: any) {
+      message.error(e?.message || '获取链路明细数据失败');
+    } finally {
+      linkDrillDownLoading.value = false;
+    }
+  }
+
+  async function onLinkDrillDownLevelChange(val: string) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+    
+    linkDrillDownLoading.value = true;
+    linkDrillDownData.value = [];
+    
+    try {
+      const rows = await fetchDrillRows(String(taskId), val);
+      const metric = linkDrillDownMetric.value;
+      
       linkDrillDownData.value = rows.map((row) => {
         let rate = 0;
         let count: number | null = null;
@@ -1799,14 +1905,19 @@
   // --- RTM 区域进度下钻 ---
   const showRtmDrillDownModal = ref(false);
   const rtmDrillDownLoading = ref(false);
-  const rtmDrillDownLevel = ref<'dealer' | 'store'>('dealer');
+  const rtmDrillDownLevel = ref<'format' | 'dealer' | 'store'>('dealer');
   const currentRtmDrillDownName = ref('');
   const rtmDrillDownData = ref<any[]>([]);
 
   const rtmDrillDownColumns = computed(() => {
+    const titleMap: Record<string, string> = {
+      format: '业态',
+      dealer: '经销商',
+      store: '门店',
+    };
     return [
       { 
-        title: rtmDrillDownLevel.value === 'dealer' ? '经销商' : '门店', 
+        title: titleMap[rtmDrillDownLevel.value] || '名称', 
         key: 'name', 
         minWidth: 150,
         render: (row: any) => h('span', { style: 'font-weight: 600; color: #1e293b; font-size: 14px;' }, row.name || '—')
@@ -1883,7 +1994,7 @@
     await fetchRtmDrillDownData();
   }
 
-  function onRtmDrillDownLevelChange(val: 'dealer' | 'store') {
+  function onRtmDrillDownLevelChange(val: 'format' | 'dealer' | 'store') {
     rtmDrillDownLevel.value = val;
     fetchRtmDrillDownData();
   }
