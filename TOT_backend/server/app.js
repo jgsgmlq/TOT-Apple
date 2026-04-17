@@ -2,7 +2,11 @@
 
 const path = require('path');
 const os = require('os');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// 先读仓库根目录 `.env`（与前端/Vite 同一份配置）；再读 `TOT_backend/.env` 仅补全根目录未出现的键（不覆盖）
+const rootEnv = path.join(__dirname, '..', '..', '.env');
+const backendEnv = path.join(__dirname, '..', '.env');
+require('dotenv').config({ path: rootEnv });
+require('dotenv').config({ path: backendEnv });
 
 const http    = require('http');
 const express = require('express');
@@ -21,6 +25,7 @@ const dashboardRoutes       = require('./routes/dashboard');
 const dashboardInsightRoutes = require('./routes/dashboardInsights');
 const mypalRoutes         = require('./routes/mypal');
 const chatRoutes          = require('./routes/chat');
+const asrRoutes           = require('./routes/asr');
 
 const MYPAL_MOCK = process.env.MYPAL_MOCK === '1';
 const mypalMockRoutes = MYPAL_MOCK ? require('./routes/mypalMock') : null;
@@ -70,6 +75,7 @@ app.use('/api/v1/dashboard',  dashboardRoutes);
 app.use('/api/v1/dashboard',  dashboardInsightRoutes);
 app.use('/api/v1/mypal',      mypalRoutes);
 app.use('/api/v1/chat',       chatRoutes);
+app.use('/api/v1/asr',        asrRoutes);
 
 // ─── MyPal（开发环境 Mock）──────────────────────────────────────────────────
 if (mypalMockRoutes) {
