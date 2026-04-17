@@ -437,7 +437,7 @@ bash scripts/deploy.sh
 ```bash
 # Terminal A（Mac Studio）- 运行前端演示服务
 pm2 status tot-api
-cd "$REPO_ROOT/TOT_frontend"
+cd /Users/skylerwang/Desktop/MVP/TOT_frontend
 pnpm install
 pnpm run build
 pnpm run preview:dist --host 0.0.0.0 --port 4173
@@ -452,8 +452,9 @@ tailscale funnel status
 
 - 该模式使用构建后的静态产物，减少开发模式下 HMR/开发客户端带来的移动端不稳定因素。
 - 将 `tailscale funnel status` 输出的公网地址发给演示设备，建议直接访问：
-  - `https://<...>/hq`
-  - `https://<...>/employee/login`
+  - `https://skylermac-studio.tail660e40.ts.net/hq`
+  - `https://skylermac-studio.tail660e40.ts.net/employee`
+  - `https://skylermac-studio.tail660e40.ts.net/executive`
 - 演示结束执行 `tailscale funnel reset` 关闭公网入口。
 
 **关闭 Funnel**（演示结束后建议执行，减少暴露面）：
