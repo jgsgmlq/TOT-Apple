@@ -219,28 +219,77 @@
               <div class="message-content">
                 <template v-if="msg.role === 'user'">{{ msg.content }}</template>
                 <template v-else>
-                  <div v-if="msg.thinking" class="exec-thinking-wrap">
-                    <n-collapse :default-expanded-names="['think']">
-                      <n-collapse-item title="思考过程" name="think">
-                        <div class="exec-thinking-body">{{ msg.thinking }}</div>
-                      </n-collapse-item>
-                    </n-collapse>
+                  <div v-if="msg.activeToolName" class="exec-tool-indicator">
+                    <n-spin size="small" />
+                    <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
+                  <!-- 新版：Markdown 渲染器 -->
+                  <MarkdownRenderer
+                    v-if="!msg.replyContent && (msg.streamContent || msg.content)"
+                    :content="msg.streamContent || msg.content"
+                    :thinking="msg.thinking"
+                    :streaming="!msg.done"
+                    @suggestion-click="fillComposerWithSuggestion"
+                  />
+
+                  <!-- 旧版/兼容模式：结构化卡片渲染 -->
                   <div
-                    v-if="msg.replyContent || msg.partialReply"
+                    v-else-if="msg.replyContent"
                     class="exec-structured"
-                    :class="{ 'exec-structured--stream': !msg.replyContent && !!msg.partialReply }"
                   >
                     <p class="exec-overview">
-                      {{ (msg.replyContent || msg.partialReply)!.overview }}
+                      {{ msg.replyContent.overview }}
                     </p>
+
                     <div
-                      v-if="(msg.replyContent || msg.partialReply)!.keyNumbers?.length"
+                      v-if="msg.replyContent.visualizations?.length"
+                      class="exec-charts"
+                      :class="{
+                        'exec-charts--multiple': msg.replyContent.visualizations.length > 1,
+                      }"
+                    >
+                      <AiChartRenderer
+                        v-for="(chart, ci) in msg.replyContent.visualizations"
+                        :key="ci"
+                        :data="chart"
+                        class="exec-chart-item"
+                      />
+                    </div>
+
+                    <div
+                      v-if="msg.replyContent.forecastDisclaimer"
+                      class="exec-disclaimer"
+                    >
+                      {{ msg.replyContent.forecastDisclaimer }}
+                    </div>
+
+                    <div
+                      v-if="msg.replyContent.statisticsProvenance"
+                      class="exec-provenance"
+                    >
+                      <n-collapse :default-expanded-names="[]">
+                        <n-collapse-item title="数据溯源与统计口径" name="prov">
+                          <div class="exec-prov-content">
+                            <div
+                              v-for="(val, key) in msg.replyContent.statisticsProvenance"
+                              :key="key"
+                              class="exec-prov-item"
+                            >
+                              <span class="prov-k">{{ key }}:</span>
+                              <span class="prov-v">{{ val }}</span>
+                            </div>
+                          </div>
+                        </n-collapse-item>
+                      </n-collapse>
+                    </div>
+
+                    <div
+                      v-if="msg.replyContent.keyNumbers?.length"
                       class="exec-keynums"
                     >
                       <div
-                        v-for="(kn, ki) in (msg.replyContent || msg.partialReply)!.keyNumbers"
+                        v-for="(kn, ki) in msg.replyContent.keyNumbers"
                         :key="ki"
                         class="exec-keynum-row"
                       >
@@ -249,28 +298,36 @@
                       </div>
                     </div>
                     <ul
-                      v-if="(msg.replyContent || msg.partialReply)!.attentionPoints?.length"
+                      v-if="msg.replyContent.attentionPoints?.length"
                       class="exec-attn"
                     >
                       <li
-                        v-for="(ap, ai) in (msg.replyContent || msg.partialReply)!.attentionPoints"
+                        v-for="(ap, ai) in msg.replyContent.attentionPoints"
                         :key="ai"
                       >
                         {{ ap }}
                       </li>
                     </ul>
                     <div
-                      v-if="(msg.replyContent || msg.partialReply)!.followUpSuggestions?.length"
+                      v-if="msg.replyContent.followUpSuggestions?.length"
                       class="exec-follow"
                     >
-                      💡
-                      {{
-                        (msg.replyContent || msg.partialReply)!.followUpSuggestions!.join(' / ')
-                      }}
+                      <div class="exec-follow-title">💡 建议追问：</div>
+                      <div class="exec-follow-bubbles">
+                        <n-button
+                          v-for="(sug, si) in msg.replyContent.followUpSuggestions"
+                          :key="si"
+                          size="small"
+                          quaternary
+                          round
+                          class="exec-follow-chip"
+                          @click="fillComposerWithSuggestion(sug)"
+                        >
+                          {{ sug }}
+                        </n-button>
+                      </div>
                     </div>
                   </div>
-                  <pre v-else-if="msg.jsonStream" class="exec-json-fallback">{{ msg.jsonStream }}</pre>
-                  <div v-else-if="msg.content" class="exec-plain">{{ msg.content }}</div>
                 </template>
 
                 <!-- AI Feedback Actions -->
@@ -336,13 +393,19 @@
               @keydown.enter="onInputEnter"
             />
             <n-button
+              v-if="!isSending"
               type="primary"
-              :disabled="!inputValue.trim() || isSending || isLoadingHistory"
-              :loading="isSending"
+              :disabled="!inputValue.trim() || isLoadingHistory"
               @click="handleSend"
               class="send-btn"
             >
               发送
+            </n-button>
+            <n-button v-else type="default" @click="handleStop" class="send-btn">
+              <template #icon>
+                <n-icon><StopOutlined /></n-icon>
+              </template>
+              停止
             </n-button>
           </div>
           <div class="footer-tip">AI 生成的内容仅供参考，请结合业务实际情况判断。</div>
@@ -366,9 +429,12 @@
     MenuFoldOutlined,
     MenuUnfoldOutlined,
     RobotOutlined,
+    StopOutlined,
   } from '@vicons/antd';
   import { websiteConfig } from '@/config/website.config';
   import { useUserStore } from '@/store/modules/user';
+  import AiChartRenderer from './components/AiChartRenderer.vue';
+  import MarkdownRenderer from './components/MarkdownRenderer.vue';
   import {
     createChatSession,
     streamExecutiveChatMessage,
@@ -385,6 +451,15 @@
     splitPreambleAndJson,
     parseReplyContentProgressive,
   } from '@/utils/execChatStreamParts';
+
+  const TOOL_DISPLAY_NAMES: Record<string, string> = {
+    getOverviewData: '查询培训进度总览',
+    getTaskListData: '查询任务列表',
+    getWarningsData: '查询预警门店',
+    getRegionDetailData: '查询区域详情',
+    getStoreDetailData: '查询门店详情',
+    runAnalytics: '分析数据',
+  };
   import {
     LikeOutlined,
     LikeFilled,
@@ -402,13 +477,15 @@
     id?: string;
     role: 'user' | 'ai';
     content: string;
-    /** 思考过程：reasoning 流 + ` ```json` 前说明，不在正文重复 */
+    /** 流式过程中的 Markdown 累积文本 */
+    streamContent?: string;
+    /** 流式是否完成 */
+    done?: boolean;
+    /** 当前正在执行的工具名 */
+    activeToolName?: string;
+    /** 思考过程 */
     thinking?: string;
-    /** 流式阶段 JSON 尚未解析成功时的原始片段 */
-    jsonStream?: string;
-    /** 流式过程中已成功 parse 的结构化预览 */
-    partialReply?: ReplyContent | null;
-    /** 服务端落库后的最终结构化回答 */
+    /** 旧版结构化回答（仅用于历史兼容） */
     replyContent?: ReplyContent | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
@@ -458,8 +535,39 @@
   const sessionId = ref<string>('');
   const isSending = ref(false);
   const isLoadingHistory = ref(false);
+  const abortController = ref<AbortController | null>(null);
 
   const messages = ref<ChatMessage[]>([]);
+
+  const handleStop = () => {
+    // 1. 中止请求
+    abortController.value?.abort();
+    abortController.value = null;
+    // 2. 更新状态
+    isSending.value = false;
+    const lastMsg = messages.value[messages.value.length - 1];
+    if (lastMsg?.role === 'ai') {
+      // 保留已生成的 streamContent
+      lastMsg.content = lastMsg.streamContent || lastMsg.content || '';
+      lastMsg.done = true;
+      lastMsg.activeToolName = undefined;
+      lastMsg.streamContent = undefined;
+    }
+  };
+
+  async function fillComposerWithSuggestion(text: string) {
+    inputValue.value = text;
+    // 如果包含 [绘图]，直接触发发送
+    if (text.includes('[绘图]')) {
+      await nextTick();
+      handleSend();
+      return;
+    }
+    nextTick(() => {
+      const el = document.querySelector('.chat-footer textarea') as HTMLTextAreaElement;
+      el?.focus();
+    });
+  }
 
   function sidebarStorageKey(): string {
     const u = userStore.getUserInfo?.username || 'guest';
@@ -782,27 +890,31 @@
     inputValue.value = '';
     scrollToBottom();
 
-    // 占位（流式开始后由 delta 覆盖）
-    messages.value.push({ role: 'ai', content: '正在生成…' });
+    // 占位
+    messages.value.push({
+      role: 'ai',
+      content: '',
+      streamContent: '',
+      done: false,
+    });
     const loadingIndex = messages.value.length - 1;
     isSending.value = true;
+    abortController.value = new AbortController();
     scrollToBottom();
 
     /** reasoning + ` ```json` 前说明，完成后写入「思考过程」 */
     let streamThinkingSnapshot = '';
 
     const applySendSuccess = (sid: string, result: SendMessageResult) => {
-      const text = formatReplyContentText(result.replyContent);
-      messages.value[loadingIndex] = {
-        id: result.messageId,
-        role: 'ai',
-        content: text,
-        replyContent: result.replyContent,
-        thinking: streamThinkingSnapshot || undefined,
-        jsonStream: undefined,
-        partialReply: undefined,
-        userFeedback: null,
-      };
+      const lastMsg = messages.value[loadingIndex];
+      if (lastMsg) {
+        lastMsg.id = result.messageId;
+        lastMsg.done = true;
+        lastMsg.activeToolName = undefined;
+        // FC 模式用 markdownContent，旧模式格式化 replyContent
+        lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
+        lastMsg.replyContent = result.replyContent;
+      }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
       const existing = historyList.value.find((h) => h.id === sid);
       if (existing) {
@@ -819,61 +931,45 @@
       new Promise<void>((resolve, reject) => {
         let reasoningBuf = '';
         let contentBuf = '';
-        let isFirstChunk = true;
-        let wasReasoning = false;
 
         streamExecutiveChatMessage(
           sid,
           question,
-          (deltaData) => {
-            if (isFirstChunk) {
-              isFirstChunk = false;
-              if (deltaData.phase === 'reasoning') {
-                reasoningBuf += '> **模型推理：**\n> ';
-                wasReasoning = true;
-              }
+          (deltaData: any) => {
+            const lastMsg = messages.value[loadingIndex];
+            if (!lastMsg) return;
+
+            if (deltaData.phase === 'tool_start') {
+              lastMsg.activeToolName = deltaData.text;
+            } else if (deltaData.phase === 'tool_end') {
+              lastMsg.activeToolName = undefined;
+            } else if (deltaData.phase === 'reasoning') {
+              reasoningBuf += deltaData.text || '';
+              lastMsg.thinking = reasoningBuf;
+            } else {
+              contentBuf += deltaData.text || '';
+              lastMsg.streamContent = contentBuf;
             }
-            if (deltaData?.text) {
-              if (deltaData.phase === 'reasoning') {
-                reasoningBuf += deltaData.text.replace(/\n/g, '\n> ');
-                wasReasoning = true;
-              } else {
-                if (wasReasoning) {
-                  reasoningBuf += '\n\n';
-                  wasReasoning = false;
-                }
-                contentBuf += deltaData.text;
-              }
-            }
-
-            const split = splitPreambleAndJson(contentBuf);
-            const jsonRaw = split.jsonRaw;
-            const preamble = split.preamble.trim();
-
-            const thinkingMerged = [reasoningBuf.trim(), preamble].filter(Boolean).join('\n\n').trim();
-            streamThinkingSnapshot = thinkingMerged;
-
-            const parsed = parseReplyContentProgressive(jsonRaw);
-
-            const narrativeDone = Boolean(thinkingMerged || jsonRaw);
-            messages.value[loadingIndex] = {
-              role: 'ai',
-              content: parsed
-                ? formatReplyContentText(parsed)
-                : narrativeDone
-                  ? ''
-                  : '正在生成…',
-              thinking: thinkingMerged || undefined,
-              jsonStream: !parsed && jsonRaw ? jsonRaw : undefined,
-              partialReply: parsed || undefined,
-            };
             scrollToBottom();
           },
           (result) => {
             applySendSuccess(sid, result);
             resolve();
           },
-          (err) => reject(err)
+          (err: any) => {
+            if (err?.name === 'AbortError') {
+              const lastMsg = messages.value[loadingIndex];
+              if (lastMsg) {
+                lastMsg.done = true;
+                lastMsg.content = lastMsg.streamContent || '';
+                lastMsg.activeToolName = undefined;
+              }
+              resolve();
+              return;
+            }
+            reject(err);
+          },
+          abortController.value?.signal
         );
       });
 
@@ -931,17 +1027,18 @@
 
     try {
       const result = await regenerateChatMessage(sessionId.value, msg.id).send();
-      const text = formatReplyContentText(result.replyContent);
+      const isMarkdown = !result.replyContent && !!result.markdownContent;
 
       // Replace the old message with the new one
       messages.value[index] = {
         id: result.messageId,
         role: 'ai',
-        content: text,
-        replyContent: result.replyContent,
-        thinking: undefined,
-        jsonStream: undefined,
-        partialReply: undefined,
+        // FC 模式用 markdownContent；intent_routing 兜底用 formatReplyContentText
+        content: isMarkdown
+          ? result.markdownContent!
+          : formatReplyContentText(result.replyContent),
+        done: true,
+        replyContent: result.replyContent ?? null,
         userFeedback: null,
       };
       scrollToBottom();
@@ -1332,6 +1429,114 @@
           .exec-follow {
             font-size: 13px;
             color: rgba(0, 0, 0, 0.55);
+
+            .exec-follow-title {
+              margin-bottom: 8px;
+            }
+
+            .exec-follow-bubbles {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 8px;
+            }
+
+            .exec-follow-chip {
+              background: #ffffff;
+              border: 1px solid rgba(0, 0, 0, 0.08);
+              font-size: 13px;
+              height: 32px;
+              padding: 0 12px;
+              color: #0071e3;
+
+              &:hover {
+                background: #f5f5f7;
+                border-color: #0071e3;
+              }
+            }
+          }
+
+          .exec-charts {
+            margin: 12px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+
+            &.exec-charts--multiple {
+              flex-direction: row;
+              overflow-x: auto;
+              scroll-snap-type: x mandatory;
+              gap: 12px;
+              padding-bottom: 8px;
+              -webkit-overflow-scrolling: touch;
+
+              .exec-chart-item {
+                flex: 0 0 90%;
+                scroll-snap-align: start;
+              }
+
+              &::-webkit-scrollbar {
+                height: 4px;
+              }
+              &::-webkit-scrollbar-thumb {
+                background: rgba(0, 0, 0, 0.1);
+                border-radius: 2px;
+              }
+            }
+          }
+
+          .exec-chart-item {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+          }
+
+          .exec-chart-loading {
+            padding: 24px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            margin: 12px 0;
+          }
+
+          .exec-disclaimer {
+            margin: 8px 0;
+            padding: 8px 12px;
+            background: #fff9db;
+            color: #f08c00;
+            border-radius: 6px;
+            font-size: 12px;
+            border-left: 3px solid #f08c00;
+          }
+
+          .exec-provenance {
+            margin: 8px 0;
+
+            :deep(.n-collapse-item__header) {
+              font-size: 12px;
+              font-weight: 500;
+              color: rgba(0, 0, 0, 0.45);
+            }
+
+            .exec-prov-content {
+              padding: 8px;
+              background: rgba(0, 0, 0, 0.02);
+              border-radius: 4px;
+            }
+
+            .exec-prov-item {
+              display: flex;
+              gap: 8px;
+              font-size: 11px;
+              color: rgba(0, 0, 0, 0.45);
+              margin-bottom: 2px;
+
+              .prov-k {
+                font-weight: 600;
+              }
+            }
           }
         }
 
@@ -1565,5 +1770,19 @@
       color: #374151;
       background: transparent;
     }
+  }
+
+  .exec-tool-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    color: #2563eb;
+    font-size: 13px;
+    font-weight: 500;
+    background: rgba(37, 99, 235, 0.05);
+    padding: 6px 12px;
+    border-radius: 6px;
+    width: fit-content;
   }
 </style>

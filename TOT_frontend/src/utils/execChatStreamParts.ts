@@ -1,4 +1,5 @@
 import type { ReplyContent } from '@/api/chat';
+import { repairJson } from './jsonRepair';
 
 /**
  * 将 **正文 content 流**拆成：` ```json` 前的说明文字（展示在「分析说明」）与 JSON 片段。
@@ -44,28 +45,42 @@ function normalizeKeyNumber(x: unknown): { label: string; value: string; unit?: 
 export function tryParseReplyContent(jsonRaw: string): ReplyContent | null {
   const t = jsonRaw.trim();
   if (!t.length) return null;
+
+  let parsed: any = null;
   try {
-    const o = JSON.parse(t) as Record<string, unknown>;
-    if (!o || typeof o !== 'object') return null;
-    if (typeof o.overview !== 'string') return null;
-    const keyNumbers = Array.isArray(o.keyNumbers)
-      ? o.keyNumbers.map(normalizeKeyNumber).filter((k) => k.label || k.value)
-      : [];
-    const attentionPoints = Array.isArray(o.attentionPoints)
-      ? o.attentionPoints.map((p) => String(p)).filter(Boolean)
-      : [];
-    const followUpSuggestions = Array.isArray(o.followUpSuggestions)
-      ? o.followUpSuggestions.map((p) => String(p)).filter(Boolean)
-      : [];
-    return {
-      overview: o.overview,
-      keyNumbers,
-      attentionPoints,
-      followUpSuggestions,
-    };
+    parsed = JSON.parse(t);
   } catch {
-    return null;
+    try {
+      const repaired = repairJson(t);
+      parsed = JSON.parse(repaired);
+    } catch {
+      return null;
+    }
   }
+
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (typeof parsed.overview !== 'string') return null;
+
+  const keyNumbers = Array.isArray(parsed.keyNumbers)
+    ? parsed.keyNumbers.map(normalizeKeyNumber).filter((k) => k.label || k.value)
+    : [];
+  const attentionPoints = Array.isArray(parsed.attentionPoints)
+    ? parsed.attentionPoints.map((p) => String(p)).filter(Boolean)
+    : [];
+  const followUpSuggestions = Array.isArray(parsed.followUpSuggestions)
+    ? parsed.followUpSuggestions.map((p) => String(p)).filter(Boolean)
+    : [];
+
+  return {
+    overview: parsed.overview,
+    keyNumbers,
+    attentionPoints,
+    followUpSuggestions,
+    visualizationSummary: parsed.visualizationSummary ? String(parsed.visualizationSummary) : undefined,
+    visualizations: Array.isArray(parsed.visualizations) ? parsed.visualizations : undefined,
+    statisticsProvenance: parsed.statisticsProvenance,
+    forecastDisclaimer: parsed.forecastDisclaimer ? String(parsed.forecastDisclaimer) : undefined,
+  };
 }
 
 /** 从未闭合的 JSON 字符串中提取 `"overview":"..."`（支持流式未闭合引号） */
@@ -187,7 +202,17 @@ export function parseReplyContentProgressive(jsonRaw: string): ReplyContent | nu
   const attentionPoints = extractStringArrayLoose(t, 'attentionPoints');
   const followUpSuggestions = extractStringArrayLoose(t, 'followUpSuggestions');
 
-  if (!overview && keyNumbers.length === 0 && attentionPoints.length === 0 && followUpSuggestions.length === 0) {
+  const visualizations = extractCompleteObjectsInArray(t, 'visualizations') as any[];
+  const forecastDisclaimer = extractStringFieldLoose(t, 'forecastDisclaimer');
+  const visualizationSummary = extractStringFieldLoose(t, 'visualizationSummary');
+
+  if (
+    !overview &&
+    keyNumbers.length === 0 &&
+    attentionPoints.length === 0 &&
+    followUpSuggestions.length === 0 &&
+    visualizations.length === 0
+  ) {
     return null;
   }
 
@@ -196,5 +221,46 @@ export function parseReplyContentProgressive(jsonRaw: string): ReplyContent | nu
     keyNumbers,
     attentionPoints,
     followUpSuggestions,
+    visualizationSummary: visualizationSummary || undefined,
+    visualizations: visualizations.length > 0 ? visualizations : undefined,
+    forecastDisclaimer: forecastDisclaimer || undefined,
+  };
+}
+
+/**
+ * 从 Markdown 中提取特殊代码块 (echarts / suggestions)
+ */
+export function extractSpecialBlocks(markdown: string) {
+  let cleanMarkdown = markdown || '';
+  const echartsBlocks: any[] = [];
+  const suggestions: string[] = [];
+
+  // 提取 echarts 块
+  const echartsRegex = /```echarts\s*([\s\S]*?)\s*```/g;
+  cleanMarkdown = cleanMarkdown.replace(echartsRegex, (_, jsonStr) => {
+    try {
+      echartsBlocks.push(JSON.parse(jsonStr));
+    } catch {
+      /* ignore */
+    }
+    return '';
+  });
+
+  // 提取 suggestions 块
+  const sugRegex = /```suggestions\s*([\s\S]*?)\s*```/g;
+  cleanMarkdown = cleanMarkdown.replace(sugRegex, (_, jsonStr) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      if (Array.isArray(data)) suggestions.push(...data);
+    } catch {
+      /* ignore */
+    }
+    return '';
+  });
+
+  return {
+    cleanMarkdown: cleanMarkdown.trim(),
+    echartsBlocks,
+    suggestions,
   };
 }

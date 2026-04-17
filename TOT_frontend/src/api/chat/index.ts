@@ -1,11 +1,15 @@
 import { Alova } from '@/utils/http/alova/index';
 import { streamSsePostJson } from '@/utils/http/ssePostStream';
+import type { ChartData } from '@/types/chat';
 
 export interface ReplyContent {
   overview: string;
   keyNumbers: Array<{ label: string; value: string; unit?: string }>;
   attentionPoints: string[];
   followUpSuggestions: string[];
+  visualizations?: ChartData[];
+  statisticsProvenance?: any;
+  forecastDisclaimer?: string;
 }
 
 export interface CreateSessionResult {
@@ -16,7 +20,8 @@ export interface CreateSessionResult {
 
 export interface SendMessageResult {
   messageId: string;
-  replyContent: ReplyContent;
+  replyContent: ReplyContent | null;
+  markdownContent?: string;
   responseTime: number;
   contextId: string;
   timestamp: string;
@@ -100,7 +105,8 @@ export const streamExecutiveChatMessage = async (
   content: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
-  onError: (error: unknown) => void
+  onError: (error: unknown) => void,
+  signal?: AbortSignal
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
@@ -109,6 +115,7 @@ export const streamExecutiveChatMessage = async (
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
+    signal,
   });
 };
 
