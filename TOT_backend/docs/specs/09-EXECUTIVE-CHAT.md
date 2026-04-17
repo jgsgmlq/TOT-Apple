@@ -53,6 +53,7 @@
 - **下钻缺参：**`intent_routing` 下若分类为 `drill_down` 但 `region` / `storeId` / `storeName` 均为空，直接返回结构化追问（不调用门店下钻工具），避免无效参数错误。
 - **下钻歧义处理：** 门店名称查询支持「唯一命中直查 / 多命中回传候选门店 / 0 命中明确提示」，并以结构化 `replyContent` 返回追问建议（例如指定 `storeId`）。
 - **其他 AI 能力（非 Chat 路由）：** 见 04 文首（如 `POST /api/v1/tasks/ai-generate-description` 等）。
+- **可选语音朗读（TTS）：** 前端 `Executive Chat` 页眉「语音」开关（`localStorage`）开启时，在 **`POST .../messages` 且 `stream: true`（SSE）** 的同时，另建 **`WebSocket /ws/tts?token=<JWT>`** 连接至后端代理，由服务端用 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发百炼 **Qwen-TTS Realtime**；朗读文本与气泡内 **`formatReplyContentText(replyContent)`** 对齐（随流式 `partialReply` 增量追加，结束后再用终稿补全）。关闭开关时行为与原先仅 SSE 一致。
 
 若本文某句与 **04 §6 或当前 `app.js` 挂载** 冲突，**以 04 与代码为准**，并应回头修订本节。
 

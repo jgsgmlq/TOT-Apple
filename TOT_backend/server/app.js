@@ -13,6 +13,7 @@ const express = require('express');
 const requestId        = require('./middleware/requestId');
 const { errorHandler } = require('./middleware/errorHandler');
 const { setupWebSocket } = require('./ws/manager');
+const { setupTtsRealtimeWebSocket } = require('./ws/ttsRealtime');
 
 const authRoutes          = require('./routes/auth');
 const tasksRoutes         = require('./routes/tasks');
@@ -87,7 +88,26 @@ app.use(errorHandler);
 
 // ─── HTTP + WebSocket 服务器 ───────────────────────────────────────────────────
 const server = http.createServer(app);
-setupWebSocket(server);
+
+const dashboardWss = setupWebSocket();
+const ttsRealtimeWss = setupTtsRealtimeWebSocket();
+
+server.on('upgrade', (request, socket, head) => {
+  let pathname = request.url || '/';
+  const q = pathname.indexOf('?');
+  if (q !== -1) pathname = pathname.slice(0, q);
+  if (pathname === '/ws/tts') {
+    ttsRealtimeWss.handleUpgrade(request, socket, head, (ws) => {
+      ttsRealtimeWss.emit('connection', ws, request);
+    });
+  } else if (pathname === '/ws') {
+    dashboardWss.handleUpgrade(request, socket, head, (ws) => {
+      dashboardWss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
 
@@ -114,6 +134,7 @@ function printStartupBanner(port) {
   console.log(`  Local:   http://localhost:${port}`);
   console.log(`  LAN:     ${lanUrl}`);
   console.log(`  WS:      ws://localhost:${port}/ws?token=<JWT>`);
+  console.log(`  TTS WS:  ws://localhost:${port}/ws/tts?token=<JWT>  (Qwen-TTS Realtime 代理)`);
 }
 
 const PORT = Number(process.env.PORT) || 3000;

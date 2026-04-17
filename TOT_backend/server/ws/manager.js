@@ -11,8 +11,12 @@ const employeeClients = new Map();
 // Set<WebSocket> for central/admin/executive roles
 const dashboardClients = new Set();
 
-function setupWebSocket(httpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+/**
+ * 使用 noServer：由 app.js 统一 `server.on('upgrade')` 按路径分发。
+ * 若与其它 WSS 共用 http.Server 且各设 path，先注册的实例会对不匹配路径 abort 400，导致 /ws/tts 等永远无法握手。
+ */
+function setupWebSocket() {
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost');

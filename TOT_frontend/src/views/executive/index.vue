@@ -159,6 +159,10 @@
             <h2 class="header-title">Executive Chat</h2>
           </div>
           <div class="header-actions">
+            <div class="voice-switch-wrap" title="开启后与回答同步朗读（百炼 TTS）">
+              <span class="voice-label">语音</span>
+              <n-switch v-model:value="voiceEnabled" size="small" />
+            </div>
             <n-popover trigger="click" placement="bottom-end" :show-arrow="true">
               <template #trigger>
                 <div class="avatar-circle">
@@ -308,7 +312,7 @@
 </template>
 
 <script lang="ts" setup>
-  import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue';
+  import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue';
   import { useRouter } from 'vue-router';
   import { useMessage, useDialog } from 'naive-ui';
   import { debounce } from 'lodash-es';
@@ -338,6 +342,12 @@
   } from '@/api/chat';
   import ExecChatAiBubbleContent from '@/components/chat/ExecChatAiBubbleContent.vue';
   import { runExecStyleSseChat, finalizeExecStyleMessage } from '@/utils/execStreamReply';
+  import {
+    ExecutiveTtsSession,
+    getExecutiveVoiceEnabled,
+    setExecutiveVoiceEnabled,
+    speakReplyContent,
+  } from '@/utils/execVoiceTts';
   import {
     LikeOutlined,
     LikeFilled,
@@ -411,6 +421,10 @@
   const sessionId = ref<string>('');
   const isSending = ref(false);
   const isLoadingHistory = ref(false);
+
+  /** 与 SSE 并行：百炼实时 TTS（localStorage 持久化） */
+  const voiceEnabled = ref(getExecutiveVoiceEnabled());
+  watch(voiceEnabled, (v) => setExecutiveVoiceEnabled(v));
 
   const messages = ref<ChatMessage[]>([]);
 
@@ -759,24 +773,52 @@
       persistSidebar();
     };
 
-    const runStreamSend = (sid: string) =>
-      new Promise<void>((resolve, reject) => {
-        void runExecStyleSseChat(streamExecutiveChatMessage, sid, question, (p) => {
-          messages.value[loadingIndex] = {
-            role: 'ai',
-            content: p.content,
-            thinking: p.thinking,
-            jsonStream: p.jsonStream,
-            partialReply: p.partialReply ?? undefined,
-          };
-          scrollToBottom();
-        })
-          .then(({ result, thinkingSnapshot }) => {
-            applySendSuccess(sid, result, thinkingSnapshot);
-            resolve();
-          })
-          .catch(reject);
-      });
+    const runStreamSend = async (sid: string) => {
+      let tts: ExecutiveTtsSession | null = null;
+      if (voiceEnabled.value) {
+        tts = new ExecutiveTtsSession();
+        try {
+          await tts.connect(() => userStore.getToken);
+        } catch {
+          tts.dispose();
+          tts = null;
+          message.warning('语音朗读连接失败，本次仅显示文字');
+        }
+      }
+      try {
+        const { result, thinkingSnapshot } = await runExecStyleSseChat(
+          streamExecutiveChatMessage,
+          sid,
+          question,
+          (p) => {
+            messages.value[loadingIndex] = {
+              role: 'ai',
+              content: p.content,
+              thinking: p.thinking,
+              jsonStream: p.jsonStream,
+              partialReply: p.partialReply ?? undefined,
+            };
+            scrollToBottom();
+            if (tts && p.partialReply) {
+              tts.pushPartialReply(p.partialReply);
+            }
+          }
+        );
+        if (tts) {
+          tts.pushPartialReply(result.replyContent);
+        }
+        applySendSuccess(sid, result, thinkingSnapshot);
+      } finally {
+        if (tts) {
+          try {
+            tts.finish();
+            await tts.waitUntilClosed(120000);
+          } finally {
+            tts.dispose();
+          }
+        }
+      }
+    };
 
     try {
       await runStreamSend(sessionId.value);
@@ -846,6 +888,9 @@
         userFeedback: null,
       };
       scrollToBottom();
+      if (voiceEnabled.value) {
+        void speakReplyContent(() => userStore.getToken, result.replyContent).catch(() => undefined);
+      }
     } catch (error) {
       message.error('重新生成失败，请重试');
     } finally {
@@ -1013,6 +1058,24 @@
       font-weight: 600;
       color: #1d1d1f;
       letter-spacing: -0.374px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .voice-switch-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .voice-label {
+        font-size: 13px;
+        color: #64748b;
+        user-select: none;
+      }
     }
   }
 
