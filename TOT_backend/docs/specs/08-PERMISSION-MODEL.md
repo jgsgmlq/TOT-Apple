@@ -37,7 +37,7 @@
 
 ## Day6 实施状态（Executive Chat）
 
-- ✅ 已落地：`/api/v1/chat/executive/*` 全系 `requireRole(['executive'])`；会话与消息归属 `users.id`（详见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)）
+- ✅ 已落地：`/api/v1/chat/executive/*` 全系 `requireRole(['executive'])`；`/api/v1/chat/dashboard/*` 为总部看板机器人对话，`requireRole(['central','admin'])`，与 executive **共用** `chatService` 与数据表；会话与消息归属 `users.id`（详见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)）
 
 ---
 
@@ -102,6 +102,7 @@
 | GET /api/health | 是 | 是 | 是 | 是 |
 | **Executive Chat** | | | | |
 | `/api/v1/chat/executive/*` | 否 | 否 | 否 | 是 |
+| `/api/v1/chat/dashboard/*`（总部看板机器人，与 E-chat 同实现） | 是 | 否 | 是 | 否 |
 
 说明：**不存在** `GET /api/v1/tasks/:id/summary` 路由；门店员工列表请使用 **`GET /api/v1/employees?storeId=`**，不要使用已废弃文档路径 `GET /stores/:id/employees`。
 

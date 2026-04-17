@@ -84,14 +84,11 @@ export async function streamSsePostJson(options: {
             if (currentEvent === 'delta') {
               onDelta(parsed);
             } else if (currentEvent === 'done') {
-              const resultData =
-                parsed.data !== undefined ? parsed.data : parsed;
+              const resultData = parsed.data !== undefined ? parsed.data : parsed;
               onDone(resultData);
             } else if (currentEvent === 'error') {
               const msg =
-                typeof parsed.message === 'string'
-                  ? parsed.message
-                  : fallbackErrorMessage;
+                typeof parsed.message === 'string' ? parsed.message : fallbackErrorMessage;
               onError(new Error(msg));
               return;
             }
