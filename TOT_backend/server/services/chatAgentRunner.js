@@ -6,17 +6,13 @@ const chatToolsService  = require('./chatToolsService');
 const chatAnswerService = require('./chatAnswerService');
 const chatSessionStateService = require('./chatSessionStateService');
 
-// Toggle via .env: CHAT_AGENT_MODE=function_calling activates FC mode after upgrade.
-// Default is intent_routing (MVP).
-const CHAT_AGENT_MODE = process.env.CHAT_AGENT_MODE || 'intent_routing';
+// 2026-04-18 重构：FC 模式成为默认，开启流式 Markdown + 状态指示器
+const CHAT_AGENT_MODE = process.env.CHAT_AGENT_MODE || 'function_calling';
 const CHAT_SESSION_STATE_ENABLED = process.env.CHAT_SESSION_STATE_ENABLED !== '0';
-
-// _intentType on reply objects is internal metadata; chatService strips it before HTTP.
-// TODO(P3): return { replyContent, intentType } for a cleaner boundary.
 
 const OUT_OF_SCOPE_ACTION_RE = /(催办|发邮件|邮件草稿|nudge|send\s+email|auto\s*send)/i;
 const CHIT_CHAT_RE = /^(你好|您好|hi|hello|谢谢|thanks|你是谁|你能做什么|help)([!！,.。?？\s]|$)/i;
-const ANALYTICS_HINT_RE = /(p90|分位|分布|相关性|方差|预测|截尾均值|analytics)/i;
+const ANALYTICS_HINT_RE = /(p90|分位|分布|相关性|方差|预测|截尾均值|analytics|绘图|图表)/i;
 
 function classifyExecutionMode(message) {
   if (!message || typeof message !== 'string') return 'tool_action';
@@ -72,7 +68,6 @@ function attachToolMeta(reply, toolMeta, intentResolvedBy = null) {
   return reply;
 }
 
-/** FC：有 tool 调用则 intent 来自工具名，否则来自 inferIntentFromMessage（regex） */
 function intentResolvedByForFc(calledToolNames) {
   return calledToolNames && calledToolNames.size > 0 ? 'tools' : 'regex_fallback';
 }
@@ -84,25 +79,6 @@ function fcToolMetaFromSet(calledToolNames, iterations = 0) {
   const names = [...calledToolNames];
   const toolName = names.length > 1 ? 'multi' : names[0];
   return { toolName, cacheHit: null, skipped: false, iterations };
-}
-
-/** First balanced `{...}` slice; does not handle `{` inside JSON string values (see spec). */
-function extractFirstJson(text) {
-  if (!text) return null;
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '{') {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (text[i] === '}') {
-      depth--;
-      if (depth === 0 && start !== -1) {
-        return text.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
 }
 
 function buildToolCacheSignature(toolName, args = {}, regionScope = null) {
@@ -148,13 +124,6 @@ function buildDisambiguationReply(toolResult) {
 
 /**
  * Main entry point for the chat agent.
- * chatService.js calls this and does NOT know which mode is active.
- *
- * @param {string} userMessage
- * @param {Array<{role:string, content:string}>} history  — last 6 DB messages
- * @param {{ type: string, regions: string[]|null, rtm: string|null }} regionScope
- * @param {{ sessionId?: string }} options
- * @returns {Promise<ReplyContent>}
  */
 async function run(userMessage, history, regionScope, options = {}) {
   const mode = classifyExecutionMode(userMessage);
@@ -185,11 +154,34 @@ async function run(userMessage, history, regionScope, options = {}) {
   return runIntentRouting(userMessage, history, regionScope, options);
 }
 
-// ─── MVP mode: intent routing ─────────────────────────────────────────────────
+// ─── Intent Routing mode (Fallback) ───────────────────────────────────────────
 async function runIntentRouting(userMessage, history, regionScope, options = {}) {
-  // LLM Call 1: classify intent
-  const { intentType, entities } = await chatIntentService.classify(userMessage, history);
-  if (intentType === 'analytics_query' && !entities?.analysisType) {
+  let { intentType, entities } = await chatIntentService.classify(userMessage, history);
+  let routeToolMeta = { toolName: null, cacheHit: null, skipped: false };
+  let toolResult = null;
+
+  if (userMessage.includes('[绘图]') && intentType === 'analytics_query') {
+    const lastValidMsg = [...history].reverse().find(m => 
+      m.role === 'assistant' && m._intentType === 'analytics_query' && m.content
+    );
+    if (lastValidMsg) {
+      if (CHAT_SESSION_STATE_ENABLED && options.sessionId) {
+        await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
+        const lastRecord = chatSessionStateService.getLatestByIntent(options.sessionId, 'analytics_query', regionScope);
+        if (lastRecord?.result?.analysisType) {
+          entities.analysisType = lastRecord.result.analysisType;
+        } else if (lastRecord?.result?.statisticsProvenance?.analysisType) {
+          entities.analysisType = lastRecord.result.statisticsProvenance.analysisType;
+        }
+        if (lastRecord) {
+          toolResult = lastRecord.result;
+          routeToolMeta = { toolName: 'runAnalytics', cacheHit: true, skipped: false };
+        }
+      }
+    }
+  }
+
+  if (intentType === 'analytics_query' && !entities?.analysisType && !toolResult) {
     return attachToolMeta({
       overview: '当前问题属于统计分析，但缺少 analysisType。请明确分析口径后重试。',
       keyNumbers: [],
@@ -220,9 +212,7 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
     return attachToolMeta(reply, { toolName: null, cacheHit: null, skipped: true }, 'intent_llm');
   }
 
-  let routeToolMeta = { toolName: null, cacheHit: null, skipped: false };
-  let toolResult = null;
-  if (intentType !== 'unknown') {
+  if (intentType !== 'unknown' && !toolResult) {
     const toolMap = {
       progress_query: 'getOverviewData',
       project_status: 'getTaskListData',
@@ -252,18 +242,11 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
           toolResult = await chatToolsService.executeByName(toolName, entities, regionScope);
           routeToolMeta = { toolName, cacheHit: false, skipped: false };
           if (!toolResult?.error && CHAT_SESSION_STATE_ENABLED && options.sessionId) {
-            const added = chatSessionStateService.addRecord(options.sessionId, {
+            chatSessionStateService.addRecord(options.sessionId, {
               signature: cacheSignature,
               source: 'intent_routing',
               result: toolResult,
             }, regionScope, expectedVersion);
-            if (added === false) {
-              logger.warn('session_cache_version_conflict', {
-                sessionId: options.sessionId,
-                toolName,
-                signature: cacheSignature,
-              });
-            }
           }
         } catch (err) {
           logger.warn('tool_execution_failed', { toolName, error: err.message });
@@ -272,16 +255,6 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
         }
       }
     }
-  }
-
-  if (routeToolMeta.toolName) {
-    logger.debug('tool_called', {
-      toolName: routeToolMeta.toolName,
-      cacheHit: routeToolMeta.cacheHit === true,
-      intentType,
-      region: entities?.region || null,
-      storeId: entities?.storeId || null,
-    });
   }
 
   const disambiguationReply = buildDisambiguationReply(toolResult);
@@ -307,43 +280,34 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
   return attachToolMeta(replyContent, routeToolMeta, 'intent_llm');
 }
 
-// ─── FC mode: function calling ───────────────────────────────────────────────
-// Active when CHAT_AGENT_MODE=function_calling. Requires utils/ai.js chatWithTools().
+// ─── Function Calling mode (Main) ─────────────────────────────────────────────
 async function runFunctionCalling(userMessage, history, regionScope, options = {}) {
   const fallbackIntent = inferIntentFromMessage(userMessage);
+  const { chatWithToolsStream } = require('../utils/ai');
 
-  // Import lazily so MVP doesn't require chatWithTools to exist
-  const { chatWithTools, chatWithToolsStream } = require('../utils/ai');
+  const SYSTEM_PROMPT = `【角色定义】
+你是苹果零售培训系统的高管数据分析助手。服务对象是 VP 和区域总监。
+你的能力范围：培训完成率查询、项目状态、预警门店、区域/门店下钻、统计分析（分位数/分布/相关性/预测）。
+你没有能力：发送邮件、催办、修改数据。
 
-  /** FC 与 POST messages 流式 SSE 对齐：有 streamFormatCallbacks 时走 DeepSeek 流式 completion */
-  function callChatWithTools(opts) {
-    const sc = options.streamFormatCallbacks;
-    if (sc && typeof sc.onDelta === 'function') {
-      return chatWithToolsStream({
-        ...opts,
-        onDelta: (chunk, meta) => sc.onDelta(chunk, meta),
-      });
-    }
-    return chatWithTools(opts);
-  }
+【多轮对话规则】
+1. 实体继承：若用户问题中缺少区域/门店/任务信息，但历史对话中有，必须自动继承。
+2. 主动澄清：若问题模糊且无法从历史推断，先用自然语言问一个澄清问题，不要猜测调用工具。
+3. 直接行动：若已有足够信息，不要先征求用户同意，直接调用工具。
 
-  const SYSTEM_PROMPT = `你是一个培训数据分析助手，专门回答关于门店培训进度的问题。
+【输出格式规则】
+1. 所有回答用流式 Markdown 输出，先给一句结论，再展开数据。
+2. 数字数据用 Markdown 表格呈现，不要用 JSON 对象。
+3. 有图表时，把图表配置放在文末的 \`\`\`echarts 代码块中。
+4. 有追问建议时，把建议列表放在文末的 \`\`\`suggestions 代码块中。
+   - \`\`\`suggestions 围栏内必须是一个合法的 JSON 字符串数组，如：["可追问：问题1", "可追问：问题2"]。
+5. 严禁向用户输出任何裸 JSON 对象。
 
-【能力范围】
-- 查询培训完成率、项目状态、预警门店
-- 按区域或门店下钻查看详情
-- 执行分位数、分布、相关性等统计分析
-
-【回答规则】
-当你调用工具查询数据后，可先简短说明分析思路或工具结果（自然语言），然后**必须**将最终结构化答案放在单独一段 Markdown 代码块中，格式为：
-\`\`\`json
-{ "overview": "...", "keyNumbers": [], "attentionPoints": [], "followUpSuggestions": [] }
+echarts 代码块格式：
+\`\`\`echarts
+{"type":"bar|line|scatter|pie","title":"标题","xAxis":["A","B"],"series":[{"name":"例","data":[1,2]}]}
 \`\`\`
-JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，便于流式界面先出摘要再出指标）：
-- overview: 不超过 60 字的数据总结
-- keyNumbers: 最多 4 项数字，每项含 label/value/unit，数字必须来自工具返回（value 可为数字或字符串）
-- attentionPoints: 最多 3 项风险或问题（无风险时为空数组）
-- followUpSuggestions: 最多 3 条建议追问，以"可追问："开头`;
+`;
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -355,6 +319,7 @@ JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，�
   const MAX_ITERATIONS = 3;
   let finalContent = null;
   const calledToolNames = new Set();
+  const sc = options.streamFormatCallbacks;
 
   while (iterations < MAX_ITERATIONS) {
     iterations++;
@@ -362,10 +327,12 @@ JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，�
       await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
     }
 
-    const response = await callChatWithTools({
+    const response = await chatWithToolsStream({
       messages,
       tools: chatToolsService.TOOL_SCHEMAS,
       tool_choice: 'auto',
+      onDelta: sc ? (chunk, meta) => sc.onDelta(chunk, meta) : null,
+      signal: options.signal,
     });
 
     if (!response.tool_calls || response.tool_calls.length === 0) {
@@ -373,15 +340,14 @@ JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，�
       break;
     }
 
-    // Per-tool sequential execution with individual try/catch.
-    // Each tool resolves independently; errors become { _toolError: true } and never reject.
     const toolResults = [];
     for (const tc of response.tool_calls) {
+      if (sc) sc.onDelta('', { phase: 'tool_start', text: tc.function.name });
+      
       let args;
       try {
         args = JSON.parse(tc.function.arguments || '{}');
       } catch {
-        logger.warn('tool_arguments_parse_failed', { raw: String(tc.function.arguments).slice(0, 200) });
         args = {};
       }
       const cacheSignature = buildToolCacheSignature(tc.function.name, args, regionScope);
@@ -399,99 +365,48 @@ JSON 对象须包含以下四个字段（**建议严格按此顺序书写**，�
         } else {
           result = await chatToolsService.executeByName(tc.function.name, args, regionScope);
           if (result && result.error && !result.needDisambiguation) {
-            result = {
-              _toolError: true,
-              toolName: tc.function.name,
-              message: result.error.message,
-              code: result.error.code,
-            };
+            result = { _toolError: true, toolName: tc.function.name, message: result.error.message };
           }
         }
         if (!result?._toolError && !cached && CHAT_SESSION_STATE_ENABLED && options.sessionId) {
-          const added = chatSessionStateService.addRecord(options.sessionId, {
+          chatSessionStateService.addRecord(options.sessionId, {
             signature: cacheSignature,
             source: 'function_calling',
             result,
           }, regionScope, expectedVersion);
-          if (added === false) {
-            logger.warn('session_cache_version_conflict', {
-              sessionId: options.sessionId,
-              toolName: tc.function.name,
-              signature: cacheSignature,
-            });
-          }
         }
       } catch (err) {
-        result = {
-          _toolError: true,
-          toolName: tc.function.name,
-          message: err.message,
-          code: err.code,
-        };
+        result = { _toolError: true, toolName: tc.function.name, message: err.message };
       }
       calledToolNames.add(tc.function.name);
       toolResults.push({ id: tc.id, result });
+      
+      if (sc) sc.onDelta('', { phase: 'tool_end', text: tc.function.name });
     }
 
-    const disambiguationToolResult = toolResults.find((tr) => tr.result && tr.result.needDisambiguation);
-    if (disambiguationToolResult) {
-      const reply = {
-        ...buildDisambiguationReply(disambiguationToolResult.result),
+    const disambiguation = toolResults.find(tr => tr.result && tr.result.needDisambiguation);
+    if (disambiguation) {
+      const reply = buildDisambiguationReply(disambiguation.result);
+      // Legacy JSON fallback for disambiguation
+      return attachToolMeta({
+        ...reply,
         _intentType: deriveIntentType(calledToolNames, fallbackIntent),
-      };
-      return attachToolMeta(reply, fcToolMetaFromSet(calledToolNames, iterations), intentResolvedByForFc(calledToolNames));
+      }, fcToolMetaFromSet(calledToolNames, iterations), 'tools');
     }
 
-    // Append assistant tool_calls request and tool responses
     messages.push({ role: 'assistant', content: response.content ?? null, tool_calls: response.tool_calls });
     for (const tr of toolResults) {
-      messages.push({
-        role: 'tool',
-        tool_call_id: tr.id,
-        content: JSON.stringify(tr.result)
-      });
+      messages.push({ role: 'tool', tool_call_id: tr.id, content: JSON.stringify(tr.result) });
     }
   }
 
-  // If we maxed out iterations and still have tools pending, force answer
-  if (!finalContent && iterations >= MAX_ITERATIONS) {
-    const response = await callChatWithTools({
-      messages,
-      tools: chatToolsService.TOOL_SCHEMAS,
-      tool_choice: 'none',
-      response_format: { type: 'json_object' },
-    });
-    finalContent = response.content;
-  }
-
-  try {
-    const jsonStr = extractFirstJson(finalContent);
-    if (jsonStr) {
-      const parsed = JSON.parse(jsonStr);
-      // If it looks like a dashboard payload (has keyNumbers or attentionPoints), return as is
-      if (parsed.keyNumbers || parsed.attentionPoints || parsed.overview) {
-        // remove messageType if present
-        delete parsed.messageType;
-        const reply = {
-          ...normalizeReplyContent(parsed),
-          _intentType: deriveIntentType(calledToolNames, fallbackIntent),
-        };
-        return attachToolMeta(reply, fcToolMetaFromSet(calledToolNames, iterations), intentResolvedByForFc(calledToolNames));
-      }
-    }
-    // Fallback: If no valid dashboard JSON found, treat as conversational text
-    const replyText = {
-      ...normalizeReplyContent({ overview: finalContent }),
-      _intentType: deriveIntentType(calledToolNames, fallbackIntent),
-    };
-    return attachToolMeta(replyText, fcToolMetaFromSet(calledToolNames, iterations), intentResolvedByForFc(calledToolNames));
-  } catch {
-    const replyErr = {
-      ...normalizeReplyContent({ overview: finalContent || '系统无法理解并格式化该数据，请换一种问法。' }),
-      _intentType: deriveIntentType(calledToolNames, fallbackIntent),
-    };
-    return attachToolMeta(replyErr, fcToolMetaFromSet(calledToolNames, iterations), intentResolvedByForFc(calledToolNames));
-  }
+  // Final result returned to chatService (which stores it in DB content column)
+  return {
+    markdownContent: finalContent,
+    _intentType: deriveIntentType(calledToolNames, fallbackIntent),
+    _intentResolvedBy: intentResolvedByForFc(calledToolNames),
+    _toolMeta: fcToolMetaFromSet(calledToolNames, iterations),
+  };
 }
 
 module.exports = { run, AGENT_MODE: CHAT_AGENT_MODE };

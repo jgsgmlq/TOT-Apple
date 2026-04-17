@@ -7,6 +7,7 @@ import {
   MapChart,
   PictorialBarChart,
   RadarChart,
+  ScatterChart,
 } from 'echarts/charts';
 
 import {
@@ -41,6 +42,7 @@ echarts.use([
   PieChart,
   MapChart,
   RadarChart,
+  ScatterChart,
   SVGRenderer,
   PictorialBarChart,
   RadarComponent,

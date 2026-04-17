@@ -1986,45 +1986,32 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "stream": false
   }
   ```
-  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，与看板智能洞察 §5.7 一致：`event: delta` 推送模型增量（`data` 为 `{ "text": "...", "phase": "content"|"reasoning" }`）；成功结束时 `event: done`，`data` 为 `{ "code": 200, "message": "success", "data": { ...与下方 JSON 成功体 data 相同... }, "requestId": "..." }`；失败时 `event: error`。流式仅作用于 **intent_routing** 下最终「格式化回答」的 LLM；**function_calling** 模式仍可能在无增量后一次性返回 `done`。
-- **响应体（成功，`stream` 未传或为 false）**：
+  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end" }`。
+    - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
+  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
+  - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
+
+  - **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
-    "code": 200,
-    "message": "success",
-    "data": {
-      "messageId": "string",
-      "replyContent": { // 结构化回答（PRD §5.7）；统计/推断类可选扩展见 09-EXECUTIVE-CHAT.md（statisticsProvenance、visualizations、forecastDisclaimer 等）
-        "overview": "Q1新品培训整体完成率72%，全国共300人参与，216人已完成",
-        "keyNumbers": [
-          {
-            "label": "整体完成率",
-            "value": "72%",
-            "unit": "%"
-          },
-          {
-            "label": "逾期未完成人数",
-            "value": "10",
-            "unit": "人"
-          }
-        ],
-        "attentionPoints": [
-          "Monobrand完成率仅60%，低于所有渠道平均水平",
-          "5家门店完成率<50%，需重点关注"
-        ],
-        "followUpSuggestions": [
-          "可追问：Monobrand最差的5家门店是哪些？",
-          "可追问：逾期未完成的人员分布？"
-        ]
-      },
-      "responseTime": 3500, // 响应时间（ms），≤5000ms
-      "contextId": "string", // 更新后的上下文ID
-      "timestamp": "string"
-    },
-    "requestId": "string"
+   "code": 200,
+   "message": "success",
+   "data": {
+     "messageId": "string",
+     "markdownContent": "string", // FC 模式下的 Markdown 正文
+     "replyContent": { // 兼容字段，Routing 模式下为对象，FC 模式下为 null
+       "overview": "...", // (Legacy)
+       "keyNumbers": [], // (Legacy)
+       "attentionPoints": [], // (Legacy)
+       "followUpSuggestions": [] // (Legacy)
+     },     "responseTime": 3500,
+     "contextId": "string",
+     "timestamp": "string"
+   },
+   "requestId": "string"
   }
-  ```
-- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
+  ```- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
@@ -2078,16 +2065,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "historyList": [
         {
           "messageId": "string",
-          "content": "Q1新品培训完成率？",
-          "sender": "executive",
-          "timestamp": "string",
-          "replyContent": {
-            "overview": "string",
-            "keyNumbers": [],
-            "attentionPoints": [],
-            "followUpSuggestions": []
-          },
-          "userFeedback": "like | dislike | null"
+          "sender": "executive/assistant",
+          "content": "string", // 原始正文（FC模式为 Markdown，Routing模式为 JSON 字符串）
+          "replyContent": null|object, // 兼容字段：仅当 content 为旧版 JSON 且解析成功时填充对象，否则为 null
+          "userFeedback": "like | dislike | null",
+          "timestamp": "string"
         }
       ],
       "pagination": {
