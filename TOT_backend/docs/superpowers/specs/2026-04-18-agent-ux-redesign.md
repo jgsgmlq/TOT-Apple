@@ -1,7 +1,7 @@
 # Executive Chat Agent 重构设计文档
 
 **日期：** 2026-04-18  
-**状态：** 已批准，待实现  
+**状态：** 已批准，待实现（2026-04-18 已并入评审缺口：提示词 JSON 措辞、getHistory、`compressAssistantContent`、`req.on('close')`/AbortSignal、`done` 与 delta 真源、suggestions 围栏内 JSON 数组规范）  
 **目标：** 让 Executive Chat Agent 的交互体验对标 Claude / ChatGPT / DeepSeek  
 **交付策略：** 最小可用优先 — Markdown 渲染 + 停止生成 + FC 默认 + 系统提示词升级，二期再做状态机深化
 
@@ -86,10 +86,12 @@ const CHAT_AGENT_MODE = process.env.CHAT_AGENT_MODE || 'function_calling';
 
 #### 改动 2：完全重写 FC 系统提示词（`SYSTEM_PROMPT`，第 357 行）
 
-当前提示词的问题：
+当前（旧）提示词的问题：
 - 没有明确的多轮上下文继承规则（不知道从历史中推断实体）
-- 输出格式要求（JSON）和业务规则混在一起
+- **将「对用户可见的回答格式」错误地约束为整段结构化 JSON**，与流式 Markdown 产品目标冲突；业务规则与输出形态混写
 - 没有「主动澄清」指令
+
+**评审补丁（避免自相矛盾）：** 新版 `SYSTEM_PROMPT` 全文**不得**再要求模型「输出 JSON」「返回 JSON 对象」作为回答主体。唯一允许出现 JSON 字符串的地方是 **Markdown 围栏代码块内部**（见下方 ```echarts），用于图表配置；追问建议用 ```suggestions 承载（围栏内格式见「suggestions 代码块格式」小节）。模型在围栏外对用户可见的正文只能是 Markdown。
 
 新提示词结构（三段式，AI 容易遵循）：
 
@@ -118,11 +120,24 @@ echarts 代码块格式：
 {"type":"bar|line|scatter|pie","title":"图表标题","xAxis":["标签1","标签2"],"series":[{"name":"系列名","data":[值1,值2]}]}
 ```
 
-suggestions 代码块格式：
+suggestions 代码块格式（**规范定义**，解析器按此实现）：
+- 围栏标识：起始行精确为 \`\`\`suggestions（小写），结束行 \`\`\`。
+- **围栏内正文**（去掉首尾空白后）**必须是一个合法 JSON 数组**，且：
+  - 数组元素**全部为 string**，每个 string 为一条可点击的追问文案；
+  - 元素顺序即 UI 展示顺序；
+  - 不允许在 JSON 数组前后夹杂其它文字、注释或多余逗号；
+  - 字符串内容可含中文、标点；若需前缀如「可追问：」由模型写在字符串内。
+- 示例（多行排版仅便于阅读，解析时整段视为 JSON）：
 ```suggestions
-["可追问：问题1","可追问：问题2","可追问：[绘图] 生成图表"]
+[
+  "可追问：问题1",
+  "可追问：问题2",
+  "可追问：[绘图] 生成图表"
+]
 ```
-```
+- **非规范示例（禁止）**：围栏内写纯文本列表、Markdown 列表、或非 JSON 内容——前端可拒绝解析该块并记录告警。
+
+（上文「新提示词结构」大段模板在编辑时注意：内嵌 \`\`\`echarts / \`\`\`suggestions 示例时，外层不要用同一套围栏包裹全文，以免 Markdown 嵌套解析错乱；可拆成「角色/规则」正文 + 独立小节示例。）
 
 #### 改动 3：FC 循环中 SSE 推送工具执行状态
 
@@ -171,16 +186,49 @@ if (options.streamFormatCallbacks?.onDelta) {
 // 改前的 done payload：
 { messageId, replyContent: { overview, keyNumbers, ... }, responseTime, contextId, timestamp }
 
-// 改后的 done payload：
+// 改后的 done payload（data 层）：
 { messageId, responseTime, contextId, timestamp }
-// replyContent 不再需要，Markdown 内容已通过 delta 事件流式传输完毕
+// 可选：markdownContent —— 仅当希望 done 再带一份完整落库正文时使用（与 DB 一致，便于对账）；非必须。
 ```
 
-#### 改动：历史消息返回格式
+#### 评审补丁：`done` 与前端「最终渲染」以谁为准
 
-`GET /history` 接口返回的 `ChatHistoryItem` 中：
-- `content` 字段：存储 Markdown 文本（原来存纯文本摘要）
-- `replyContent` 字段：仍保留（用于 intent_routing 兜底模式的历史消息），FC 模式下为 null
+- **正文真源**：流式过程中，所有 `phase === 'content'`（及兼容旧客户端时默认视为 content）的 `delta` 事件里的 `text` 片段，在前端累积为 `streamContent`。**最终气泡展示应以该累积结果为准**（用户停止生成时亦然，见下节断开处理）。
+- **`onComplete(done)` 的职责**：用 `done.data.messageId` 等元数据更新消息对象；将 **`streamContent` 赋给 `msg.content` 并设 `msg.done = true`**。不要假设 `done` 里必有完整正文可用；若实现上在 `done` 中附带 `markdownContent`，可与 `streamContent` 做一次一致性校验或作为补全（例如中途重连），但**不应**作为唯一渲染来源。
+- **意图**：避免「payload 改了但不知道用哪个字段触发最终渲染」的歧义。
+
+#### 评审补丁：客户端中止与 `req.on('close')`
+
+当前 `sendMessageStream` 若不在 HTTP 层感知客户端断开，会出现：前端 `AbortController` 已取消 `fetch`，而后端仍继续向 LLM 拉流、甚至仍写入完整 assistant 消息。
+
+**必须**在 `sendMessageStream`（或 `chatAgentRunner.run` 的统一入口）中：
+
+1. 创建 `AbortController`，将其 `signal` 传入所有下游可取消的异步调用（OpenAI/DeepSeek 流式请求等）。
+2. 在 **`req.on('close')`**（并可辅以 **`req.on('aborted')`**，视 Node/Express 版本而定）中 `abort()` 该 controller。
+3. **产品行为**：用户点击「停止」后，已推送的 delta 保留；是否将**当前已生成片段**写入 `chat_messages.content`（半成品）由实现选定，须在验收中写清（推荐：**写入**，便于历史与重进会话一致；`intent_type` 等照常）。
+
+#### 改动：历史消息返回格式（`getHistory` 契约修正）
+
+**现状问题**：`getHistory` 对 `assistant` 行仅执行 `replyContent = JSON.parse(r.content)`，且**不把** `r.content` 赋给 `content`。FC 模式下 `content` 列为 Markdown 时，`JSON.parse` 失败会得到 **`replyContent: null`**，同时 **`content` 仍缺省** → 前端历史列表对该条 assistant **空白**。
+
+**修正契约**（`GET /history` 每条消息）：
+
+| role | `content` | `replyContent` |
+|------|-----------|----------------|
+| `user` | 用户原文 | `undefined` |
+| `assistant` | **始终**为 DB `chat_messages.content` 原始字符串（FC 下为 Markdown；intent_routing 下若仅存 JSON 字符串，则原样返回便于调试） | 仅当 `content` 能解析为** legacy `ReplyContent` JSON** 且结构合法时填充对象；**否则必须为 `null`** |
+
+前端分支：**`replyContent != null`** → 旧版卡片渲染；**否则** → 用 `content` 走 `MarkdownRenderer`（与 §六 一致）。
+
+#### 文件：`TOT_backend/server/utils/chatHistoryCompress.js`（评审补丁）
+
+**现状问题**：`compressAssistantContent` 假定 `rawContent` 为 `ReplyContent` JSON；FC 后 assistant 存 Markdown 时，`JSON.parse` 失败走 `catch` 虽返回原串，但**长 Markdown 会撑爆多轮上下文**。
+
+**修正要求**：
+
+1. **优先**尝试 `JSON.parse`：若得到带 `overview` 的 legacy 对象，保持现有摘要逻辑（overview + 少量 keyNumbers）。
+2. **否则**视为 Markdown：做**确定性截断**（例如按 Unicode 码点截取前 **N** 字符，N 建议 1500～2500，可配置），可选附加省略标记 `[…]`；不得静默返回空串。
+3. `chatAnswerService` / `sendMessage` / `regenerateLastAssistant` 等所有拼装 `history` 的路径**统一**调用该函数，避免一处漏改。
 
 ---
 
@@ -340,7 +388,7 @@ const handleStop = () => {
 // 2. 传递给 streamExecutiveChatMessage（通过 signal 参数）
 // 3. delta 回调中处理 tool_start / tool_end 事件（更新 activeToolName）
 // 4. delta 回调中处理 content 事件（累积 streamContent）
-// 5. done 回调中将 streamContent 转为 content，设置 done = true
+// 5. done 回调：用 done.data.messageId 等更新状态；将已累积的 streamContent 写入 msg.content，设置 msg.done = true（不要依赖 done 携带完整正文，见 §3.2「done 与前端最终渲染」）
 ```
 
 ### 5.3 修改文件：`TOT_frontend/src/api/chat/index.ts`
@@ -418,38 +466,140 @@ export function extractSpecialBlocks(markdown: string): {
 
 ---
 
+## 六-B、补丁：四个额外改动点
+
+> 以下改动由第二轮 spec 审查补入，AI 实现时与主流程同等优先级。
+
+### 补丁 1：`regenerate` 端点适配 Markdown（`chatService.js`）
+
+**问题**：`regenerateLastAssistant()` 调用 `chatAgentRunner.run()` → 拿到 `markdownContent`，存入 `chat_messages.content`。但 `regenerate` 路由返回的是**非流式 JSON 200**（04 §6.7），当前格式为 `{ messageId, replyContent, ... }`。改造后 `replyContent` 为 null，前端收到 `done` 时需用 `markdownContent` 驱动渲染。
+
+**修正要求**：
+
+```javascript
+// chatService.js regenerateLastAssistant() 返回结构（改后）：
+{
+  messageId: string,
+  markdownContent: string,   // 新增：Markdown 正文
+  replyContent: null,        // FC 模式下为 null
+  responseTime: number,
+  contextId: string,
+  timestamp: string,
+}
+```
+
+前端 `handleRegenerate`（`index.vue` 约 L1007）改为：
+```typescript
+// 改前：从 result.replyContent 取内容
+// 改后：
+messages.value[index] = {
+  id: result.messageId,
+  role: 'ai',
+  content: result.markdownContent || '',
+  done: true,
+  replyContent: result.replyContent ?? null,  // null → MarkdownRenderer
+  userFeedback: null,
+};
+```
+
+### 补丁 2：`streamSsePostJson` AbortSignal 集成（向后兼容）
+
+**问题**：`streamSsePostJson`（`TOT_frontend/src/utils/http/ssePostStream.ts` 或同目录）是共享工具，也被 dashboard 智能洞察调用。若直接加 `signal` 参数改函数签名可能破坏已有调用者。
+
+**修正要求**：
+- `signal` 作为 **options 对象的可选字段**传入，不改函数主签名：
+  ```typescript
+  // 改前（示意）：
+  streamSsePostJson({ path, body, onDelta, onDone, onError, fallbackErrorMessage })
+  // 改后：
+  streamSsePostJson({ path, body, onDelta, onDone, onError, fallbackErrorMessage, signal?: AbortSignal })
+  ```
+- 内部 `fetch(url, { method: 'POST', signal, ... })` 传入该 signal
+- 已有调用者（dashboard）不传 `signal`，行为不变
+
+`streamExecutiveChatMessage`（`api/chat/index.ts`）将 `AbortController.signal` 透传进 `streamSsePostJson`。
+
+### 补丁 3：前端 `handleStop` 必须触发 fetch abort
+
+**问题**：`handleStop` 只设 `isSending.value = false`，不会关闭底层 SSE 连接；浏览器继续缓冲后端数据流，后端也继续拉 LLM。
+
+**修正要求**（`index.vue handleStop`）：
+```typescript
+const handleStop = () => {
+  // 1. abort fetch（通过 AbortController）
+  abortController.value?.abort();
+  abortController.value = null;
+  // 2. 更新 UI 状态
+  isSending.value = false;
+  const lastMsg = messages.value[messages.value.length - 1];
+  if (lastMsg?.role === 'ai') {
+    // 3. 以当前 streamContent 为准，标记完成
+    lastMsg.content = lastMsg.streamContent || lastMsg.content || '';
+    lastMsg.done = true;
+    lastMsg.activeToolName = undefined;
+    lastMsg.streamContent = undefined;
+  }
+};
+```
+
+`AbortController.abort()` → `fetch` 抛出 `AbortError` → `streamSsePostJson` 的 `onError` 被调用 → 后端 `req.on('close')` 触发 → 后端 AbortController abort → LLM 拉流中止。整条链路必须贯通。
+
+**前端对 `AbortError` 的处理**：`onError` 回调中检查 `err?.name === 'AbortError'`，静默处理（不弹错误 toast），因为这是用户主动停止。
+
+### 补丁 4：`chatAgentRunner.js` 「绘图」快捷路径 JSON.parse 失效
+
+**问题**：`runIntentRouting()` 第 199 行：
+```javascript
+const lastContent = JSON.parse(lastValidMsg.content);
+if (lastContent.statisticsProvenance?.analysisType) { ... }
+```
+FC 模式下 `lastValidMsg.content` 是 Markdown，`JSON.parse` 抛错，走 `catch` 静默跳过 → 绘图快捷路径失效，需重新调用工具（性能退化，但不崩溃）。
+
+**修正要求**：
+- FC 模式（`markdownContent`）中，`visualizationSummary` 和 `analysisType` 改从 `sessionState` 的缓存记录中读取，不再依赖 `JSON.parse(content)`
+- 具体：`chatSessionStateService.getLatestByIntent(sessionId, 'analytics_query')` 已可返回上一轮 `toolResult`，从中提取 `analysisType`；这个路径本身已在代码 L209-215 存在，只需去掉前面依赖 `JSON.parse` 的分支
+- 修改后逻辑：直接从 sessionState 取 `analysisType`，跳过 JSON.parse 的历史消息解析
+
+---
+
 ## 七、实现顺序（最小可用优先）
 
 按依赖顺序，AI 实现时应严格遵循此顺序：
 
-### Phase 1：后端（2-3 个文件改动）
+### Phase 1：后端（4–5 个文件改动）
 
 1. **`chatAgentRunner.js`**
    - 改默认模式为 `function_calling`
-   - 重写 FC `SYSTEM_PROMPT`（三段式，含 echarts/suggestions 格式规范）
+   - 重写 FC `SYSTEM_PROMPT`（三段式，含 echarts/suggestions 格式规范；**禁止**整段回答要求 JSON）
    - FC 循环中添加 `tool_start` / `tool_end` SSE 推送
    - FC 路径删除 `chatAnswerService.format()` 调用
    - `run()` 返回值改为 `{ markdownContent, _intentType, _toolMeta }`
+   - 支持传入 **`AbortSignal`**，在 signal abort 时停止拉流并向上抛出/返回可识别错误（供 `chatService` 决定是否半成品落库）
 
 2. **`chatService.js`**
    - 接收 `markdownContent`，存入 `chat_messages.content`
-   - `done` 事件 payload 简化（移除 `replyContent`）
+   - `sendMessageStream`：`req.on('close')`（及必要时 `aborted`）联动 **AbortSignal**
+   - `done` 事件 payload 简化（移除 `replyContent`）；文档约定前端以 delta 累积为正文真源
+   - **`getHistory`**：assistant 行必须返回 `content` + 按 legacy JSON 条件填充的 `replyContent`（见 §3.2）
+
+3. **`chatHistoryCompress.js`**
+   - 扩展 Markdown 分支截断逻辑，避免 FC 历史撑爆上下文
 
 ### Phase 2：前端（3-4 个文件改动）
 
-3. **新建 `MarkdownRenderer.vue`**
+4. **新建 `MarkdownRenderer.vue`**
    - markdown-it 渲染
-   - 解析 echarts / suggestions 代码块
+   - 解析 echarts / suggestions 代码块（suggestions 须符合本文 JSON 数组规范）
    - streaming 光标动画
 
-4. **`api/chat/index.ts`**
+5. **`api/chat/index.ts`**
    - `SendMessageResult` 接口更新
    - `streamExecutiveChatMessage` 增加 `AbortSignal` 参数
 
-5. **`utils/execChatStreamParts.ts`**
+6. **`utils/execChatStreamParts.ts`**
    - 新增 `extractSpecialBlocks()` 函数
 
-6. **`views/executive/index.vue`**
+7. **`views/executive/index.vue`**
    - 替换消息渲染为 `MarkdownRenderer`
    - 停止按钮逻辑
    - 工具执行状态指示器
@@ -466,7 +616,8 @@ export function extractSpecialBlocks(markdown: string): {
 | 发送「华东区怎么样」 | 先出现「正在查询区域详情…」指示器，然后流式 Markdown |
 | 发送「帮我看看最差的5家门店」 | 工具执行指示器出现，Markdown 表格列出门店排名 |
 | 数据分析类问题 | Markdown 末尾有 ```echarts``` 块，前端渲染为图表 |
-| 点击停止按钮 | 生成立即停止，已生成内容保留 |
+| 点击停止按钮 | 生成立即停止，已生成内容保留；后端停止继续拉流（`AbortSignal` + `req.on('close')`） |
+| `GET /history`（FC 消息） | assistant 行 `content` 有 Markdown，`replyContent` 为 null，列表不空白 |
 | 上轮问华东，本轮问「再看华南」 | AI 自动继承上下文，不要求用户重复说明 |
 | 历史消息加载 | FC 模式消息用 MarkdownRenderer 渲染，旧消息用卡片兼容渲染 |
 | intent_routing 兜底 | 设置 `CHAT_AGENT_MODE=intent_routing` 后，旧卡片渲染正常工作 |
@@ -486,9 +637,11 @@ export function extractSpecialBlocks(markdown: string): {
 
 | 文件路径 | 改动类型 | 核心改动点 |
 |---------|---------|-----------|
-| `TOT_backend/server/services/chatAgentRunner.js` | 修改 | 默认 FC、重写提示词、tool_start/end 推送、删除 format 调用 |
-| `TOT_backend/server/services/chatService.js` | 修改 | done 事件简化、存 markdownContent |
+| `TOT_backend/server/services/chatAgentRunner.js` | 修改 | 默认 FC、重写提示词（禁 JSON 正文）、tool_start/end 推送、删除 format 调用、AbortSignal 支持、绘图快捷路径去 JSON.parse |
+| `TOT_backend/server/services/chatService.js` | 修改 | done 简化、存 markdownContent、`getHistory` 双字段契约、`req.on('close')` 中止、regenerate 返回 markdownContent |
+| `TOT_backend/server/utils/chatHistoryCompress.js` | 修改 | Markdown 截断分支（JSON.parse 失败时截前 1500-2500 字符） |
 | `TOT_frontend/src/views/executive/components/MarkdownRenderer.vue` | **新建** | Markdown 渲染 + echarts/suggestions 解析 |
-| `TOT_frontend/src/api/chat/index.ts` | 修改 | SendMessageResult 更新、AbortSignal 支持 |
+| `TOT_frontend/src/utils/http/ssePostStream.ts`（或同路径） | 修改 | options 对象加可选 `signal?: AbortSignal`，向后兼容 |
+| `TOT_frontend/src/api/chat/index.ts` | 修改 | SendMessageResult 更新、透传 AbortSignal |
 | `TOT_frontend/src/utils/execChatStreamParts.ts` | 修改 | 新增 extractSpecialBlocks() |
-| `TOT_frontend/src/views/executive/index.vue` | 修改 | 替换渲染、停止按钮、工具状态指示器 |
+| `TOT_frontend/src/views/executive/index.vue` | 修改 | 替换渲染、停止按钮（含 fetch abort + AbortError 静默）、工具状态指示器、handleRegenerate 用 markdownContent |
