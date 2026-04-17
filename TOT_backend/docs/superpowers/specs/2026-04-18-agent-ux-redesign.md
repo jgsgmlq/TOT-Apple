@@ -488,16 +488,33 @@ export function extractSpecialBlocks(markdown: string): {
 }
 ```
 
-前端 `handleRegenerate`（`index.vue` 约 L1007）改为：
+前端 `handleRegenerate`（`index.vue` 约 L1007）**完整替换**如下（当前代码用 `formatReplyContentText(result.replyContent)` 会对 null 返回空串，必须改）：
+
 ```typescript
-// 改前：从 result.replyContent 取内容
-// 改后：
+// 改前（约 L1014-1026）：
+const text = formatReplyContentText(result.replyContent);
 messages.value[index] = {
   id: result.messageId,
   role: 'ai',
-  content: result.markdownContent || '',
+  content: text,
+  replyContent: result.replyContent,
+  ...
+};
+
+// 改后：
+const isMarkdown = !result.replyContent && !!result.markdownContent;
+messages.value[index] = {
+  id: result.messageId,
+  role: 'ai',
+  // FC 模式用 markdownContent；intent_routing 兜底用 formatReplyContentText
+  content: isMarkdown
+    ? result.markdownContent!
+    : formatReplyContentText(result.replyContent),
   done: true,
-  replyContent: result.replyContent ?? null,  // null → MarkdownRenderer
+  replyContent: result.replyContent ?? null,   // null → MarkdownRenderer 分支
+  thinking: undefined,
+  jsonStream: undefined,
+  partialReply: undefined,
   userFeedback: null,
 };
 ```
@@ -555,10 +572,33 @@ if (lastContent.statisticsProvenance?.analysisType) { ... }
 ```
 FC 模式下 `lastValidMsg.content` 是 Markdown，`JSON.parse` 抛错，走 `catch` 静默跳过 → 绘图快捷路径失效，需重新调用工具（性能退化，但不崩溃）。
 
-**修正要求**：
-- FC 模式（`markdownContent`）中，`visualizationSummary` 和 `analysisType` 改从 `sessionState` 的缓存记录中读取，不再依赖 `JSON.parse(content)`
-- 具体：`chatSessionStateService.getLatestByIntent(sessionId, 'analytics_query')` 已可返回上一轮 `toolResult`，从中提取 `analysisType`；这个路径本身已在代码 L209-215 存在，只需去掉前面依赖 `JSON.parse` 的分支
-- 修改后逻辑：直接从 sessionState 取 `analysisType`，跳过 JSON.parse 的历史消息解析
+**修正要求**：**完整删除** `runIntentRouting()` 中 L203–207 的 `JSON.parse(lastValidMsg.content)` 代码块，替换为直接从 sessionState 读取：
+
+```javascript
+// 删除以下旧代码（L203-207）：
+// try {
+//   const lastContent = JSON.parse(lastValidMsg.content);
+//   if (lastContent.statisticsProvenance?.analysisType) {
+//     entities.analysisType = lastContent.statisticsProvenance.analysisType;
+//   }
+// } catch (e) { /* ignore */ }
+
+// 替换为（L208 的 sessionState 路径已存在，直接前移，去掉 JSON.parse 依赖）：
+if (CHAT_SESSION_STATE_ENABLED && options.sessionId) {
+  await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
+  const lastRecord = chatSessionStateService.getLatestByIntent(
+    options.sessionId, 'analytics_query', regionScope
+  );
+  if (lastRecord?.result?.analysisType) {
+    entities.analysisType = lastRecord.result.analysisType;
+  } else if (lastRecord?.result?.statisticsProvenance?.analysisType) {
+    entities.analysisType = lastRecord.result.statisticsProvenance.analysisType;
+  }
+}
+// toolResult 复用逻辑保持不变（L209-215 原有代码）
+```
+
+注意：`try/catch` 包裹不再是安全兜底，因为上述替换完全移除了 `JSON.parse` 调用。
 
 ---
 
