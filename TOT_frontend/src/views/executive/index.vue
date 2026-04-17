@@ -217,7 +217,16 @@
                 </template>
               </div>
               <div class="message-content">
-                {{ msg.content }}
+                <template v-if="msg.role === 'user'">{{ msg.content }}</template>
+                <template v-else>
+                  <ExecChatAiBubbleContent
+                    :thinking="msg.thinking"
+                    :partial-reply="msg.partialReply"
+                    :reply-content="msg.replyContent"
+                    :json-stream="msg.jsonStream"
+                    :content="msg.content"
+                  />
+                </template>
 
                 <!-- AI Feedback Actions -->
                 <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
@@ -317,7 +326,7 @@
   import { useUserStore } from '@/store/modules/user';
   import {
     createChatSession,
-    sendChatMessage,
+    streamExecutiveChatMessage,
     getChatHistory,
     deleteChatSession,
     formatReplyContentText,
@@ -325,7 +334,10 @@
     regenerateChatMessage,
     type ChatHistoryItem,
     type SendMessageResult,
+    type ReplyContent,
   } from '@/api/chat';
+  import ExecChatAiBubbleContent from '@/components/chat/ExecChatAiBubbleContent.vue';
+  import { runExecStyleSseChat, finalizeExecStyleMessage } from '@/utils/execStreamReply';
   import {
     LikeOutlined,
     LikeFilled,
@@ -343,6 +355,14 @@
     id?: string;
     role: 'user' | 'ai';
     content: string;
+    /** 思考过程：reasoning 流 + ` ```json` 前说明，不在正文重复 */
+    thinking?: string;
+    /** 流式阶段 JSON 尚未解析成功时的原始片段 */
+    jsonStream?: string;
+    /** 流式过程中已成功 parse 的结构化预览 */
+    partialReply?: ReplyContent | null;
+    /** 服务端落库后的最终结构化回答 */
+    replyContent?: ReplyContent | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
     isFeedbackLoading?: boolean;
@@ -495,6 +515,7 @@
           id: item.messageId,
           role: 'ai',
           content: formatReplyContentText(item.replyContent ?? undefined),
+          replyContent: item.replyContent ?? undefined,
           userFeedback: item.userFeedback,
         });
       }
@@ -714,18 +735,16 @@
     inputValue.value = '';
     scrollToBottom();
 
-    // 占位 loading 消息
-    messages.value.push({ role: 'ai', content: '正在查询数据，请稍候…' });
+    // 占位（流式开始后由 delta 覆盖）
+    messages.value.push({ role: 'ai', content: '正在生成…' });
     const loadingIndex = messages.value.length - 1;
     isSending.value = true;
     scrollToBottom();
 
-    const applySendSuccess = (sid: string, result: SendMessageResult) => {
-      const text = formatReplyContentText(result.replyContent);
+    const applySendSuccess = (sid: string, result: SendMessageResult, thinkingSnapshot: string) => {
+      const finalized = finalizeExecStyleMessage(result, thinkingSnapshot);
       messages.value[loadingIndex] = {
-        id: result.messageId,
-        role: 'ai',
-        content: text,
+        ...finalized,
         userFeedback: null,
       };
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
@@ -740,11 +759,27 @@
       persistSidebar();
     };
 
+    const runStreamSend = (sid: string) =>
+      new Promise<void>((resolve, reject) => {
+        void runExecStyleSseChat(streamExecutiveChatMessage, sid, question, (p) => {
+          messages.value[loadingIndex] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+          };
+          scrollToBottom();
+        })
+          .then(({ result, thinkingSnapshot }) => {
+            applySendSuccess(sid, result, thinkingSnapshot);
+            resolve();
+          })
+          .catch(reject);
+      });
+
     try {
-      const result = await sendChatMessage(sessionId.value, question, {
-        skipGlobalErrorMessage: true,
-      }).send();
-      applySendSuccess(sessionId.value, result);
+      await runStreamSend(sessionId.value);
     } catch (e) {
       if (isStaleExecutiveSessionError(e) && sessionId.value) {
         const staleId = sessionId.value;
@@ -755,10 +790,7 @@
           applySessionApiResult(created);
           saveStoredPresets(created.exampleQuestions);
           ensureSidebarSession(created.sessionId, '新对话');
-          const result = await sendChatMessage(sessionId.value, question, {
-            skipGlobalErrorMessage: true,
-          }).send();
-          applySendSuccess(sessionId.value, result);
+          await runStreamSend(sessionId.value);
         } catch {
           messages.value[loadingIndex] = {
             role: 'ai',
@@ -807,6 +839,10 @@
         id: result.messageId,
         role: 'ai',
         content: text,
+        replyContent: result.replyContent,
+        thinking: undefined,
+        jsonStream: undefined,
+        partialReply: undefined,
         userFeedback: null,
       };
       scrollToBottom();

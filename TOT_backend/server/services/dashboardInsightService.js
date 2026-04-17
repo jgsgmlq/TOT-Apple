@@ -5,6 +5,7 @@ const { db } = require('../db');
 const { formatLocalDateYYYYMMDD } = require('../utils/ddlAt');
 const { parseStoreDrill } = require('../utils/storeDrill');
 const { generateTextDeepSeekStream } = require('../utils/ai');
+const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
 const { createError } = require('../middleware/errorHandler');
 const { computeAssignmentWarningRates } = require('../utils/dashboardWarningRates');
 
@@ -629,16 +630,8 @@ function persistInsightRecord(id, module, taskId, q, extra, content, facts, user
 async function createInsight(body, userId, req, res) {
   const ctx = prepareInsightContext(body);
 
-  res.status(200);
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  const send = (event, data) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
+  writeSseHeaders(res);
+  const send = createSseSender(res);
 
   const baseMax = ctx.promptPack.options.maxTokens ?? 900;
   const streamMaxTokens = ctx.reasoning ? Math.max(baseMax, 8192) : baseMax;

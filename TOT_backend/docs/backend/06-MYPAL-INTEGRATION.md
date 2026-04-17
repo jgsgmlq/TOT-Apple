@@ -122,3 +122,58 @@
 | `server/services/assignmentProgress.js` | 进度与状态重算（与 assignments 共用） |
 | `server/routes/mypal.js` | `POST /sync` |
 | `server/routes/tasks.js` | `mypalTaskWeek` / `mypalProductName` 读写与下发校验 |
+
+---
+
+## 10. 测试环境联调基线（2026-04）
+
+### 10.1 已确认的 MyPal 测试参数
+
+> 以下信息用于 **测试环境** 联调，生产环境请使用独立凭证。
+
+- `MYPAL_API_BASE`: `https://test.mymax.cn`
+- 周次（`queryDate`）: `FY26Q3W3`
+- 产品（`productName`）: `iPad Air`
+- 联调样例 `seedId`: `xg1`（已完成）、`xg10`（未完成）
+
+`appId` / `appSecret` 属于敏感配置，不写入仓库文档正文；请仅通过环境变量注入（见 §2）。
+
+### 10.2 直连接口验证（不经过业务路由）
+
+目的：先验证网络连通、签名、参数格式是否正确，再进入 `POST /api/v1/mypal/sync`。
+
+在 `TOT_backend/server` 目录运行：
+
+```bash
+MYPAL_ENABLED=1 \
+MYPAL_API_BASE="https://test.mymax.cn" \
+MYPAL_APP_ID="<your_app_id>" \
+MYPAL_APP_SECRET="<your_app_secret>" \
+node -e "
+const { getUserWeeklyStatus } = require('./services/mypalClient');
+(async () => {
+  for (const seed of ['xg1', 'xg10']) {
+    try {
+      const r = await getUserWeeklyStatus(seed, 'FY26Q3W3');
+      console.log('OK', seed, r.data?.productName, r.data?.progress);
+    } catch (e) {
+      console.log('ERR', seed, e.code, e.mypalCode, e.mypalMessage || e.message);
+    }
+  }
+})();
+"
+```
+
+预期结果：
+
+- `xg1` 返回 `progress=100`
+- `xg10` 返回 `progress=0`
+
+### 10.3 进入业务同步前的必要检查
+
+调用 `POST /api/v1/mypal/sync` 前，至少确认：
+
+1. `employees.email` 能与 MyPal `seedId` 对齐（当前同步按邮箱精确匹配）。
+2. 目标任务已下发（`status='dispatched'`）且 `has_mypal=1`。
+3. 任务已配置 `mypal_task_week`（如 `FY26Q3W3`）与建议配置 `mypal_product_name='iPad Air'`。
+4. 优先用 `taskId + mode=batch` 做小范围验证，再放大全量同步。

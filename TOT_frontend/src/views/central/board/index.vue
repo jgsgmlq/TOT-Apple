@@ -38,12 +38,14 @@
       </div>
     </header>
 
+    <!-- 勿挂 overlayTeleportTarget/#layout-fullscreen-teleport：该容器对 * 统一 pointer-events:auto，遮罩若未卸干净会挡死整页；挂 body 不受影响 -->
     <n-drawer
       v-model:show="showAiInsightDrawer"
-      :to="overlayTeleportTarget"
+      to="body"
       :width="472"
       placement="right"
       :trap-focus="false"
+      :block-scroll="false"
       content-class="hq-ai-floating-panel"
       class="hq-ai-insight-drawer"
     >
@@ -117,7 +119,17 @@
                   </div>
                 </template>
               </div>
-              <div class="hq-ai-msg-bubble">{{ msg.content }}</div>
+              <div class="hq-ai-msg-bubble">
+                <template v-if="msg.role === 'user'">{{ msg.content }}</template>
+                <ExecChatAiBubbleContent
+                  v-else
+                  :thinking="msg.thinking"
+                  :partial-reply="msg.partialReply"
+                  :reply-content="msg.replyContent"
+                  :json-stream="msg.jsonStream"
+                  :content="msg.content"
+                />
+              </div>
             </div>
           </div>
 
@@ -134,7 +146,8 @@
               <n-button
                 type="primary"
                 round
-                :disabled="!aiInsightInput.trim()"
+                :disabled="!aiInsightInput.trim() || aiInsightSending"
+                :loading="aiInsightSending"
                 class="hq-ai-insight-send"
                 @click="handleAiInsightSend"
               >
@@ -1166,6 +1179,7 @@
     nextTick,
     shallowRef,
     onActivated,
+    onDeactivated,
     h,
   } from 'vue';
   import { useRouter } from 'vue-router';
@@ -1203,6 +1217,17 @@
     type HeatmapRow,
     type DashboardOverview,
   } from '@/api/dashboard';
+  import {
+    createDashboardChatSession,
+    streamDashboardChatMessage,
+    type ReplyContent,
+  } from '@/api/chat';
+  import ExecChatAiBubbleContent from '@/components/chat/ExecChatAiBubbleContent.vue';
+  import {
+    runExecStyleSseChat,
+    finalizeExecStyleMessage,
+    isStreamAbortError,
+  } from '@/utils/execStreamReply';
   import { Alova } from '@/utils/http/alova/index';
   import { useMessage, useDialog, NProgress } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
@@ -1919,10 +1944,27 @@
 
   const showAiInsightDrawer = ref(false);
   const aiInsightInput = ref('');
+  /** 与 /api/v1/chat/dashboard/sessions 对齐，抽屉每次打开会重置 */
+  const aiInsightChatSessionId = ref<string | null>(null);
+  const aiInsightSending = ref(false);
+  /** 流式对话进行中 abort，避免关闭抽屉/切路由后仍收 delta 导致状态与遮罩异常 */
+  const aiInsightStreamAbort = ref<AbortController | null>(null);
+
+  function takeAiInsightAbortSignal(): AbortSignal {
+    aiInsightStreamAbort.value?.abort();
+    const c = new AbortController();
+    aiInsightStreamAbort.value = c;
+    return c.signal;
+  }
+
   const aiInsightChatRef = ref<HTMLElement | null>(null);
   interface AiInsightMsg {
     role: 'user' | 'ai';
     content: string;
+    thinking?: string;
+    partialReply?: ReplyContent | null;
+    replyContent?: ReplyContent | null;
+    jsonStream?: string;
   }
   const aiInsightMessages = ref<AiInsightMsg[]>([]);
   const aiInsightPresets = [
@@ -1951,18 +1993,73 @@
     aiInsightInput.value = text;
   }
 
-  /** 点击快捷问题：直接发送并获取回复 */
-  function triggerPresetQuestion(text: string) {
+  function dashboardChatContextPrefix(): string {
+    const t = activeTask.value;
+    return t ? `[当前看板任务：${t.name}，taskId=${t.id}]\n` : '';
+  }
+
+  watch(showAiInsightDrawer, (open) => {
+    if (!open) {
+      aiInsightStreamAbort.value?.abort();
+      aiInsightStreamAbort.value = null;
+      aiInsightSending.value = false;
+    }
+  });
+
+  /** 点击快捷问题：流式回复，失败时回退 mock */
+  async function triggerPresetQuestion(text: string) {
     aiInsightMessages.value.push({ role: 'user', content: text });
     scrollAiInsightToBottom();
-    setTimeout(() => {
-      const reply = generateMockFollowUpReply(text);
-      aiInsightMessages.value.push({
-        role: 'ai',
-        content: reply,
-      });
+    if (!aiInsightChatSessionId.value) {
+      try {
+        const created = await createDashboardChatSession().send();
+        aiInsightChatSessionId.value = created.sessionId;
+      } catch {
+        message.error('无法创建会话');
+        aiInsightMessages.value.push({
+          role: 'ai',
+          content: generateMockFollowUpReply(text),
+        });
+        scrollAiInsightToBottom();
+        return;
+      }
+    }
+    const sid = aiInsightChatSessionId.value!;
+    const line = dashboardChatContextPrefix() + text;
+    aiInsightMessages.value.push({ role: 'ai', content: '正在生成…' });
+    const idx = aiInsightMessages.value.length - 1;
+    aiInsightSending.value = true;
+    try {
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamDashboardChatMessage,
+        sid,
+        line,
+        (p) => {
+          aiInsightMessages.value[idx] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+          };
+          scrollAiInsightToBottom();
+        },
+        { signal: takeAiInsightAbortSignal() }
+      );
+      aiInsightMessages.value[idx] = {
+        ...finalizeExecStyleMessage(result, thinkingSnapshot),
+      };
+    } catch (e) {
+      if (!isStreamAbortError(e)) {
+        aiInsightMessages.value[idx] = {
+          role: 'ai',
+          content: generateMockFollowUpReply(text),
+        };
+      }
+    } finally {
+      aiInsightSending.value = false;
       scrollAiInsightToBottom();
-    }, 400);
+    }
   }
 
   function onAiInsightKeydown(e: KeyboardEvent) {
@@ -2080,26 +2177,27 @@
     return generateMockTaskAnalysis();
   });
 
-  /** 打开 AI 洞察并自动生成分析报告 */
-  function openAiInsightWithAnalysis() {
+  /** 打开 AI 洞察抽屉；不自动请求首条回复，由用户在输入框或快捷问题中发起 */
+  async function openAiInsightWithAnalysis() {
     showAiInsightDrawer.value = true;
-    // 清空历史，重新开始分析
+    aiInsightChatSessionId.value = null;
     aiInsightMessages.value = [];
-    // 延迟一下让抽屉动画完成再显示分析
-    setTimeout(() => {
-      const analysis = generateMockTaskAnalysis();
-      aiInsightMessages.value.push({
-        role: 'ai',
-        content: analysis,
-      });
-      scrollAiInsightToBottom();
-    }, 300);
+    await nextTick();
+    scrollAiInsightToBottom();
   }
 
-  /** 追问：根据用户输入生成 mock 回复 */
+  /** 追问：离线演示用（接口不可用时回退） */
   function generateMockFollowUpReply(question: string): string {
     const t = activeTask.value;
     const q = question.toLowerCase();
+    const trimmed = question.trim();
+
+    if (
+      /^(你好|您好|hi|hello|在吗|嗨)[!！。.\s]*$/i.test(trimmed) ||
+      (trimmed.length <= 8 && /^(谢谢|感谢|好的|ok|收到)$/i.test(trimmed))
+    ) {
+      return `你好！我是看板智能助手，已连接当前任务「${t?.name || '未选任务'}」上下文。\n\n可直接问完成率、区域或门店排名；也可点快捷问题。若上方显示「离线演示」，说明暂时无法访问机器人接口。`;
+    }
 
     // 识别关键词并返回相应的 mock 数据
     if (q.includes('门店') || q.includes('store') || q.includes('排名')) {
@@ -2179,35 +2277,66 @@
 • 补推机制：对系统故障期间受影响学员自动延长 24h 并重新推送`;
     }
 
-    // 默认回复
-    return `已收到你的追问：「${question}」
-
-我已在分析「${t?.name || '当前任务'}」的相关数据。由于当前为演示模式，我基于看板数据生成了模拟解读。
-
-你可以尝试询问以下方向获取更详细分析：
-• 「哪些门店最落后？」 - 查看门店排名
-• 「导出逾期名单」 - 查看逾期学员清单
-• 「区域对比」 - 查看各 RTM 区域表现
-• 「近7日趋势」 - 查看完成趋势
-• 「为什么进度慢」 - 查看原因分析
-
-如需真实 AI 分析能力，后续将对接大模型 API。`;
+    // 默认回复（仅离线兜底，避免与首条报告重复一大段说明）
+    return `已收到：「${question}」\n\n可继续问：门店排名、区域对比、逾期名单、近 7 日趋势、进度原因等；或点快捷问题。`;
   }
 
-  function handleAiInsightSend() {
+  async function handleAiInsightSend() {
     const text = aiInsightInput.value.trim();
     if (!text) return;
     aiInsightMessages.value.push({ role: 'user', content: text });
     aiInsightInput.value = '';
     scrollAiInsightToBottom();
-    setTimeout(() => {
-      const reply = generateMockFollowUpReply(text);
-      aiInsightMessages.value.push({
-        role: 'ai',
-        content: reply,
-      });
+    if (!aiInsightChatSessionId.value) {
+      try {
+        const created = await createDashboardChatSession().send();
+        aiInsightChatSessionId.value = created.sessionId;
+      } catch {
+        message.error('无法创建会话');
+        aiInsightMessages.value.push({
+          role: 'ai',
+          content: generateMockFollowUpReply(text),
+        });
+        scrollAiInsightToBottom();
+        return;
+      }
+    }
+    const sid = aiInsightChatSessionId.value!;
+    const line = dashboardChatContextPrefix() + text;
+    aiInsightMessages.value.push({ role: 'ai', content: '正在生成…' });
+    const idx = aiInsightMessages.value.length - 1;
+    aiInsightSending.value = true;
+    try {
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamDashboardChatMessage,
+        sid,
+        line,
+        (p) => {
+          aiInsightMessages.value[idx] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+          };
+          scrollAiInsightToBottom();
+        },
+        { signal: takeAiInsightAbortSignal() }
+      );
+      aiInsightMessages.value[idx] = {
+        ...finalizeExecStyleMessage(result, thinkingSnapshot),
+      };
+    } catch (e) {
+      if (!isStreamAbortError(e)) {
+        aiInsightMessages.value[idx] = {
+          role: 'ai',
+          content: generateMockFollowUpReply(text),
+        };
+      }
+    } finally {
+      aiInsightSending.value = false;
       scrollAiInsightToBottom();
-    }, 600);
+    }
   }
 
   /** 总部看板：已下发任务 PATCH 后 WS 推送 task_updated，同步列表/详情中的 ddl 与预警规则 */
@@ -3232,6 +3361,16 @@
 
   onActivated(() => {
     loadTasks();
+  });
+
+  /**
+   * keepAlive 下切走路由时关闭抽屉；并中止未结束的 SSE，避免遮罩/状态与后台 delta 错乱。
+   */
+  onDeactivated(() => {
+    aiInsightStreamAbort.value?.abort();
+    aiInsightStreamAbort.value = null;
+    aiInsightSending.value = false;
+    showAiInsightDrawer.value = false;
   });
 </script>
 

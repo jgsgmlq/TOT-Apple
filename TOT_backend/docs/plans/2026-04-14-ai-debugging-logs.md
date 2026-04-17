@@ -101,7 +101,7 @@
 - 保留旧版 `chatToolsService` 实现文件，支持通过开关切回静态路由。
 - 插件加载失败时降级为“仅加载核心内置工具”模式，避免整体不可用。
 
-## 第三阶段：统一 Agent 架构（长期）
+## 第三阶段：统一 Agent 架构（长期，基础能力已落地 ✅）
 **目标：** 将静态命令式 Agent（`server/agent/core.js`）与动态会话式 Agent（`chatAgentRunner.js`）合并为一个统一、内聚的框架。
 
 *   **步骤 3.1：将 Skill 作为工具**
@@ -260,6 +260,23 @@
 - Redis/内存态开关可关闭，退回“无会话缓存”的当前模式。
 - Skill-as-Tool 调用链路按能力开关逐个上线，出现异常可单能力下线。
 
+### 第三阶段当前实现状态（本轮代码对齐）
+
+- `chatAgentRunner.js`
+  - 已实现统一守门：`deny / chat_only / tool_action`。
+  - `analytics_query` 在 `intent_routing` 下已增加前置约束：缺失 `entities.analysisType` 时拒绝进入 `tool_runAnalytics`，并返回可追问提示。
+  - 已统一 `replyContent` 兜底归一化（成功/降级/异常路径）。
+- `chatToolsService.js`
+  - 已动态加载 `server/chat_tools/*.js`，并统一做参数、权限、超时、错误包装。
+- `chatSessionStateService.js`
+  - 已实现 `memory_then_redis` 第一阶段（内存态）：TTL、容量、LRU。
+  - 已补齐会话安全约束：`roleScope/regionScope` 指纹变化触发失效；版本号用于并发写保护。
+- `chatAnalyticsService.js` + `tool_runAnalytics.js`
+  - EC-P0：`quantile_duration` / `completion_time_distribution` / `metric_correlation` 已可执行。
+  - EC-P1：`progress_variance_by_channel` / `completion_rate_forecast` / `trimmed_mean_duration` 已提供基础可执行实现。
+- `tool_getWarnings.js`
+  - 已实现降级链路：`warning -> store-rank -> overview -> trend`，并附 `dataSource` 与 `caliberNote`。
+
 ## 文档同步清单（执行本路线图时必须同步）
 > 说明：本节在**进入代码实施阶段**时生效；当前“仅文档打磨阶段”以「执行决策记录」中的 `doc_sync=plan_only` 为准。
 
@@ -274,23 +291,39 @@
 
 > 建议先完成 M1 并稳定 24~48 小时，再进入 M2，避免问题叠加导致定位困难。
 
-## 执行决策记录（文档阶段）
+## 执行决策记录（已进入代码阶段）
 
-> 以下为本轮确认的默认决策，用于后续实现阶段对齐；若实现时有变化，需先更新本节再改代码。
+> 以下为当前有效决策与已落地状态；若后续实现变化，需先更新本节再改代码。
 
-- **当前范围：** 仅打磨文档，不修改代码。
+- **当前范围：** 已进入代码实施与验收留证阶段。
 - **contract_shape：** `replycontent_only`（仅保持 `replyContent` 兼容形态，不引入 `messageType` 新形态）。
 - **intent_placement：** `hybrid`（识别在 `chatIntentService`，编排在 `chatAgentRunner`）。
 - **warning_fallback：** `store_rank_first`（`store-rank -> overview -> trend`）。
-- **analytics_batch：** 文档阶段仅定义，不做代码实现分批。
+- **analytics_batch：** `EC-P0 + EC-P1 base` 已落地（预测仍为基线模型）。
 - **session_store：** `memory_then_redis`（实现时先内存，预留 Redis 扩展）。
 - **env_naming：** `add_minimal`（仅新增最小必要配置项）。
 - **testset_owner：** `mixed`（用户提供核心题，AI 补齐长尾题）。
 - **gray_release：** `N/A`（文档阶段不涉及上线灰度策略）。
-- **doc_sync：** `plan_only`（本轮仅维护本计划文档）。
+- **doc_sync：** `code_and_docs_synced`（已同步 04/09/backend 文档）。
 - **function_calling_policy：** `model_primary_with_code_guardrails`（模型主调度，代码强校验）。
 - **message_type_policy：** `internal_only`（不作为对外契约）。
 - **analytics_compute_policy：** `sql_filter_plus_node_compute`（SQLite 过滤 + Node 统计）。
+
+## Phase 3 验收留证（本轮）
+
+- 语法校验通过：`chatAgentRunner.js`、`chatSessionStateService.js`、`chatAnalyticsService.js`、`tool_runAnalytics.js`、`tool_getWarnings.js`。
+- 会话状态安全验证通过：
+  - 同 scope 命中缓存：`hitA=true`
+  - scope 变化后缓存失效：`hitB=false`
+- 守门行为验证通过：
+  - `chat_only` 与 `deny` 可稳定命中。
+- 分析能力冒烟通过：
+  - `quantile_duration`
+  - `completion_time_distribution`
+  - `metric_correlation`
+  - `progress_variance_by_channel`
+  - `completion_rate_forecast`
+  - `trimmed_mean_duration`
 
 ## Phase 1 最小验收模板（待执行）
 
@@ -328,3 +361,144 @@
   - 通过/未通过
   - 未通过项列表
   - 修复计划与回归时间
+
+## Phase 1 实测记录模板（可直接填空）
+
+> 用法：复制本节到当日执行记录中，逐项填写。  
+> 建议同时保存原始请求/响应日志文件路径（如 `server/logs/ai_debug.log` 或导出 CSV）。
+
+### 1) 执行元信息
+
+- 执行日期：
+- 执行环境：`dev / staging / prod-shadow`
+- 执行人：
+- 代码版本（commit / branch）：
+- 模型与开关：
+  - `CHAT_AGENT_MODE=`
+  - `CHAT_SESSION_STATE_ENABLED=`
+  - 其他相关开关：
+
+### 2) 用例统计汇总
+
+- 闲聊/能力咨询：共 `20` 条，实际执行 `__` 条
+- 看板分析：共 `20` 条，实际执行 `__` 条
+- 总计：`__` 条
+
+### 3) 结果指标（填数值）
+
+- 闲聊类 `JSON.parse` 失败数：`__ / 20`  
+  - 失败率：`__ %`
+- 闲聊类幻觉样本数：`__ / 20`  
+  - 幻觉率：`__ %`（目标：`<=5%` 波动）
+- 看板分析类结构化展示异常数：`__ / 20`
+- Assistant 历史上下文 token 中位数：
+  - 改造前：`__`
+  - 改造后：`__`
+  - 降幅：`__ %`（目标：`>=20%`）
+
+### 4) 判定结论
+
+- [ ] **Phase 1 通过**
+- [ ] **Phase 1 未通过**
+
+未通过项（若有）：
+
+1. 
+2. 
+3. 
+
+### 5) 异常样本（至少 3 条）
+
+| CaseID | 问题类型 | 用户问题 | 实际 `intentType` | 是否触发 Tool | 主要异常 | 修复建议 |
+|---|---|---|---|---|---|---|
+| E01 |  |  |  |  |  |  |
+| E02 |  |  |  |  |  |  |
+| E03 |  |  |  |  |  |  |
+
+### 6) 回归计划
+
+- 修复负责人：
+- 预计修复时间：
+- 回归时间：
+- 回归范围：
+  - [ ] 闲聊 20 条重跑
+  - [ ] 看板分析 20 条重跑
+  - [ ] token 中位数复测
+  - [ ] 关键异常样本复测
+
+## Phase 1 验收题库（建议版）
+
+> 目标：覆盖“闲聊/能力咨询”与“看板分析”两大类，便于一次性跑完 40 条最小验收。  
+> 使用建议：按顺序执行，记录 `intentType`、是否触发 Tool、`replyContent` 结构完整性与异常说明。
+
+### A. 闲聊 / 能力咨询（20 条）
+
+1. 你好  
+2. 您好  
+3. hi  
+4. hello  
+5. 谢谢  
+6. 你是谁  
+7. 你能做什么  
+8. 帮我介绍一下你的能力  
+9. 你支持哪些分析  
+10. 你会查询哪些数据  
+11. 我可以问你哪些问题  
+12. 你支持门店下钻吗  
+13. 你能查预警吗  
+14. 你能做统计分析吗  
+15. 你支持分位数吗  
+16. 你支持相关性分析吗  
+17. 你支持趋势预测吗  
+18. 现在你在线吗  
+19. 明白了，谢谢你  
+20. 好的，先这样
+
+### B. 看板分析（20 条）
+
+#### progress_query（至少 4 条）
+
+1. Q1 新品培训完成率是多少？  
+2. 华东区整体完成率是多少？  
+3. 当前已完成和未完成人数分别是多少？  
+4. 截止今天整体达成率是多少？
+
+#### project_status（至少 4 条）
+
+5. 现在有哪些进行中的培训任务？  
+6. Trade-in 项目目前处于什么状态？  
+7. 当前任务列表里哪个最接近截止时间？  
+8. 这个月新建并已下发的任务有哪些？
+
+#### warning_query（至少 4 条）
+
+9. 现在有哪些风险门店需要关注？  
+10. 哪些门店完成率低于 80%？  
+11. 当前预警里最差的门店有哪些？  
+12. 今天有哪些区域需要优先跟进？
+
+#### drill_down（至少 4 条）
+
+13. 华东区表现怎么样？  
+14. 给我最差的 5 家门店  
+15. 上海环球港店当前进度如何？  
+16. 华南区各门店完成率明细给我看一下
+
+#### analytics_query（至少 4 条）
+
+17. 华东区完成耗时 P90 是多少？  
+18. 大家一般在任务下发后第几小时完成？  
+19. 催办次数和完成率相关吗？  
+20. 去掉最快最慢各 5%，平均完成耗时是多少？
+
+### C. 结果判定快速规则（执行时）
+
+- 闲聊类：
+  - 优先 `chat_only`，不触发工具；
+  - 返回应可被稳定包装为 `replyContent`。
+- 分析类：
+  - 必须稳定返回 `replyContent` 结构；
+  - `analytics_query` 缺少 `analysisType` 时应友好拒绝并给追问建议。
+- 所有场景：
+  - 不应出现裸错误栈；
+  - 不应出现越权数据泄漏。

@@ -1,5 +1,10 @@
 # ToT API 接口定义文档
 
+### v1.5.0（2026-04-16）
+
+- **预警监控多维度下钻**：`GET /dashboard/warnings` 新增 **`level`** 查询参数，支持：`store`（默认）、`rtm`、`format`、`dealer`（或 `dealer_name`）。响应体 `data.list` 增加 **`targetId` / `targetName` / `targetType`** 统一字段（同时保留 `storeId`/`storeName` 兼容字段）。
+- **种子数据增强**：`seed.js` 扩展了 3 个专项预警测试任务（`TASK_WARN_START`, `TASK_WARN_P1`, `TASK_WARN_P0`）并配置了相应的员工进度画像；脚本末尾新增自动触发预警扫描逻辑，确保生成真实的 `notification_events` 以供看板概览率值对账。
+
 ### v1.4.23（2026-04-15）
 
 - **WebSocket `task_assigned`**：向在线店员推送成功时 **不再** 更新 `task_assignments.received_at`（避免与「详情已读」混淆）；改为更新 **`users.last_login_at`**，使看板 **`taskReachRate`** 中「下发后登录」条件覆盖 **WS 实时送达**（`u.last_login_at >= ta.created_at`）。`received_at` 仍由 **`POST /assignments/:id/viewed`**、**开始任务** 等路径按原语义写入。实现见 `server/ws/manager.js`。
@@ -1694,9 +1699,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
   | warningLevel | string | 否 | 预警级别：`p1` / `p0`（临期，未传则两者混合）；`startDelay`（起步异常，规则与 `evaluateAndTriggerAutoNudges` 的 startDelay 一致：任务时间进度占比 ≥ `tasks.auto_nudge_rules.startDelay` 且该店存在未完成且 `progress=0` 的 assignment；**不依赖**是否已写入 `notification_events`） |
+  | level | string | 否 | 聚合维度：`store`（默认，门店）、`rtm`（渠道）、`format`（业态）、`dealer`（经销商） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
-  | rtm | string | 否 | 可选门店下钻，同 §5.1 |
+  | rtm | string | 否 | 可选门店下钻过滤，同 §5.1 |
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
   | storeId | string | 否 | 同上 |
@@ -1711,17 +1717,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           // 预警数据从 task_assignments 实时聚合计算（无独立 alerts 存储表）
           // P1/P0：与 tasks.auto_nudge_rules.deadlineCrisis 及 autoNudge 扫描一致（默认 48h/24h 可配置）
           "taskId": "string",
-          "storeId": "string",      // stores.id
-          "storeName": "string",    // JOIN stores.name
+          "targetId": "string",    // 聚合维度 ID（如门店 ID 或 RTM 名称）
+          "targetName": "string",  // 聚合维度名称
+          "targetType": "string",  // 聚合维度类型 (store/rtm/format/dealer)
+          "storeId": "string",      // 兼容字段：同 targetId
+          "storeName": "string",    // 兼容字段：同 targetName
           "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
-          "warningRate": 20.0,      // 与 §5.1 同公式在单店：起步异常=（进度仍为0且未完成人数）/门店人数×100；临期 P0/P1=未完成人数/门店人数×100（且任务已落在对应临期带）
-          "completionRate": 45.0,   // 门店完成率（task_assignments），与 warningRate 不同
+          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0/P1=未完成人数/总人数×100（且任务已落在对应临期带）
+          "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
           "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
           "triggerDesc": "距 Deadline 不足N小时，仍未完成（P1）", // N 为任务配置的 p1 小时（默认 48）
           "aiSuggestion": "建议总部发起红牌催办，需重点跟进", // MVP 阶段为模板文案，非 AI 实时生成
-          "calculatedAt": "string"  // 本次聚合计算时间（ISO8601）
+          "calculatedAt": "string"  // 本次聚合计算时间（YYYY-MM-DD HH:MM:SS）
         }
       ],
       "pagination": {
@@ -1898,7 +1907,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
-> **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前实现模式为 `intent_routing`（MVP），通过环境变量 `CHAT_AGENT_MODE=function_calling` 可切换至 FC 模式（需完成 Task 9 升级步骤）。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
+> **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前支持 `intent_routing` 与 `function_calling` 两种模式（通过 `CHAT_AGENT_MODE` 切换）。会话态采用 `memory_then_redis` 设计：先内存缓存（TTL=30m，容量=20，LRU），再预留 Redis 扩展。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
 
 > **产品行为、意图清单、`stores.region` 权限、数据溯源、LLM 可插拔说明：** 见 [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md)（与 PRD 4.0.5 §5.7 / §5.7.1 对齐）。
 
@@ -1942,6 +1951,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 400：`roleScope=regional` 但 `regions` 为空或未传
   - 400：`roleScope=rtm` 但 `rtm` 为空
 
+### 6.1a 总部看板机器人会话（与 Executive 等价）**P1**
+
+- **说明**：与 **§6.1～6.2.1** 及消息相关接口 **同一套** `chatService`、同一 `chat_sessions` / `chat_messages` 表；仅路径前缀与角色不同，供 **总部端看板** 内嵌机器人对话使用。
+- **路径前缀**：`/chat/dashboard/sessions`（完整 URL：`/api/v1/chat/dashboard/sessions/...`）
+- **权限**：`central` 或 `admin`（与看板总部能力对齐）
+- **接口清单**（与 executive 一一对应，将路径中的 `executive` 换为 `dashboard` 即可）：
+  - `POST /chat/dashboard/sessions` — 创建会话
+  - `POST /chat/dashboard/sessions/{sessionId}/messages` — 发消息（支持 `stream: true` SSE，约定同 §6.2）
+  - `GET /chat/dashboard/sessions/{sessionId}/history` — 分页历史
+  - `DELETE /chat/dashboard/sessions/{sessionId}` — 删除会话
+  - `POST .../messages/{messageId}/feedback` — 反馈
+  - `POST .../messages/{messageId}/regenerate` — 重新生成
+- **会话隔离**：会话仍按 **当前登录用户 `user_id`** 归属；总部账号与 executive 账号各自会话互不可见。
+
 ### 6.2 发送聊天消息（Agent处理）**P1**
 
 - **接口名称**：发送消息给Executive Agent
@@ -1955,10 +1978,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "messageId": "string", // 消息唯一ID（前端生成）
     "content": "string", // 自然语言问题，必填
     "executiveId": "string", // 发送人ID
-    "contextId": "string" // 上下文ID，必填（创建会话返回）
+    "contextId": "string", // 上下文ID，必填（创建会话返回）
+    "stream": false
   }
   ```
-- **响应体（成功）**：
+  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，与看板智能洞察 §5.7 一致：`event: delta` 推送模型增量（`data` 为 `{ "text": "...", "phase": "content"|"reasoning" }`）；成功结束时 `event: done`，`data` 为 `{ "code": 200, "message": "success", "data": { ...与下方 JSON 成功体 data 相同... }, "requestId": "..." }`；失败时 `event: error`。流式仅作用于 **intent_routing** 下最终「格式化回答」的 LLM；**function_calling** 模式仍可能在无增量后一次性返回 `done`。
+- **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
     "code": 200,

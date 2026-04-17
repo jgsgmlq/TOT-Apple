@@ -1,0 +1,15 @@
+{
+  "cases": [
+    { "input": "Q1培训完成率？", "expectIntent": "progress_query" },
+    { "input": "华东区怎么样？", "expectIntent": "drill_down" },
+    { "input": "华东区 P90 完成耗时是多少？", "expectIntent": "analytics_query", "expectAnalysisType": "quantile_duration" },
+    { "input": "完成时间是怎么分布的？", "expectIntent": "analytics_query", "expectAnalysisType": "completion_time_distribution" },
+    { "input": "现在有哪些进行中的培训任务？", "expectIntent": "project_status" },
+    { "input": "有哪些门店需要重点关注？", "expectIntent": "warning_query" },
+    { "input": "各区域完成率汇总是多少？", "expectIntent": "progress_query" },
+    { "input": "华东区完成率", "expectIntent": "progress_query" },
+    { "input": "完成率的 P90 分位数是多少？", "expectIntent": "analytics_query", "expectAnalysisType": "quantile_duration" },
+    { "input": "完成率分布直方图", "expectIntent": "analytics_query", "expectAnalysisType": "completion_time_distribution" },
+    { "input": "你好！", "expectIntent": "unknown" }
+  ]
+}

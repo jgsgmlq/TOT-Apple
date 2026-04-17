@@ -2,8 +2,8 @@
 
 > **MVP P0 — 前后端分离 · 局域网 H5 Web App**
 >
-> 产品需求口径：以 [`TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md) 为准。
-> 完整文档索引见 [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md)。
+> 产品需求口径：以 `[TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md)` 为准。
+> 完整文档索引见 `[TOT_backend/docs/README.md](TOT_backend/docs/README.md)`。
 
 **更新日期：** 2026-04-13
 
@@ -39,6 +39,7 @@
 **TOT（Training On Track）** 是面向 Apple 零售体系的培训任务管理平台；产品愿景约 **50 家门店 × 300 名学习对象**（见 PRD）。**当前开发用 seed** 为 **10 店 × 100 人**，并预置 **3 个任务**与对应分配，用于看板梯度、预警与 MyPal Mock 联调（详见下文「Seed 数据库」）。
 
 **P0 双主线：**
+
 1. **任务管理闭环** — 总部下发培训任务 → 学习对象（店员）执行 → 规则引擎自动预警提醒
 2. **总部数据看板** — 完成率、按时完成率、RTM L4、区域热力图、预警列表等核心指标
 
@@ -48,39 +49,45 @@
 
 ## 技术栈
 
-| 层 | 技术 | 说明 |
-|----|------|------|
-| **后端** | Node.js v18+ · Express 4.x | REST API + WebSocket |
-| **数据库** | SQLite 3 + WAL 模式（`better-sqlite3`） | 同步读写，禁止对 `db.*` 使用 `await` |
-| **认证** | JWT · HS256 · 7 天有效 | `Authorization: Bearer <token>` |
-| **实时** | WebSocket（主）+ REST 轮询（降级） | `ws://host:3000/ws?token=<JWT>` |
-| **前端** | Vue 3 + Vite · Alova（HTTP）| 总部 / 店员 / Executive 多入口 |
-| **包管理** | 后端 npm · 前端 pnpm | |
-| **进程管理** | PM2 | 共享服务器上的守护进程 |
-| **网络隧道** | Tailscale + Tailscale Funnel | 内网 P2P VPN + 按需公网 HTTPS |
+
+| 层        | 技术                                  | 说明                              |
+| -------- | ----------------------------------- | ------------------------------- |
+| **后端**   | Node.js v18+ · Express 4.x          | REST API + WebSocket            |
+| **数据库**  | SQLite 3 + WAL 模式（`better-sqlite3`） | 同步读写，禁止对 `db.`* 使用 `await`      |
+| **认证**   | JWT · HS256 · 7 天有效                 | `Authorization: Bearer <token>` |
+| **实时**   | WebSocket（主）+ REST 轮询（降级）           | `ws://host:3000/ws?token=<JWT>` |
+| **前端**   | Vue 3 + Vite · Alova（HTTP）          | 总部 / 店员 / Executive 多入口         |
+| **包管理**  | 后端 npm · 前端 pnpm                    |                                 |
+| **进程管理** | PM2                                 | 共享服务器上的守护进程                     |
+| **网络隧道** | Tailscale + Tailscale Funnel        | 内网 P2P VPN + 按需公网 HTTPS         |
+
 
 ---
 
 ## 用户角色与入口
 
-| 角色 | 说明 | 前端路由 | 典型账号 |
-|------|------|----------|---------|
-| `central` | 总部运营，全量权限 | `/hq` | central / Train2026! |
-| `employee` | 店员，仅本人数据 | `/employee/login` | emp_E002 / Train2026! |
+
+| 角色          | 说明                        | 前端路由                              | 典型账号                   |
+| ----------- | ------------------------- | --------------------------------- | ---------------------- |
+| `central`   | 总部运营，全量权限                 | `/hq`                             | central / Train2026!   |
+| `employee`  | 店员，仅本人数据                  | `/employee/login`                 | emp_E002 / Train2026!  |
 | `executive` | 高管，Executive Chat（自然语言查数） | `/executive/login` → `/executive` | executive / Train2026! |
-| `admin` | 系统管理员 | — | admin / Admin2026! |
+| `admin`     | 系统管理员                     | —                                 | admin / Admin2026!     |
+
 
 > 店员 username 格式：`emp_{员工表 id}`（如 `emp_E001`～`emp_E100`，对应 `employees.id`）。也可用 **员工邮箱**登录（与 MyPal `seedId` 对齐），形如 `e001@mypal.seed.local`～`e100@mypal.seed.local`。联调推荐账号见「测试账号」与执行 `npm run seed` 末尾打印。
 
 **本地开发完整网址（Vite 默认端口 8001）：**
 
-| 入口 | URL |
-|------|-----|
-| 总部 | `http://localhost:8001/hq` |
-| 店员 | `http://localhost:8001/employee/login` |
+
+| 入口             | URL                                                                              |
+| -------------- | -------------------------------------------------------------------------------- |
+| 总部             | `http://localhost:8001/hq`                                                       |
+| 店员             | `http://localhost:8001/employee/login`                                           |
 | Executive Chat | `http://localhost:8001/executive/login`（登录后进入 `http://localhost:8001/executive`） |
 
-接口规格见 [`TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md`](TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md)。
+
+接口规格见 `[TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md](TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md)`。
 
 **终端形态：** 总部使用 PC，店员使用手机（iPhone 为主）。
 
@@ -128,7 +135,7 @@ TOT-Apple/                         # 仓库根目录
 
 团队共用一台 **Mac Studio**（Tailscale IP `100.65.95.128`），后端由 **PM2** 守护，平时无需手动启动后端。
 
-**前提：** 已完成 Tailscale 接入（见 [`TOT_backend/docs/team-onboarding.md`](TOT_backend/docs/team-onboarding.md)）。
+**前提：** 已完成 Tailscale 接入（见 `[TOT_backend/docs/team-onboarding.md](TOT_backend/docs/team-onboarding.md)`）。
 
 ```bash
 # 1. 确认后端正在运行（在 Mac Studio 上）
@@ -141,12 +148,14 @@ pnpm run dev                 # 默认端口 8001
 ```
 
 访问：
+
 - **总部**：`http://localhost:8001/hq`
 - **店员**：`http://localhost:8001/employee/login`
 - **Executive Chat**：`http://localhost:8001/executive/login`（登录后为 `http://localhost:8001/executive`）
 
 > `TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` 默认留空（Vite 代理到本机 `:3000`）。  
 > 若需直连共享后端，在 `.env.development.local`（**不要提交**）中覆盖：
+>
 > ```
 > VITE_GLOB_API_URL=http://100.65.95.128:3000
 > ```
@@ -172,11 +181,13 @@ tailscale funnel status                      # 输出 https://<machine>.<tailnet
 ```
 
 将 Funnel 地址发给演示设备：
-- 总部：`https://<...>/hq`
-- 店员：`https://<...>/employee/login`
-- Executive Chat：`https://<...>/executive/login`（登录后为 `https://<...>/executive`）
+
+- 总部：`https://skylermac-studio.tail660e40.ts.net/hq`
+- 店员：`https://skylermac-studio.tail660e40.ts.net/employee`
+- Executive Chat：`https://skylermac-studio.tail660e40.ts.net/executive`
 
 演示结束后关闭隧道：
+
 ```bash
 tailscale funnel reset
 ```
@@ -189,11 +200,13 @@ tailscale funnel reset
 
 #### 环境要求
 
-| 工具 | 版本 | 验证 |
-|------|------|------|
-| Node.js | v18+ | `node --version` |
-| npm | v9+ | `npm --version` |
-| pnpm | 最新稳定版 | `pnpm --version` |
+
+| 工具      | 版本    | 验证               |
+| ------- | ----- | ---------------- |
+| Node.js | v18+  | `node --version` |
+| npm     | v9+   | `npm --version`  |
+| pnpm    | 最新稳定版 | `pnpm --version` |
+
 
 #### 启动后端
 
@@ -211,6 +224,7 @@ npm run dev
 ```
 
 **预期输出（`JWT_SECRET` 未设置时会多一行 `[auth] WARNING`；Agent 技能注册日志在其前）：**
+
 ```
 [auth] WARNING: JWT_SECRET not set, using default dev secret. DO NOT use in production.
 MVP LAN server running at http://0.0.0.0:3000
@@ -219,11 +233,13 @@ MVP LAN server running at http://0.0.0.0:3000
   WS:      ws://localhost:3000/ws?token=<JWT>
 [auto-nudge scheduler] every 3600s
 ```
+
 若已在 `TOT_backend/.env` 中设置 `JWT_SECRET`，则不会出现 `[auth] WARNING` 行；`LAN` 行会解析为本机第一个非回环 IPv4，解析不到时会有占位提示。
 
 **在浏览器打开 `http://localhost:3000`：** 只会看到 JSON API 说明（本仓库无静态页面）。**日常请用前端** `http://localhost:8001`（见下文「启动前端」）。若控制台出现 `com.chrome.devtools.json` 与 CSP 相关提示，多为 Chrome DevTools 的探测行为，可忽略。
 
 **健康检查：**
+
 ```bash
 curl http://localhost:3000/api/health
 # {"ok":true,"service":"mvp-lan-api"}
@@ -256,22 +272,26 @@ pnpm run dev                  # 端口 8001
 
 后端配置文件：`TOT_backend/.env`（从 `TOT_backend/.env.example` 复制）。
 
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `JWT_SECRET` | 生产必填 | （代码内默认 `mvp-training-secret-2026`） | JWT 签名密钥；未设置时启动会打印 `[auth] WARNING` |
-| `PORT` | 否 | `3000` | 后端监听端口 |
-| `MYPAL_MOCK` | 否 | `0` | 设为 `1` 启用 MyPal 本地 Mock（内部联调阶段必须） |
-| `MYPAL_ENABLED` | 否 | `0` | 设为 `1` 启用真实 MyPal HTTP 对接（凭证就绪后再开） |
-| `AUTO_NUDGE_SCHEDULER` | 否 | `1` | 设为 `0` 禁用定时催办调度器 |
-| `AUTO_NUDGE_INTERVAL_MS` | 否 | `3600000`（1h） | 催办调度间隔（毫秒） |
-| `DEEPSEEK_API_KEY` | AI 功能必填 | — | DeepSeek API Key，**禁止硬编码** |
+
+| 变量                       | 必填      | 默认值                                | 说明                                  |
+| ------------------------ | ------- | ---------------------------------- | ----------------------------------- |
+| `JWT_SECRET`             | 生产必填    | （代码内默认 `mvp-training-secret-2026`） | JWT 签名密钥；未设置时启动会打印 `[auth] WARNING` |
+| `PORT`                   | 否       | `3000`                             | 后端监听端口                              |
+| `MYPAL_MOCK`             | 否       | `0`                                | 设为 `1` 启用 MyPal 本地 Mock（内部联调阶段必须）   |
+| `MYPAL_ENABLED`          | 否       | `0`                                | 设为 `1` 启用真实 MyPal HTTP 对接（凭证就绪后再开）  |
+| `AUTO_NUDGE_SCHEDULER`   | 否       | `1`                                | 设为 `0` 禁用定时催办调度器                    |
+| `AUTO_NUDGE_INTERVAL_MS` | 否       | `3600000`（1h）                      | 催办调度间隔（毫秒）                          |
+| `DEEPSEEK_API_KEY`       | AI 功能必填 | —                                  | DeepSeek API Key，**禁止硬编码**          |
+
 
 **前端（`TOT_frontend/.env.development`）：**
 
-| 变量 | 说明 |
-|------|------|
+
+| 变量                  | 说明                              |
+| ------------------- | ------------------------------- |
 | `VITE_GLOB_API_URL` | 后端 API 地址，留空则走 Vite 代理到 `:3000` |
-| `VITE_PORT` | Vite 开发端口，默认 `8001` |
+| `VITE_PORT`         | Vite 开发端口，默认 `8001`             |
+
 
 ---
 
@@ -279,18 +299,20 @@ pnpm run dev                  # 端口 8001
 
 ### 文件与职责
 
-| 路径 | 说明 |
-|------|------|
-| `TOT_backend/server/database.db` | 运行时 SQLite 主库（及同目录 `database.db-wal` / `database.db-shm`，WAL 模式时可能出现） |
-| `TOT_backend/server/db/schema.sql` | 建表与索引的权威 SQL |
-| `TOT_backend/server/db/index.js` | 启动时加载库、执行 `schema.sql`，并做列/表迁移（与 `schema.sql` 增量对齐） |
-| `TOT_backend/server/db/seed.js` | 开发用种子数据脚本（**不**随 `npm run dev` 自动执行） |
 
-更细的表说明见 [`TOT_backend/docs/backend/03-DATABASE.md`](TOT_backend/docs/backend/03-DATABASE.md)、[`TOT_backend/docs/specs/01-DATA-MODEL.md`](TOT_backend/docs/specs/01-DATA-MODEL.md)。
+| 路径                                 | 说明                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------- |
+| `TOT_backend/server/database.db`   | 运行时 SQLite 主库（及同目录 `database.db-wal` / `database.db-shm`，WAL 模式时可能出现） |
+| `TOT_backend/server/db/schema.sql` | 建表与索引的权威 SQL                                                          |
+| `TOT_backend/server/db/index.js`   | 启动时加载库、执行 `schema.sql`，并做列/表迁移（与 `schema.sql` 增量对齐）                   |
+| `TOT_backend/server/db/seed.js`    | 开发用种子数据脚本（**不**随 `npm run dev` 自动执行）                                  |
+
+
+更细的表说明见 `[TOT_backend/docs/backend/03-DATABASE.md](TOT_backend/docs/backend/03-DATABASE.md)`、`[TOT_backend/docs/specs/01-DATA-MODEL.md](TOT_backend/docs/specs/01-DATA-MODEL.md)`。
 
 ### 如何执行 Seed（更新 / 补全种子数据）
 
-在 **`TOT_backend/server`** 目录执行：
+在 `**TOT_backend/server`** 目录执行：
 
 ```bash
 cd TOT_backend/server
@@ -332,7 +354,7 @@ npm run dev     # 再启动 API
 ### 日常如何查看或改数据
 
 - **只读浏览 / 简单 SQL：** 使用 [DB Browser for SQLite](https://sqlitebrowser.org/) 打开 `TOT_backend/server/database.db`，或系统自带的 `sqlite3`：  
-  `sqlite3 TOT_backend/server/database.db` → `.tables` / `SELECT ...`  
+`sqlite3 TOT_backend/server/database.db` → `.tables` / `SELECT ...`  
 - **在 Cursor / VS Code 内：** 安装 SQLite 相关扩展后打开 `database.db`。  
 - **注意：** 后端正在运行时写入库文件可能触发锁；重要修改前建议先停止 `npm run dev`，改完再启动。
 
@@ -340,18 +362,20 @@ npm run dev     # 再启动 API
 
 ## 测试账号
 
-| 账号 | 密码 | 角色 | 说明 |
-|------|------|------|------|
-| `central` | `Train2026!` | 总部运营 | 创建/下发任务，查看全网看板 |
-| `executive` | `Train2026!` | Executive（P1）| 自然语言查询看板（全国视角） |
-| `executive_huadong` | `Train2026!` | Executive（P1）| `executive_regions` 预置为华东，用于辖区演示 |
-| `admin` | `Admin2026!` | 系统管理员 | 数据维护 |
-| `emp_E001` | `Train2026!` | 店员（S001 上海环球港）| Seed 标注：优秀门店、画像 0（早鸟完成者） |
-| `emp_E002` | `Train2026!` | 店员（S001）| 通用店员端 smoke 测试 |
-| `emp_E010` | `Train2026!` | 店员（S001）| Seed 标注：优秀门店、画像 9（高风险待催办） |
-| `emp_E091` | `Train2026!` | 店员（S010 哈尔滨）| Seed 标注：预警门店 |
 
-其余店员：`emp_E003`～`emp_E100` 等未在表中逐行列出；**所有**店员邮箱为 `e001@mypal.seed.local`～`e100@mypal.seed.local`，密码均为 `Train2026!`。更完整的画像与门店档位说明以 **`npm run seed` 控制台末尾输出** 为准。
+| 账号                  | 密码           | 角色             | 说明                               |
+| ------------------- | ------------ | -------------- | -------------------------------- |
+| `central`           | `Train2026!` | 总部运营           | 创建/下发任务，查看全网看板                   |
+| `executive`         | `Train2026!` | Executive（P1）  | 自然语言查询看板（全国视角）                   |
+| `executive_huadong` | `Train2026!` | Executive（P1）  | `executive_regions` 预置为华东，用于辖区演示 |
+| `admin`             | `Admin2026!` | 系统管理员          | 数据维护                             |
+| `emp_E001`          | `Train2026!` | 店员（S001 上海环球港） | Seed 标注：优秀门店、画像 0（早鸟完成者）         |
+| `emp_E002`          | `Train2026!` | 店员（S001）       | 通用店员端 smoke 测试                   |
+| `emp_E010`          | `Train2026!` | 店员（S001）       | Seed 标注：优秀门店、画像 9（高风险待催办）        |
+| `emp_E091`          | `Train2026!` | 店员（S010 哈尔滨）   | Seed 标注：预警门店                     |
+
+
+其余店员：`emp_E003`～`emp_E100` 等未在表中逐行列出；**所有**店员邮箱为 `e001@mypal.seed.local`～`e100@mypal.seed.local`，密码均为 `Train2026!`。更完整的画像与门店档位说明以 `**npm run seed` 控制台末尾输出** 为准。
 
 ---
 
@@ -397,28 +421,32 @@ stores → employees → users → tasks → task_assignments
 
 ### 核心表说明
 
-| 表 | 说明 |
-|----|------|
-| `stores` | **Seed：10 家**；含 RTM（Monobrand / Multibrand / Carrier / Education 等）、区域、城市（PRD 目标规模见产品文档） |
-| `employees` | **Seed：100 名**；归属门店，含 MyPal `seedId` 对齐的 `email` |
-| `users` | 登录账号，与 employees 关联（`role`: central / employee / admin） |
-| `tasks` | 培训任务，含平台列表、RTM 筛选规则、截止时间、预警规则（JSON） |
-| `task_assignments` | 任务 × 员工的分配记录，状态机最小执行单元 |
-| `notification_events` | 预警 / 提醒通知事件，支持已读回执 |
-| `nudge_records` | 催办事实记录（完整审计） |
+
+| 表                     | 说明                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| `stores`              | **Seed：10 家**；含 RTM（Monobrand / Multibrand / Carrier / Education 等）、区域、城市（PRD 目标规模见产品文档） |
+| `employees`           | **Seed：100 名**；归属门店，含 MyPal `seedId` 对齐的 `email`                                         |
+| `users`               | 登录账号，与 employees 关联（`role`: central / employee / admin）                                  |
+| `tasks`               | 培训任务，含平台列表、RTM 筛选规则、截止时间、预警规则（JSON）                                                      |
+| `task_assignments`    | 任务 × 员工的分配记录，状态机最小执行单元                                                                   |
+| `notification_events` | 预警 / 提醒通知事件，支持已读回执                                                                       |
+| `nudge_records`       | 催办事实记录（完整审计）                                                                             |
+
 
 ### 角色权限矩阵（摘要）
 
-| 接口类型 | central | employee | admin |
-|---------|:-------:|:--------:|:-----:|
-| 创建 / 下发任务 | ✓ | ✗ | ✓ |
-| 查看任务列表 | ✓ 全部 | ✓ 本人相关 | ✓ |
-| 更新 Assignment 状态 | ✓ | ✓ 本人 | ✓ |
-| 查看通知 / 标记已读 | ✗ | ✓ 本人 | ✓ |
-| 发起催办 | ✓ | ✗ | ✓ |
-| 看板数据 | ✓ 全量 | ✗ | ✓ |
 
-完整权限矩阵见 [`docs/specs/08-PERMISSION-MODEL.md`](TOT_backend/docs/specs/08-PERMISSION-MODEL.md)。
+| 接口类型             | central | employee | admin |
+| ---------------- | ------- | -------- | ----- |
+| 创建 / 下发任务        | ✓       | ✗        | ✓     |
+| 查看任务列表           | ✓ 全部    | ✓ 本人相关   | ✓     |
+| 更新 Assignment 状态 | ✓       | ✓ 本人     | ✓     |
+| 查看通知 / 标记已读      | ✗       | ✓ 本人     | ✓     |
+| 发起催办             | ✓       | ✗        | ✓     |
+| 看板数据             | ✓ 全量    | ✗        | ✓     |
+
+
+完整权限矩阵见 `[docs/specs/08-PERMISSION-MODEL.md](TOT_backend/docs/specs/08-PERMISSION-MODEL.md)`。
 
 ---
 
@@ -427,6 +455,7 @@ stores → employees → users → tasks → task_assignments
 **基础路径：** `/api/v1`  
 **认证：** `Authorization: Bearer <JWT>`  
 **响应格式：**
+
 ```json
 {
   "code": 200,
@@ -438,30 +467,32 @@ stores → employees → users → tasks → task_assignments
 
 ### 主要路由
 
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 认证 | `POST /auth/login` | 登录，返回 JWT（有效期 7 天）|
-| 认证 | `GET /auth/me` | 获取当前用户信息 |
-| 任务 | `POST /tasks` | 创建任务（central / admin）|
-| 任务 | `GET /tasks` | 任务列表（employee 仅见本人相关）|
-| 任务 | `POST /tasks/:id/dispatch` | 下发任务，生成 Assignments |
-| 任务 | `GET /tasks/:id/summary` | 任务完成率汇总 |
-| 任务 | `POST /tasks/ai-generate-description` | AI 润色任务描述（DeepSeek）|
-| Assignment | `GET /assignments` | 分配记录列表 |
-| Assignment | `PUT /assignments/:id/status` | 更新状态（start / complete_platform / complete_task）|
-| 通知 | `GET /events` | 通知事件列表（employee 本人）|
-| 通知 | `GET /events/unread-count` | 未读数 |
-| 通知 | `POST /events/:id/read` | 标记已读 |
-| 催办 | `POST /nudges` | 发起催办（central）|
-| 看板 | `GET /dashboard/overview` | 大盘概览 KPI |
-| 看板 | `GET /dashboard/heatmap` | 区域热力图 |
-| 看板 | `GET /dashboard/store-rank` | 门店排行 Top/Bottom |
-| 看板 | `GET /dashboard/warnings` | 预警列表 |
-| 基础数据 | `GET /stores` | 门店列表 |
-| 基础数据 | `GET /employees/:id` | 员工详情 |
-| 健康检查 | `GET /api/health` | 服务心跳 |
 
-完整接口文档见 [`docs/specs/04-API-SPEC.md`](TOT_backend/docs/specs/04-API-SPEC.md)（v1.4.9）。
+| 模块         | 路径                                    | 说明                                              |
+| ---------- | ------------------------------------- | ----------------------------------------------- |
+| 认证         | `POST /auth/login`                    | 登录，返回 JWT（有效期 7 天）                              |
+| 认证         | `GET /auth/me`                        | 获取当前用户信息                                        |
+| 任务         | `POST /tasks`                         | 创建任务（central / admin）                           |
+| 任务         | `GET /tasks`                          | 任务列表（employee 仅见本人相关）                           |
+| 任务         | `POST /tasks/:id/dispatch`            | 下发任务，生成 Assignments                             |
+| 任务         | `GET /tasks/:id/summary`              | 任务完成率汇总                                         |
+| 任务         | `POST /tasks/ai-generate-description` | AI 润色任务描述（DeepSeek）                             |
+| Assignment | `GET /assignments`                    | 分配记录列表                                          |
+| Assignment | `PUT /assignments/:id/status`         | 更新状态（start / complete_platform / complete_task） |
+| 通知         | `GET /events`                         | 通知事件列表（employee 本人）                             |
+| 通知         | `GET /events/unread-count`            | 未读数                                             |
+| 通知         | `POST /events/:id/read`               | 标记已读                                            |
+| 催办         | `POST /nudges`                        | 发起催办（central）                                   |
+| 看板         | `GET /dashboard/overview`             | 大盘概览 KPI                                        |
+| 看板         | `GET /dashboard/heatmap`              | 区域热力图                                           |
+| 看板         | `GET /dashboard/store-rank`           | 门店排行 Top/Bottom                                 |
+| 看板         | `GET /dashboard/warnings`             | 预警列表                                            |
+| 基础数据       | `GET /stores`                         | 门店列表                                            |
+| 基础数据       | `GET /employees/:id`                  | 员工详情                                            |
+| 健康检查       | `GET /api/health`                     | 服务心跳                                            |
+
+
+完整接口文档见 `[docs/specs/04-API-SPEC.md](TOT_backend/docs/specs/04-API-SPEC.md)`（v1.4.9）。
 
 ### curl 快速测试
 
@@ -510,7 +541,7 @@ ws.onmessage = (event) => {
 
 **角色裁剪：** 服务端按 `user.role` / `storeId` / `employeeId` 过滤，员工只收本人相关推送。
 
-完整事件类型见 [`docs/backend/04-WEBSOCKET.md`](TOT_backend/docs/backend/04-WEBSOCKET.md)。
+完整事件类型见 `[docs/backend/04-WEBSOCKET.md](TOT_backend/docs/backend/04-WEBSOCKET.md)`。
 
 ---
 
@@ -527,7 +558,7 @@ MYPAL_MOCK=1        # 启用 Mock（内部联调必须）
 Mock 接口：`GET /api/v1/mypal/mock/learning`（需登录）  
 Mock 数据来源：`mypal_learning_mock` 表（由 `npm run seed` 生成）
 
-真实对接文档：[`docs/backend/06-MYPAL-INTEGRATION.md`](TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md)
+真实对接文档：`[docs/backend/06-MYPAL-INTEGRATION.md](TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md)`
 
 ---
 
@@ -535,26 +566,30 @@ Mock 数据来源：`mypal_learning_mock` 表（由 `npm run seed` 生成）
 
 ### 已完成
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| 核心架构 | ✅ | better-sqlite3 同步读写，JWT 鉴权，全局路由拦截 |
-| AI 文案生成 | ✅ | DeepSeek 模型接入，任务描述智能润色 |
-| 任务创建与下发 | ✅ | 表单 → 后端存储 → RTM 筛选 → 生成 Assignments |
-| 预警规则配置 | ✅ | 进度掉队 / 起步异常 / 24h+48h 临期危机双重预警 |
-| 任务编辑与回显 | ✅ | 草稿保存、编辑状态精准回显 |
-| 店员端首页 | ✅ | 用户信息、紧急待办 Banner、倒计时 |
-| 任务详情弹窗 | ✅ | AI 润色描述、平台标签展示 |
+
+| 模块      | 状态  | 说明                                  |
+| ------- | --- | ----------------------------------- |
+| 核心架构    | ✅   | better-sqlite3 同步读写，JWT 鉴权，全局路由拦截   |
+| AI 文案生成 | ✅   | DeepSeek 模型接入，任务描述智能润色              |
+| 任务创建与下发 | ✅   | 表单 → 后端存储 → RTM 筛选 → 生成 Assignments |
+| 预警规则配置  | ✅   | 进度掉队 / 起步异常 / 24h+48h 临期危机双重预警      |
+| 任务编辑与回显 | ✅   | 草稿保存、编辑状态精准回显                       |
+| 店员端首页   | ✅   | 用户信息、紧急待办 Banner、倒计时                |
+| 任务详情弹窗  | ✅   | AI 润色描述、平台标签展示                      |
+
 
 ### 待联调
 
-| 模块 | 优先级 | 说明 |
-|------|--------|------|
-| WebSocket 实时预警 | P0 | 店员登录后建立 WS 连接，监听 `nudge_sent` / `task_assigned` 并渲染预警瀑布流 |
-| 自动催办 Cron | P0 | 确认 `autoNudgeScheduler.js` 定时触发（每小时）并写入 `notification_events` |
-| 平台完成回调 | P0 | 接入真实 `/assignments/:id/platforms/:platform/complete`（非 MyPal 平台） |
-| 总部看板真实数据 | P0 | 看板图表对接 `/dashboard/*` 聚合接口，替换静态 Mock |
-| MyPal 真实对接 | P1 | 凭证就绪后启用 `MYPAL_ENABLED=1` + `POST /mypal/sync` |
-| Executive Chat | P1 | 自然语言查询看板（`/chat/*`，预留接口，本期不要求实现）|
+
+| 模块             | 优先级 | 说明                                                               |
+| -------------- | --- | ---------------------------------------------------------------- |
+| WebSocket 实时预警 | P0  | 店员登录后建立 WS 连接，监听 `nudge_sent` / `task_assigned` 并渲染预警瀑布流         |
+| 自动催办 Cron      | P0  | 确认 `autoNudgeScheduler.js` 定时触发（每小时）并写入 `notification_events`    |
+| 平台完成回调         | P0  | 接入真实 `/assignments/:id/platforms/:platform/complete`（非 MyPal 平台） |
+| 总部看板真实数据       | P0  | 看板图表对接 `/dashboard/*` 聚合接口，替换静态 Mock                             |
+| MyPal 真实对接     | P1  | 凭证就绪后启用 `MYPAL_ENABLED=1` + `POST /mypal/sync`                   |
+| Executive Chat | P1  | 自然语言查询看板（`/chat/*`，预留接口，本期不要求实现）                                 |
+
 
 ---
 
@@ -563,6 +598,7 @@ Mock 数据来源：`mypal_learning_mock` 表（由 `npm run seed` 生成）
 ### 日常部署（合并到 dev_joint 后）
 
 在 **Mac Studio** 上执行：
+
 ```bash
 # 拉代码 + 安装依赖 + PM2 重载（一键）
 bash scripts/deploy.sh
@@ -617,6 +653,7 @@ npm run dev
 ```
 {"error":"Unauthorized"}
 ```
+
 重新登录获取新 Token，有效期 7 天。
 
 ### 数据库文件权限
@@ -649,25 +686,28 @@ ws.onerror = (e) => console.error('连接失败', e);
 
 ## 文档导航
 
-| 文档 | 说明 |
-|------|------|
-| [`TOT_backend/docs/README.md`](TOT_backend/docs/README.md) | 文档中心总索引（新人入口）|
-| [`docs/product/PROJECT_OVERVIEW.md`](TOT_backend/docs/product/PROJECT_OVERVIEW.md) | 项目概览，业务背景 |
-| [`docs/product/PRODUCT_REQUIREMENTS.md`](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md) | 产品需求全文（权威口径）|
-| [`docs/specs/00-OVERVIEW.md`](TOT_backend/docs/specs/00-OVERVIEW.md) | Spec 总览，功能范围 |
-| [`docs/specs/01-DATA-MODEL.md`](TOT_backend/docs/specs/01-DATA-MODEL.md) | 数据库全部表结构 |
-| [`docs/backend/03-DATABASE.md`](TOT_backend/docs/backend/03-DATABASE.md) | 数据库现状、表说明与迁移入口 |
-| [`docs/specs/04-API-SPEC.md`](TOT_backend/docs/specs/04-API-SPEC.md) | REST API + WebSocket 完整规格（v1.4.9）|
-| [`docs/backend/index.md`](TOT_backend/docs/backend/index.md) | 后端文档入口 |
-| [`docs/backend/01-ROUTES.md`](TOT_backend/docs/backend/01-ROUTES.md) | 路由现状 vs 目标 + Gap 清单 |
-| [`docs/backend/04-WEBSOCKET.md`](TOT_backend/docs/backend/04-WEBSOCKET.md) | WebSocket 连接与事件规格 |
-| [`docs/backend/06-MYPAL-INTEGRATION.md`](TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md) | MyPal HTTP 签名与同步任务 |
-| [`docs/tests/QUICK_START.md`](TOT_backend/docs/tests/QUICK_START.md) | 快速启动、账号、性能基准 |
-| [`docs/team-onboarding.md`](TOT_backend/docs/team-onboarding.md) | 新成员 Tailscale 接入指南 |
+
+| 文档                                                                                         | 说明                                |
+| ------------------------------------------------------------------------------------------ | --------------------------------- |
+| `[TOT_backend/docs/README.md](TOT_backend/docs/README.md)`                                 | 文档中心总索引（新人入口）                     |
+| `[docs/product/PROJECT_OVERVIEW.md](TOT_backend/docs/product/PROJECT_OVERVIEW.md)`         | 项目概览，业务背景                         |
+| `[docs/product/PRODUCT_REQUIREMENTS.md](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md)` | 产品需求全文（权威口径）                      |
+| `[docs/specs/00-OVERVIEW.md](TOT_backend/docs/specs/00-OVERVIEW.md)`                       | Spec 总览，功能范围                      |
+| `[docs/specs/01-DATA-MODEL.md](TOT_backend/docs/specs/01-DATA-MODEL.md)`                   | 数据库全部表结构                          |
+| `[docs/backend/03-DATABASE.md](TOT_backend/docs/backend/03-DATABASE.md)`                   | 数据库现状、表说明与迁移入口                    |
+| `[docs/specs/04-API-SPEC.md](TOT_backend/docs/specs/04-API-SPEC.md)`                       | REST API + WebSocket 完整规格（v1.4.9） |
+| `[docs/backend/index.md](TOT_backend/docs/backend/index.md)`                               | 后端文档入口                            |
+| `[docs/backend/01-ROUTES.md](TOT_backend/docs/backend/01-ROUTES.md)`                       | 路由现状 vs 目标 + Gap 清单               |
+| `[docs/backend/04-WEBSOCKET.md](TOT_backend/docs/backend/04-WEBSOCKET.md)`                 | WebSocket 连接与事件规格                 |
+| `[docs/backend/06-MYPAL-INTEGRATION.md](TOT_backend/docs/backend/06-MYPAL-INTEGRATION.md)` | MyPal HTTP 签名与同步任务                |
+| `[docs/tests/QUICK_START.md](TOT_backend/docs/tests/QUICK_START.md)`                       | 快速启动、账号、性能基准                      |
+| `[docs/team-onboarding.md](TOT_backend/docs/team-onboarding.md)`                           | 新成员 Tailscale 接入指南                |
+
 
 ---
 
 **快速测试入口**：
+
 - **总部入口**：`http://localhost:8001/hq`（或同网段/Tailscale 下 `http://100.65.95.128:8001/hq`，需本机已 `pnpm run dev` 且 Vite 在跑）
 - **店员端**：`http://localhost:8001/employee/login`（账号见上方测试账号表）
 
@@ -724,3 +764,4 @@ ws.onerror = (e) => console.error('连接失败', e);
 - **全链路 WebSocket 实时同步与通信稳定性修复**：
   - **环境配置补全**：修改 `TOT_frontend/vite.config.ts`，新增 `/ws` 路径的长连接反向代理（`target: http://127.0.0.1:3000`，`ws: true`），与 `/api/v1` 一并支持 WebSocket 升级，打通开发环境下浏览器到本机 Node `3000` 的 WS 链路，避免连接被 Vite 开发服务器误拦。
   - **连接与事件处理**：店员端 (`employee/index.vue`) 中 `initWebSocket` 在 `apiUrl` 为空或以 `/` 开头时使用 `window.location.origin`，将 HTTP(S) 转为 `ws(s)://` 并请求 `/ws?token=<JWT>`；`onmessage` 中按 `event` 分发 `task_assigned` / `task_updated` / `task_deleted`（刷新任务列表）、`assignment_completed`（配合烟花与刷新）、`nudge_sent`（催办文案写入缓存、瀑布流与预警弹窗）等。
+

@@ -8,17 +8,17 @@
 ## 前置信息
 
 
-| 项目                           | 值                                            |
-| ---------------------------- | -------------------------------------------- |
-| 共享服务器                        | Mac Studio（始终开机）                             |
-| macOS 用户名                    | `skylerwang`                                 |
-| Mac Studio Tailscale IP      | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`） |
-| 后端端口                         | `3000`                                       |
-| 前端开发端口                       | `8001`                                       |
-| Git 仓库                       | GitHub（问管理员要链接）                              |
-| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）         |
-| 后端日常调试 | **各人本机** `TOT_backend/server` +本机 `database.db`；Mac Studio PM2 仅表示 **已部署的集成实例** |
-| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明                          |
+| 项目                           | 值                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| 共享服务器                        | Mac Studio（始终开机）                                                                |
+| macOS 用户名                    | `skylerwang`                                                                    |
+| Mac Studio Tailscale IP      | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`）                                    |
+| 后端端口                         | `3000`                                                                          |
+| 前端开发端口                       | `8001`                                                                          |
+| Git 仓库                       | GitHub（问管理员要链接）                                                                 |
+| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）                                            |
+| 后端日常调试                       | **各人本机** `TOT_backend/server` +本机 `database.db`；Mac Studio PM2 仅表示 **已部署的集成实例** |
+| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明                                                             |
 
 
 **关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。下文命令里出现 `$REPO_ROOT` 时，请替换为管理员提供的真实绝对路径，或在终端先执行 `export REPO_ROOT='/实际路径'` 再复制命令。Cursor 里若已用「打开文件夹」选中该根目录，内置终端的当前目录即为 `REPO_ROOT`，此时可直接 `cd TOT_frontend` 等相对路径操作。
@@ -126,11 +126,12 @@ curl -s --data '{"username":"central","password":"Train2026!"}' \
 成员完成 Step 1-B 后，建议按下面确认 **路径 A**（不经过公网 Funnel）可用：
 
 
-| 检查项           | 操作                                                                                     | 预期                                                                                       |
-| ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| API           | `curl` 见上文「第四步」登录接口                                                                    | 返回含 `token` 的 JSON                                                                       |
-| 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000`                                                   | 与后端联调正常                                                                                  |
+| 检查项           | 操作                                                                                     | 预期                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| API           | `curl` 见上文「第四步」登录接口                                                                    | 返回含 `token` 的 JSON                                                                                                   |
+| 仅 API 浏览器/客户端 | 配置请求基址为 `http://<Tailscale IP>:3000`                                                   | 与后端联调正常                                                                                                              |
 | 完整前端（可选）      | 在 `REPO_ROOT` 下执行 `cd TOT_frontend && pnpm run dev`，浏览器打开 `http://<Tailscale IP>:8001` | 页面可打开；`TOT_frontend/.env.development` 中 `VITE_GLOB_API_URL` **留空** 时走 Vite 代理到 **Mac Studio 本机** `:3000`（即 PM2 集成后端） |
+
 
 > 若后端在你**自己的电脑**上运行，请用 Step 5 选项 B 将 `VITE_GLOB_API_URL` 指向你本机的 API 地址，而不是依赖上表中的远程 `:8001` 默认代理。
 
@@ -200,7 +201,7 @@ ssh mac-studio
 
 ### 选项 A：Cursor Remote SSH（推荐）
 
-- 按 Step 4 连接 Mac Studio，打开 `**REPO_ROOT**`（仓库根目录）
+- 按 Step 4 连接 Mac Studio，打开 `**REPO_ROOT`**（仓库根目录）
 - 在 Mac Studio 的 `TOT_frontend/` 目录工作（终端已在 `REPO_ROOT` 时可直接 `cd TOT_frontend`）
 - 在 Cursor 内置终端启动前端：
   ```bash
@@ -226,11 +227,13 @@ ssh mac-studio
 
 ### 心智模型（推荐）
 
-| 场景 | 做法 |
-| ---- | ---- |
-| **日常写代码、反复调试** | 在**自己电脑**上克隆仓库，于 `TOT_backend/server` 执行 `npm run dev`，使用**本机** `database.db`（文件不进 Git）。多人并行互不抢端口，**不要**为自测去停 Mac Studio 上的 PM2。 |
-| **全员对齐的 API / 演示 / 前端默认联调** | 使用 Tailscale 访问 Mac Studio 上 PM2 守护的 `tot-api`（`:3000`）。该进程对应 **已合并进 `dev_joint` 且已由 `deploy.sh` 部署的代码**。 |
-| **PM2** | 表示 **集成态**，不是每个人的调试终端；无运维需要时不要 `pm2 stop tot-api`。 |
+
+| 场景                          | 做法                                                                                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **日常写代码、反复调试**              | 在**自己电脑**上克隆仓库，于 `TOT_backend/server` 执行 `npm run dev`，使用**本机** `database.db`（文件不进 Git）。多人并行互不抢端口，**不要**为自测去停 Mac Studio 上的 PM2。 |
+| **全员对齐的 API / 演示 / 前端默认联调** | 使用 Tailscale 访问 Mac Studio 上 PM2 守护的 `tot-api`（`:3000`）。该进程对应 **已合并进 `dev_joint` 且已由 `deploy.sh` 部署的代码**。                        |
+| **PM2**                     | 表示 **集成态**，不是每个人的调试终端；无运维需要时不要 `pm2 stop tot-api`。                                                                               |
+
 
 `**database.db` 不进 Git、何时跑 seed** 见下文「团队协作：如何维护数据（SQLite）」。
 
@@ -246,91 +249,85 @@ npm run dev
 # 默认监听 http://127.0.0.1:3000（仅占用你本机）
 ```
 
-3. 首次需要与文档一致的账号与演示数据时，在同一目录执行：
+1. 首次需要与文档一致的账号与演示数据时，在同一目录执行：
 
 ```bash
 node db/seed.js
 ```
 
-4. 自测 API：例如 `curl http://127.0.0.1:3000/api/v1/...`（登录示例见 Step 1-B）。
+1. 自测 API：例如 `curl http://127.0.0.1:3000/api/v1/...`（登录示例见 Step 1-B）。
 
 ### 与前端联调（本机后端）
 
 - 前端也在本机时：在 `TOT_frontend` 使用 **未跟踪** 的 `.env.development.local`，设置 `VITE_GLOB_API_URL=http://127.0.0.1:3000`（或你本机局域网 / Tailscale IP + 端口）。勿改已提交的 `.env.development`。
 - 前端本机、后端暂时用 **共享集成**：`VITE_GLOB_API_URL=http://<Tailscale IP>:3000`（与 Step 5「选项 B」一致）。
 
-### Git（集成分支：`dev_joint`）
+### Git 工作流（集成分支：`dev_joint`）
 
-以下命令在**你正在开发的那台机器**上、于**仓库根目录**执行即可（本机克隆与 Mac Studio 上克隆同理）；`feature/be-你的功能名` 可换成 `feature/EChat` 等团队约定命名。  
-代码块里以 `#` 开头的行是 Shell 注释，复制整段执行时会被忽略；也可只复制没有 `#` 的命令行。
+以下命令在**你正在开发的那台机器**上、于**仓库根目录**执行即可（本机克隆与 Mac Studio 上克隆同理）。  
+原则只有两条：  
 
-**1）每个新功能：从最新主干开分支并推到远程**
+1. 永远从 `dev_joint` 拉分支；2) 永远把 PR 提回 `dev_joint`。
+
+**标准流程（从开始到合并后收尾）**
 
 ```bash
-# 回到集成分支并拉取远程最新提交
+# 0) 同步集成分支（确保基线最新）
 git checkout dev_joint
 git pull origin dev_joint
-# 基于当前 dev_joint 新建功能分支（把分支名改成你的）
+
+# 1) 创建并推送功能分支（不要直接在 dev_joint 开发）
 git checkout -b feature/be-你的功能名
-# 首次推送并建立本地分支与 origin 上同名分支的跟踪关系
+# 首次推送并建立 upstream
 git push -u origin feature/be-你的功能名
-```
 
-**2）日常开发：在同一功能分支上可反复执行**
-
-```bash
-# 查看有哪些文件被改动
+# 2) 日常提交（小步快跑）
 git status
-# 暂存改动；也可写成 git add path/to/file 只加部分文件
 git add .
 git commit -m "feat: 简短说明"
 git push
-```
 
-提交信息前缀可按约定使用 `feat:`、`fix:`、`chore:` 等。
-
-**3）定期把 `dev_joint` 并进当前分支（须在功能分支上执行）**
-
-```bash
-# 把远程 dev_joint 的更新 rebase 到当前功能分支顶端
+# 3) 定期同步 dev_joint（在线性历史下更新）
+# 在你自己的功能分支执行：把远程 dev_joint 的最新提交同步到当前分支
 git pull --rebase origin dev_joint
-```
 
-不要用无参数的 `git pull --rebase`，那样追的是当前分支的 upstream，**不一定**是 `dev_joint`。
-
-若 rebase 过程中出现冲突：在编辑器里解决冲突后执行：
-
-```bash
-# 标记冲突已解决
-git add .
-# 继续 rebase；若还有下一轮冲突会再次停下，重复「改文件 → git add → git rebase --continue」
-git rebase --continue
-```
-
-若本次 rebase **之前**已经 `push` 过该功能分支，历史被改写后需要覆盖远程**功能分支**（比 `--force` 更安全；**不要**对 `dev_joint` 做 force push）：
-
-```bash
-# 仅推你自己的功能分支；若提示被拒绝，确认当前分支名不是 dev_joint
-git push --force-with-lease
-```
-
-**4）提 PR 与合并后收尾**
-
-- 在 GitHub 创建 PR：**base** 选 `dev_joint`，**compare** 选你的功能分支。
-
-合并完成后在本地清理：切回主干、更新、删除**本地**已合并的功能分支。
-
-```bash
+# 4) 提 PR：base=dev_joint，compare=你的功能分支
+# 5) 合并后本地收尾
 git checkout dev_joint
 git pull origin dev_joint
-# -d 为安全删除：未合并完会拒绝；强删可用 -D（慎用）
+# 删除已合并分支（-d 安全删除）
 git branch -d feature/be-你的功能名
 ```
 
-远程功能分支若不再需要，可在 GitHub 上删除，或执行：
+提交信息前缀可按约定使用 `feat:`、`fix:`、`chore:` 等。  
+不要用无参数 `git pull --rebase`，否则可能跟错 upstream，而不是 `dev_joint`。
+
+**冲突处理（本地统一处理）**
+
+当 `git pull --rebase origin dev_joint` 停在冲突处，或 GitHub PR 页面提示  
+`This branch has conflicts that must be resolved` 且 `Resolve conflicts` 不可用时：
 
 ```bash
-# 删除 origin 上的功能分支（不影响本地 dev_joint）
+# 仍在你的功能分支上
+git fetch origin
+git pull --rebase origin dev_joint
+
+# 解决冲突标记后继续
+git add .
+git rebase --continue
+```
+
+若该功能分支在 rebase 前已推送到远程，rebase 后需要更新远程分支历史：
+
+```bash
+git push --force-with-lease
+```
+
+最后刷新 PR 页面确认冲突消失。若仍有冲突，重复一次「同步 `dev_joint` → 解决冲突 → 推送」。
+
+**可选收尾（删除远程功能分支）**
+
+```bash
 git push origin --delete feature/be-你的功能名
 ```
 
@@ -347,7 +344,7 @@ PORT=3001 npm run dev
 
 自测时使用 `http://127.0.0.1:3001`（或 Mac Studio 的 Tailscale IP `:3001`，视防火墙而定）。当前服务端默认仍使用**该机器上** `TOT_backend/server/database.db`，与 PM2 进程**同时写同一库**可能产生 SQLite 锁竞争；重写入场景请优先在本机开发，或团队协调短时间停 PM2。
 
-2. **必须占用 `3000`**（少用）：需与团队打招呼后执行 `pm2 stop tot-api`，结束后由管理员或操作人立即 `pm2 start tot-api`（以本机 PM2 配置为准）。
+1. **必须占用 `3000`**（少用）：需与团队打招呼后执行 `pm2 stop tot-api`，结束后由管理员或操作人立即 `pm2 start tot-api`（以本机 PM2 配置为准）。
 
 ### 部署（更新唯一共享实例）
 
@@ -369,12 +366,12 @@ bash scripts/deploy.sh
 ### 原则
 
 
-| 做法                            | 说明                                                                                                                |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。                           |
-| **用 schema + seed 表达「应有数据」**  | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。 |
-| **集成库在 Mac Studio**  | PM2 的 `tot-api` 使用 Mac Studio 上 `TOT_backend/server/database.db`，作为 **dev_joint 部署后的共享联调数据**。各人本机另有独立 `database.db`，仅用于个人调试，**不假设**与集成库内容一致。 |
-| **需要与集成库隔离**  | 日常优先在**本机**开发；若必须在 Mac Studio 双进程并行，见 Step 6「换端口」并注意共库锁竞争；临时换库路径需改代码或环境变量，由团队另行约定。 |
+| 做法                            | 说明                                                                                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。                                                      |
+| **用 schema + seed 表达「应有数据」**  | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。                            |
+| **集成库在 Mac Studio**           | PM2 的 `tot-api` 使用 Mac Studio 上 `TOT_backend/server/database.db`，作为 **dev_joint 部署后的共享联调数据**。各人本机另有独立 `database.db`，仅用于个人调试，**不假设**与集成库内容一致。 |
+| **需要与集成库隔离**                  | 日常优先在**本机**开发；若必须在 Mac Studio 双进程并行，见 Step 6「换端口」并注意共库锁竞争；临时换库路径需改代码或环境变量，由团队另行约定。                                                           |
 
 
 ### 新人或新克隆仓库后
@@ -391,7 +388,7 @@ bash scripts/deploy.sh
 
 - **改表结构、加字段**：改 `schema.sql`（及必要的迁移逻辑，若项目中有单独迁移脚本则一并维护），提交 PR，由 reviewer 确认对现有库的影响。
 - **改种子数据**：改 `db/seed.js`（或项目规定的 seed 文档），提交 PR；合并后各成员可在**本机**确认可丢数据后删 `database.db` 重跑 seed；**Mac Studio 集成库**由管理员在维护窗口内按「集成与部署」处理。
-- **`git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
+- `**git pull` 若仍提示 `database.db` 冲突**：多为历史遗留；按 Git 提示解决后，应保证该文件**不再被跟踪**。本地文件可保留或删后重建并 `node db/seed.js`。
 
 ### 集成与部署（管理员）
 
@@ -440,7 +437,7 @@ bash scripts/deploy.sh
 ```bash
 # Terminal A（Mac Studio）- 运行前端演示服务
 pm2 status tot-api
-cd "$REPO_ROOT/TOT_frontend"
+cd /Users/skylerwang/Desktop/MVP/TOT_frontend
 pnpm install
 pnpm run build
 pnpm run preview:dist --host 0.0.0.0 --port 4173
@@ -455,8 +452,9 @@ tailscale funnel status
 
 - 该模式使用构建后的静态产物，减少开发模式下 HMR/开发客户端带来的移动端不稳定因素。
 - 将 `tailscale funnel status` 输出的公网地址发给演示设备，建议直接访问：
-  - `https://<...>/hq`
-  - `https://<...>/employee/login`
+  - `https://skylermac-studio.tail660e40.ts.net/hq`
+  - `https://skylermac-studio.tail660e40.ts.net/employee`
+  - `https://skylermac-studio.tail660e40.ts.net/executive`
 - 演示结束执行 `tailscale funnel reset` 关闭公网入口。
 
 **关闭 Funnel**（演示结束后建议执行，减少暴露面）：
@@ -478,39 +476,19 @@ tailscale funnel status
 
 ---
 
-## Git 分支规范
+## Git 分支规范（命名）
 
-**稳定与集成以 `dev_joint` 为准：** 各人**本机**日常开发与 Mac Studio 上 **PM2（`deploy.sh` 部署）** 均以该分支为集成基准。仓库若仍存在 `main` / `master` 等分支，可能用于历史或后续发布流程，**团队默认仍以 `dev_joint` 为 PR 目标与部署源**。
+完整命令流请看上文「Git 工作流（集成分支：`dev_joint`）」。  
+这里仅保留命名与分支关系，便于速查。
 
 ```
-dev_joint         ← 稳定集成分支；Mac Studio 始终运行此分支（PM2 守护）
-  ├── feature/be-<简短描述>   ← 后端功能分支
-  └── feature/fe-<简短描述>   ← 前端功能分支
+dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
+  ├── feature/be-<描述>   ← 后端功能分支
+  ├── feature/fe-<描述>   ← 前端功能分支
+  └── fix/<描述>          ← 缺陷修复分支
 ```
 
-**完整日常流程：**
-
-```bash
-# 1. 从 dev_joint 拉新分支开始工作
-git checkout dev_joint
-git pull origin dev_joint
-git checkout -b feature/fe-ws-notification
-
-# 2. 开发并提交（小步提交，频繁 commit）
-git add src/hooks/useWebSocket.ts
-git commit -m "feat: add ws composable"
-
-# 3. Push 到 GitHub
-git push -u origin feature/fe-ws-notification
-
-# 4. 在 GitHub 上创建 PR，target branch 选 dev_joint
-
-# 5. PR 合并后，管理员在 Mac Studio 于 REPO_ROOT 下执行部署
-bash scripts/deploy.sh
-# （若当前不在仓库根目录，使用 bash "$REPO_ROOT/scripts/deploy.sh"）
-```
-
-**命名规范：**
+**命名约定：**
 
 
 | 类型     | 格式                | 示例                       |

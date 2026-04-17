@@ -20,7 +20,32 @@ server/services/
   mypalClient.js          ← MyPal HTTP 客户端（✅ getUserWeeklyStatus / getUserDatas）
   mypalSyncService.js     ← 批量或单学员同步，回写 mypal_completed（✅）
   mypalLink.js            ← seedId ↔ employees.email（✅）
+  chatService.js          ← Executive Chat 会话编排与持久化（✅）
+  chatAgentRunner.js      ← FC/Intent 双模式调度（✅）
+  chatToolsService.js     ← 动态工具注册 + 参数/权限/超时守卫（✅）
+  chatAnalyticsService.js ← EC-P0/EC-P1 分析计算（✅）
+  chatSessionStateService.js ← 会话态缓存（memory_then_redis，✅）
 ```
+
+---
+
+## Executive Chat Agent（新增）
+
+### 当前落地摘要
+
+- `chatAgentRunner`：统一执行模式守门（`deny` / `chat_only` / `tool_action`），支持 `intent_routing` 与 `function_calling`；导出 `AGENT_MODE` 供 `chatService` 埋点与 `process.env` 单点读取；`replyContent` 可带内部 `_toolMeta`、`_intentResolvedBy`（落库前与 `_intentType` 一并剥离）。
+- `chatService`：`sendMessage` / `regenerateLastAssistant` 输出结构化 `chat_turn` 日志（`utils/logger`），含 `intentResolvedBy` 等字段（详见 `09-EXECUTIVE-CHAT.md`）。
+- `utils/ai.js`：`generateTextDeepSeek` / `chatWithTools` 包装可重试错误（429、5xx、瞬断）；导出 `withRetry` 供脚本自测。
+- `chatToolsService`：工具动态装载，统一 `executeByName` 执行入口，内置参数校验、角色/范围授权、超时与错误包装；阻塞类失败记 `tool_blocked` 结构化日志。
+- `chatSessionStateService`：会话级缓存（TTL=30m、容量=20、LRU）；配置 **`REDIS_URL`** 时将会话快照同步到 Redis（`ioredis` 见 `package.json`；无 URL 时不连接），读路径在 `chatAgentRunner` 内 **`hydrateIfNeeded`**。
+- `tool_getWarnings`：预警降级链路 `warning -> store_rank -> overview -> trend`，返回 `dataSource` / `caliberNote` 便于解释口径。
+- `chatAnalyticsService`：EC-P0（三项）与 EC-P1（三项）均已可执行；预测采用线性外推基线。
+
+### 风险与后续建议
+
+- `completion_rate_forecast` 目前为基础预测模型，建议后续引入季节性与任务阶段因子。
+- 会话态 Redis 适配器预留但未启用，生产多实例场景建议补齐分布式缓存实现。
+- 预警降级链路需要前端展示口径来源，避免误读为同级指标。
 
 ---
 

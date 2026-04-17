@@ -94,6 +94,23 @@ description: >-
 - 改动范围尽量贴合需求；避免无关重构。
 - 规格与 PRD 冲突时：先对齐产品意图，再改 Spec 或代码，避免 silent drift。
 
+### 5.1 Executive Chat 变更最小核对清单
+
+当改动 `Executive Chat`（尤其是 `chatAgentRunner`、`chatIntentService`、`chat_tools/*`）时，至少核对以下事项：
+
+- **意图到工具映射**：`drill_down` 需明确区分区域级与门店级（`region` 优先走区域下钻工具，门店参数走门店下钻工具）。
+- **歧义与降级口径**：名称查询场景需有可解释返回（如 `needDisambiguation`、候选列表、下一步建议），禁止“静默无数据”。
+- **权限边界**：区域/RTM/全国口径必须在工具层落地校验；越权返回统一错误码（如 `AUTH_003`）。
+- **输出契约**：最终回复保持 `replyContent` 结构（`overview/keyNumbers/attentionPoints/followUpSuggestions`），内部字段不得污染外部契约。
+- **文档同步**：涉及 Chat 行为或能力边界变化，至少同步 [`TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md`](../../../TOT_backend/docs/specs/09-EXECUTIVE-CHAT.md)；如 API 可见行为变化，再同步 [`TOT_backend/docs/specs/04-API-SPEC.md`](../../../TOT_backend/docs/specs/04-API-SPEC.md)。
+
+建议验证命令（仓库路径包含空格时，优先使用 `--prefix`）：
+
+- `node --check TOT_backend/server/services/chatAgentRunner.js`
+- `node --check TOT_backend/server/services/chatIntentService.js`
+- `node --check TOT_backend/server/chat_tools/<tool-file>.js`
+- `npm --prefix "/Users/skyler/Desktop/MVP 3.0/TOT-Apple/TOT_backend/server" run test:region-drilldown`
+
 ## 6. 用户一键触发语（可选用）
 
 用户可在消息中写：**「按 tot-apple-context-first 流程」** 或 **「先读 docs/README 再改」**，即视为要求完整走本 Skill。
