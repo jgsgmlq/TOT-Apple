@@ -29,6 +29,23 @@ function buildTtsWsUrl(token: string): string {
   return `${proto}//${host}/ws/tts?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * 流式 delta 常在「70」与「.1%」之间切断，直接送去 TTS 会读错。
+ * 返回：当前文本末尾应**暂缓朗读**的字符数（0 表示末尾已完整，可整段安全发送）。
+ * - 已以 `12.3%` / `12%` 结尾 → 0
+ * - 末尾为未带 `%` 的数字/小数片段 → 整段暂缓，直到补全或 session.finish 再 flush
+ */
+export function ttsDeferSuffixLength(text: string): number {
+  if (!text) return 0;
+  const t = text;
+  // 完整百分比（含整数或一位小数）
+  if (/\d(?:\.\d+)?%$/.test(t)) return 0;
+
+  const m = t.match(/(?:\d+\.\d*|\d+)$/);
+  if (!m) return 0;
+  return m[0].length;
+}
+
 class Pcm24kPlayer {
   private ctx: AudioContext | null = null;
   private nextTime = 0;
@@ -77,6 +94,8 @@ export class ExecutiveTtsSession {
   private player = new Pcm24kPlayer();
   private gotReady = false;
   private lastText = '';
+  /** 因数字/百分号未拼完而尚未送入 TTS 的末尾片段 */
+  private ttsHold = '';
 
   async connect(getToken: () => string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -143,16 +162,30 @@ export class ExecutiveTtsSession {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (full.length < this.lastText.length) {
       this.lastText = full;
+      this.ttsHold = '';
       return;
     }
-    const chunk = full.slice(this.lastText.length);
+    const delta = full.slice(this.lastText.length);
     this.lastText = full;
-    if (!chunk) return;
-    this.ws.send(JSON.stringify({ type: 'append', text: chunk }));
+    if (!delta) return;
+
+    const buffer = this.ttsHold + delta;
+    const deferLen = ttsDeferSuffixLength(buffer);
+    const safeLen = buffer.length - deferLen;
+    const toSend = safeLen > 0 ? buffer.slice(0, safeLen) : '';
+    this.ttsHold = deferLen > 0 ? buffer.slice(safeLen) : '';
+
+    if (toSend) {
+      this.ws.send(JSON.stringify({ type: 'append', text: toSend }));
+    }
   }
 
   finish() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.ttsHold) {
+      this.ws.send(JSON.stringify({ type: 'append', text: this.ttsHold }));
+      this.ttsHold = '';
+    }
     this.ws.send(JSON.stringify({ type: 'finish' }));
   }
 
@@ -174,6 +207,7 @@ export class ExecutiveTtsSession {
 
   dispose() {
     this.lastText = '';
+    this.ttsHold = '';
     this.player.stop();
     try {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
