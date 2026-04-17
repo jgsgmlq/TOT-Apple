@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.5.1（2026-04-17）
+
+- **语音转写（百炼 ASR）**：`server/app.js` 挂载 **`/api/v1/asr`**；新增 **`POST /asr/transcribe`**，`central` / `admin` 鉴权；服务端使用 **`ASR_API_KEY`**（或 **`DASHSCOPE_API_KEY`**）调用百炼 OpenAI 兼容 **`/chat/completions`**，模型默认 **`qwen3-asr-flash`**。详见 §6.6。
+
 ### v1.5.0（2026-04-16）
 
 - **预警监控多维度下钻**：`GET /dashboard/warnings` 新增 **`level`** 查询参数，支持：`store`（默认）、`rtm`、`format`、`dealer`（或 `dealer_name`）。响应体 `data.list` 增加 **`targetId` / `targetName` / `targetType`** 统一字段（同时保留 `storeId`/`storeName` 兼容字段）。
@@ -2243,6 +2247,58 @@ main();
 - **异常场景**：
   - 503：`DEEPSEEK_API_KEY` 未配置或上游不可用（`AI_001`）
   - 400：messages 为空或格式非法
+
+### 6.6 语音转写（百炼 ASR）`POST /asr/transcribe`
+
+服务端代理调用阿里云 DashScope **OpenAI 兼容模式** `chat/completions`，模型默认 **`qwen3-asr-flash`**，与官方 Node 示例（`input_audio` + `asr_options`）等价。**浏览器不接触 ASR Key**。
+
+- **接口路径**：`/asr/transcribe`
+- **完整 URL 示例**：`POST /api/v1/asr/transcribe`
+- **请求方法**：POST
+- **请求头**：`Authorization: Bearer <JWT>`（角色 **`central`** 或 **`admin`**）
+- **请求体（二选一提供音频）**：
+  ```json
+  {
+    "audioUrl": "https://example.com/audio.mp3",
+    "language": "zh",
+    "enableItn": false
+  }
+  ```
+  或使用 Base64（服务端组装为 `data:<mime>;base64,<payload>`）：
+  ```json
+  {
+    "audioBase64": "<base64 或已带 data: 前缀的字符串>",
+    "audioMimeType": "audio/wav",
+    "language": "zh",
+    "enableItn": false
+  }
+  ```
+  | 字段 | 类型 | 必选 | 说明 |
+  |------|------|------|------|
+  | audioUrl | string | 与 audioBase64 二选一 | 可公网访问的音频 URL（与百炼示例一致） |
+  | audioBase64 | string | 与 audioUrl 二选一 | Base64 音频；可含 `data:audio/...;base64,` 前缀 |
+  | audioMimeType | string | 否 | 与 audioBase64 联用，默认 `audio/wav` |
+  | language | string | 否 | 传入上游 `asr_options.language` |
+  | enableItn | boolean | 否 | 传入上游 `asr_options.enable_itn` |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "text": "识别出的全文",
+      "model": "qwen3-asr-flash"
+    },
+    "requestId": "string"
+  }
+  ```
+  当环境变量 **`DEBUG_AI_LOG=true`** 时，`data` 中可能额外包含 **`raw`**（上游完整 JSON，仅排障用）。
+- **环境变量**：**`ASR_API_KEY`**（推荐）或 **`DASHSCOPE_API_KEY`**；可选 **`ASR_BASE_URL`**（北京默认 `https://dashscope.aliyuncs.com/compatible-mode/v1`，新加坡见官方文档）、**`ASR_MODEL`**。
+- **异常场景**：
+  - **503** `ASR_001`：`ASR_API_KEY` / `DASHSCOPE_API_KEY` 均未配置
+  - **400** `ASR_004`：未提供音频、或同时提供 `audioUrl` 与 `audioBase64`
+  - **502** `ASR_002`：上游返回体非 JSON
+  - 其他：上游 HTTP 状态或 `error` 字段映射为 **`ASR_003`** 及可读 `message`
 
 ## 7. 权限校验 API
 
