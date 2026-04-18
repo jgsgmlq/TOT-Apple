@@ -11,7 +11,7 @@ export async function streamSsePostJson(options: {
   onError: (error: unknown) => void;
   /** `event: error` 且 payload 无 `message` 时使用 */
   fallbackErrorMessage?: string;
-  /** 取消时中断 fetch / 读流，避免页面切换或关闭弹层后仍持续 delta 回调 */
+  /** 可选：中止信号 */
   signal?: AbortSignal;
 }): Promise<void> {
   const {

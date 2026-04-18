@@ -26,3 +26,4 @@
 | [07-RTM-FILTER.md](./07-RTM-FILTER.md) | RTM 下发筛选逻辑与 SQL 实现 | 8 | Current |
 | [08-PERMISSION-MODEL.md](./08-PERMISSION-MODEL.md) | 角色权限矩阵与后端实现代码 | 9 | Current |
 | [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md) | Executive Chat P1 规格（自然语言查询）| 10 | Current |
+| [10-EXECUTIVE-CHAT-INTENTS-TOOLS.md](./10-EXECUTIVE-CHAT-INTENTS-TOOLS.md) | Executive Chat 当前意图/工具清单与新增流程 | 11 | Current |

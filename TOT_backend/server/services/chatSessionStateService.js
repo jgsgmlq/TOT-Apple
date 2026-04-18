@@ -196,10 +196,22 @@ class ChatSessionStateService {
       if (row.records[i].signature === signature) return row.records[i];
     }
     return null;
-  }
+    }
 
-  clearSession(sessionId) {
-    if (!sessionId) return;
+    getLatestByIntent(sessionId, intentType, regionScope = null) {
+    if (!sessionId || !intentType) return null;
+    this.cleanupExpiredForSession(sessionId);
+    const row = this.ensureSession(sessionId, regionScope);
+    if (!row || !row.records.length) return null;
+    for (let i = row.records.length - 1; i >= 0; i -= 1) {
+      if (row.records[i].signature && row.records[i].signature.startsWith(intentType)) {
+        return row.records[i];
+      }
+    }
+    return null;
+    }
+
+    clearSession(sessionId) {    if (!sessionId) return;
     this.memoryStore.delete(sessionId);
     if (this.redisAdapter) {
       const key = this._sessionRedisKey(sessionId);
