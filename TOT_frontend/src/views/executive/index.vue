@@ -159,6 +159,10 @@
             <h2 class="header-title">Executive Chat</h2>
           </div>
           <div class="header-actions">
+            <div class="voice-switch-wrap" title="开启后与回答同步朗读（百炼 TTS）">
+              <span class="voice-label">语音</span>
+              <n-switch v-model:value="voiceEnabled" size="small" />
+            </div>
             <n-popover trigger="click" placement="bottom-end" :show-arrow="true">
               <template #trigger>
                 <div class="avatar-circle">
@@ -416,7 +420,7 @@
 </template>
 
 <script lang="ts" setup>
-  import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue';
+  import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue';
   import { useRouter } from 'vue-router';
   import { useMessage, useDialog } from 'naive-ui';
   import { debounce } from 'lodash-es';
@@ -448,9 +452,8 @@
     type ReplyContent,
   } from '@/api/chat';
   import {
-    splitPreambleAndJson,
-    parseReplyContentProgressive,
-  } from '@/utils/execChatStreamParts';
+    runExecStyleSseChat,
+  } from '@/utils/execStreamReply';
 
   const TOOL_DISPLAY_NAMES: Record<string, string> = {
     getOverviewData: '查询培训进度总览',
@@ -460,6 +463,12 @@
     getStoreDetailData: '查询门店详情',
     runAnalytics: '分析数据',
   };
+  import {
+    ExecutiveTtsSession,
+    getExecutiveVoiceEnabled,
+    setExecutiveVoiceEnabled,
+    speakReplyContent,
+  } from '@/utils/execVoiceTts';
   import {
     LikeOutlined,
     LikeFilled,
@@ -536,6 +545,10 @@
   const isSending = ref(false);
   const isLoadingHistory = ref(false);
   const abortController = ref<AbortController | null>(null);
+
+  /** 与 SSE 并行：百炼实时 TTS（localStorage 持久化） */
+  const voiceEnabled = ref(getExecutiveVoiceEnabled());
+  watch(voiceEnabled, (v) => setExecutiveVoiceEnabled(v));
 
   const messages = ref<ChatMessage[]>([]);
 
@@ -902,10 +915,11 @@
     abortController.value = new AbortController();
     scrollToBottom();
 
-    /** reasoning + ` ```json` 前说明，完成后写入「思考过程」 */
-    let streamThinkingSnapshot = '';
-
-    const applySendSuccess = (sid: string, result: SendMessageResult) => {
+    const applySendSuccess = (
+      sid: string,
+      result: SendMessageResult,
+      thinkingSnapshot?: string
+    ) => {
       const lastMsg = messages.value[loadingIndex];
       if (lastMsg) {
         lastMsg.id = result.messageId;
@@ -913,6 +927,7 @@
         lastMsg.activeToolName = undefined;
         // FC 模式用 markdownContent，旧模式格式化 replyContent
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
+        lastMsg.thinking = thinkingSnapshot || lastMsg.thinking;
         lastMsg.replyContent = result.replyContent;
       }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
@@ -927,51 +942,52 @@
       persistSidebar();
     };
 
-    const runStreamSend = (sid: string) =>
-      new Promise<void>((resolve, reject) => {
-        let reasoningBuf = '';
-        let contentBuf = '';
-
-        streamExecutiveChatMessage(
+    const runStreamSend = async (sid: string) => {
+      let tts: ExecutiveTtsSession | null = null;
+      if (voiceEnabled.value) {
+        tts = new ExecutiveTtsSession();
+        try {
+          await tts.connect(() => userStore.getToken);
+        } catch {
+          tts.dispose();
+          tts = null;
+          message.warning('语音朗读连接失败，本次仅显示文字');
+        }
+      }
+      try {
+        const { result, thinkingSnapshot } = await runExecStyleSseChat(
+          streamExecutiveChatMessage,
           sid,
           question,
-          (deltaData: any) => {
-            const lastMsg = messages.value[loadingIndex];
-            if (!lastMsg) return;
-
-            if (deltaData.phase === 'tool_start') {
-              lastMsg.activeToolName = deltaData.text;
-            } else if (deltaData.phase === 'tool_end') {
-              lastMsg.activeToolName = undefined;
-            } else if (deltaData.phase === 'reasoning') {
-              reasoningBuf += deltaData.text || '';
-              lastMsg.thinking = reasoningBuf;
-            } else {
-              contentBuf += deltaData.text || '';
-              lastMsg.streamContent = contentBuf;
-            }
+          (p) => {
+            messages.value[loadingIndex] = {
+              role: 'ai',
+              content: p.content,
+              thinking: p.thinking,
+              jsonStream: p.jsonStream,
+              partialReply: p.partialReply ?? undefined,
+            };
             scrollToBottom();
-          },
-          (result) => {
-            applySendSuccess(sid, result);
-            resolve();
-          },
-          (err: any) => {
-            if (err?.name === 'AbortError') {
-              const lastMsg = messages.value[loadingIndex];
-              if (lastMsg) {
-                lastMsg.done = true;
-                lastMsg.content = lastMsg.streamContent || '';
-                lastMsg.activeToolName = undefined;
-              }
-              resolve();
-              return;
+            if (tts && p.partialReply) {
+              tts.pushPartialReply(p.partialReply);
             }
-            reject(err);
-          },
-          abortController.value?.signal
+          }
         );
-      });
+        if (tts) {
+          tts.pushPartialReply(result.replyContent);
+        }
+        applySendSuccess(sid, result, thinkingSnapshot);
+      } finally {
+        if (tts) {
+          try {
+            tts.finish();
+            await tts.waitUntilClosed(120000);
+          } finally {
+            tts.dispose();
+          }
+        }
+      }
+    };
 
     try {
       await runStreamSend(sessionId.value);
@@ -1042,6 +1058,9 @@
         userFeedback: null,
       };
       scrollToBottom();
+      if (voiceEnabled.value) {
+        void speakReplyContent(() => userStore.getToken, result.replyContent).catch(() => undefined);
+      }
     } catch (error) {
       message.error('重新生成失败，请重试');
     } finally {
@@ -1209,6 +1228,24 @@
       font-weight: 600;
       color: #1d1d1f;
       letter-spacing: -0.374px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .voice-switch-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .voice-label {
+        font-size: 13px;
+        color: #64748b;
+        user-select: none;
+      }
     }
   }
 

@@ -19,7 +19,7 @@ function devLanAccessHint(): Plugin {
 import { wrapperEnv } from './build/utils';
 import { createVitePlugins } from './build/vite/plugin';
 import { OUTPUT_DIR } from './build/constant';
-import { createProxy } from './build/vite/proxy';
+import { createProxy, quietWebSocketProxyErrors } from './build/vite/proxy';
 import pkg from './package.json';
 import { format } from 'date-fns';
 const { dependencies, devDependencies, name, version } = pkg;
@@ -50,10 +50,17 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
       changeOrigin: true,
       ws: true,
     },
+    '/ws/tts': {
+      target: 'http://127.0.0.1:3000',
+      changeOrigin: true,
+      ws: true,
+      configure: quietWebSocketProxyErrors(),
+    },
     '/ws': {
       target: 'http://127.0.0.1:3000',
       changeOrigin: true,
       ws: true,
+      configure: quietWebSocketProxyErrors(),
     },
   };
   return {

@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.5.2（2026-04-17）
+
+- **实时语音合成 TTS（百炼 Qwen-TTS Realtime）**：`server/app.js` 挂载 **`setupTtsRealtimeWebSocket`**，浏览器通过 **`WebSocket`** **`/ws/tts?token=<JWT>`** 连接（角色 **`executive`** / **`central`** / **`admin`**）；服务端用同一套 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发至 **`wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime`**（见 **`server/ws/ttsRealtime.js`**）。客户端事件：`session.update` 由代理在连接成功后自动下发；客户端发送 **`input_text_buffer.append`**（`type: append`）与 **`session.finish`**（`type: finish`）；服务端透传上游 JSON（含 **`response.audio.delta`**）。详见 §6.7。Executive Chat 前端可开关「语音」与 SSE 并行。
+
 ### v1.5.1（2026-04-17）
 
 - **语音转写（百炼 ASR）**：`server/app.js` 挂载 **`/api/v1/asr`**；新增 **`POST /asr/transcribe`**，`central` / `admin` 鉴权；服务端使用 **`ASR_API_KEY`**（或 **`DASHSCOPE_API_KEY`**）调用百炼 OpenAI 兼容 **`/chat/completions`**，模型默认 **`qwen3-asr-flash`**。详见 §6.6。
@@ -2281,6 +2285,20 @@ main();
   - **400** `ASR_004`：未提供音频、或同时提供 `audioUrl` 与 `audioBase64`
   - **502** `ASR_002`：上游返回体非 JSON
   - 其他：上游 HTTP 状态或 `error` 字段映射为 **`ASR_003`** 及可读 `message`
+
+### 6.7 实时语音合成 TTS 代理（WebSocket）`/ws/tts`
+
+与 §6.6 相同密钥来源，协议为百炼 **Qwen-TTS Realtime**（非 HTTP JSON）。**浏览器不持有 DashScope Key**，仅携带登录 **JWT**。
+
+- **完整 URL 示例**：`WebSocket` **`ws://<host>:<port>/ws/tts?token=<JWT>`**（开发环境经 Vite 代理：`ws://localhost:8001/ws/tts?...` → 后端 `:3000`）
+- **鉴权**：Query **`token`** 为 JWT；角色需为 **`executive`**、**`central`** 或 **`admin`**；否则关闭码 **4003**。
+- **未配置 Key**：关闭码 **4503**（与 HTTP `TTS` 类错误一致，客户端可提示「语音未配置」）。
+- **客户端 → 代理（JSON 文本帧）**：
+  - `{ "type": "start", "voice"?: "Cherry", "mode"?: "server_commit", "language_type"?: "Chinese" }` — 可选；默认由服务端在连接成功后已下发一次 `session.update`。
+  - `{ "type": "append", "text": "..." }` — 映射为 **`input_text_buffer.append`**。
+  - `{ "type": "finish" }` — 映射为 **`session.finish`**。
+- **代理 → 客户端**：透传上游事件 JSON（如 **`response.audio.delta`**，`delta` 为 PCM base64；采样率默认 **24000**、**pcm**）。连接就绪后代理会先发 **`{ "type": "ready", "source": "tot-tts-proxy" }`** 便于前端衔接。
+- **环境变量**：**`TTS_REALTIME_BASE_URL`**（可选）、**`TTS_MODEL`**（默认 `qwen3-tts-flash-realtime`）、**`TTS_VOICE`**（默认 `Cherry`）。
 
 ## 7. 权限校验 API
 

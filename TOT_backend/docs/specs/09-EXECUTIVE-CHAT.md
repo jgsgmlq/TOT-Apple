@@ -10,6 +10,14 @@
 
 自 V2.3.0 起，Executive Chat 从“固定卡片式”全面转向 **“Markdown 原生 Agent”** 交互模型。
 
+- **Agent 模式（MVP）：**默认 `intent_routing`（意图路由 → 同步数据工具 → 格式化回答）；可通过环境变量 `CHAT_AGENT_MODE=function_calling` 切换至 Function Calling 模式（详见 04 §6 文首说明与实现代码）。
+- **持久化：** 会话与消息见 [01-DATA-MODEL.md](./01-DATA-MODEL.md) §10（`chat_sessions` / `chat_messages`）；用户对 assistant 消息的点赞/点踩见 **`chat_message_feedback`**（与 04 §6.6、数据库文档一致）。
+- **下钻能力：** `drill_down` 已支持“区域级 + 门店级”双路径；区域查询走 `getRegionDetailData`（区域汇总 + 门店排行），门店查询走 `getStoreDetailData`。
+- **下钻缺参：**`intent_routing` 下若分类为 `drill_down` 但 `region` / `storeId` / `storeName` 均为空，直接返回结构化追问（不调用门店下钻工具），避免无效参数错误。
+- **下钻歧义处理：** 门店名称查询支持「唯一命中直查 / 多命中回传候选门店 / 0 命中明确提示」，并以结构化 `replyContent` 返回追问建议（例如指定 `storeId`）。
+- **其他 AI 能力（非 Chat 路由）：** 见 04 文首（如 `POST /api/v1/tasks/ai-generate-description` 等）。
+- **可选语音朗读（TTS）：** 前端 `Executive Chat` 页眉「语音」开关（`localStorage`）开启时，在 **`POST .../messages` 且 `stream: true`（SSE）** 的同时，另建 **`WebSocket /ws/tts?token=<JWT>`** 连接至后端代理，由服务端用 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发百炼 **Qwen-TTS Realtime**；朗读文本与气泡内 **`formatReplyContentText(replyContent)`** 对齐（随流式 `partialReply` 增量追加，结束后再用终稿补全）。关闭开关时行为与原先仅 SSE 一致。
+
 ### 1. 结构化 Markdown 规范
 *   **主体内容**: 模型直接流式输出 Markdown 文本，支持粗体、列表及表格。
 *   **数据展示**: 详细数据优先使用 **Markdown 表格** 展示。若列数 > 3，建议转为 Markdown 列表。
