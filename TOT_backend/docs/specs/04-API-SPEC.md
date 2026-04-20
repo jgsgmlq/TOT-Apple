@@ -1,5 +1,13 @@
 # ToT API 接口定义文档
 
+### v1.5.2（2026-04-17）
+
+- **实时语音合成 TTS（百炼 Qwen-TTS Realtime）**：`server/app.js` 挂载 **`setupTtsRealtimeWebSocket`**，浏览器通过 **`WebSocket`** **`/ws/tts?token=<JWT>`** 连接（角色 **`executive`** / **`central`** / **`admin`**）；服务端用同一套 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发至 **`wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime`**（见 **`server/ws/ttsRealtime.js`**）。客户端事件：`session.update` 由代理在连接成功后自动下发；客户端发送 **`input_text_buffer.append`**（`type: append`）与 **`session.finish`**（`type: finish`）；服务端透传上游 JSON（含 **`response.audio.delta`**）。详见 §6.7。Executive Chat 前端可开关「语音」与 SSE 并行。
+
+### v1.5.1（2026-04-17）
+
+- **语音转写（百炼 ASR）**：`server/app.js` 挂载 **`/api/v1/asr`**；新增 **`POST /asr/transcribe`**，`central` / `admin` 鉴权；服务端使用 **`ASR_API_KEY`**（或 **`DASHSCOPE_API_KEY`**）调用百炼 OpenAI 兼容 **`/chat/completions`**，模型默认 **`qwen3-asr-flash`**。详见 §6.6。
+
 ### v1.5.0（2026-04-16）
 
 - **预警监控多维度下钻**：`GET /dashboard/warnings` 新增 **`level`** 查询参数，支持：`store`（默认）、`rtm`、`format`、`dealer`（或 `dealer_name`）。响应体 `data.list` 增加 **`targetId` / `targetName` / `targetType`** 统一字段（同时保留 `storeId`/`storeName` 兼容字段）。
@@ -1982,45 +1990,32 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "stream": false
   }
   ```
-  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，与看板智能洞察 §5.7 一致：`event: delta` 推送模型增量（`data` 为 `{ "text": "...", "phase": "content"|"reasoning" }`）；成功结束时 `event: done`，`data` 为 `{ "code": 200, "message": "success", "data": { ...与下方 JSON 成功体 data 相同... }, "requestId": "..." }`；失败时 `event: error`。流式仅作用于 **intent_routing** 下最终「格式化回答」的 LLM；**function_calling** 模式仍可能在无增量后一次性返回 `done`。
-- **响应体（成功，`stream` 未传或为 false）**：
+  **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end" }`。
+    - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
+  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
+  - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
+
+  - **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
-    "code": 200,
-    "message": "success",
-    "data": {
-      "messageId": "string",
-      "replyContent": { // 结构化回答（PRD §5.7）；统计/推断类可选扩展见 09-EXECUTIVE-CHAT.md（statisticsProvenance、visualizations、forecastDisclaimer 等）
-        "overview": "Q1新品培训整体完成率72%，全国共300人参与，216人已完成",
-        "keyNumbers": [
-          {
-            "label": "整体完成率",
-            "value": "72%",
-            "unit": "%"
-          },
-          {
-            "label": "逾期未完成人数",
-            "value": "10",
-            "unit": "人"
-          }
-        ],
-        "attentionPoints": [
-          "Monobrand完成率仅60%，低于所有渠道平均水平",
-          "5家门店完成率<50%，需重点关注"
-        ],
-        "followUpSuggestions": [
-          "可追问：Monobrand最差的5家门店是哪些？",
-          "可追问：逾期未完成的人员分布？"
-        ]
-      },
-      "responseTime": 3500, // 响应时间（ms），≤5000ms
-      "contextId": "string", // 更新后的上下文ID
-      "timestamp": "string"
-    },
-    "requestId": "string"
+   "code": 200,
+   "message": "success",
+   "data": {
+     "messageId": "string",
+     "markdownContent": "string", // FC 模式下的 Markdown 正文
+     "replyContent": { // 兼容字段，Routing 模式下为对象，FC 模式下为 null
+       "overview": "...", // (Legacy)
+       "keyNumbers": [], // (Legacy)
+       "attentionPoints": [], // (Legacy)
+       "followUpSuggestions": [] // (Legacy)
+     },     "responseTime": 3500,
+     "contextId": "string",
+     "timestamp": "string"
+   },
+   "requestId": "string"
   }
-  ```
-- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
+  ```- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
@@ -2074,16 +2069,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "historyList": [
         {
           "messageId": "string",
-          "content": "Q1新品培训完成率？",
-          "sender": "executive",
-          "timestamp": "string",
-          "replyContent": {
-            "overview": "string",
-            "keyNumbers": [],
-            "attentionPoints": [],
-            "followUpSuggestions": []
-          },
-          "userFeedback": "like | dislike | null"
+          "sender": "executive/assistant",
+          "content": "string", // 原始正文（FC模式为 Markdown，Routing模式为 JSON 字符串）
+          "replyContent": null|object, // 兼容字段：仅当 content 为旧版 JSON 且解析成功时填充对象，否则为 null
+          "userFeedback": "like | dislike | null",
+          "timestamp": "string"
         }
       ],
       "pagination": {
@@ -2243,6 +2233,72 @@ main();
 - **异常场景**：
   - 503：`DEEPSEEK_API_KEY` 未配置或上游不可用（`AI_001`）
   - 400：messages 为空或格式非法
+
+### 6.6 语音转写（百炼 ASR）`POST /asr/transcribe`
+
+服务端代理调用阿里云 DashScope **OpenAI 兼容模式** `chat/completions`，模型默认 **`qwen3-asr-flash`**，与官方 Node 示例（`input_audio` + `asr_options`）等价。**浏览器不接触 ASR Key**。
+
+- **接口路径**：`/asr/transcribe`
+- **完整 URL 示例**：`POST /api/v1/asr/transcribe`
+- **请求方法**：POST
+- **请求头**：`Authorization: Bearer <JWT>`（角色 **`central`** 或 **`admin`**）
+- **请求体（二选一提供音频）**：
+  ```json
+  {
+    "audioUrl": "https://example.com/audio.mp3",
+    "language": "zh",
+    "enableItn": false
+  }
+  ```
+  或使用 Base64（服务端组装为 `data:<mime>;base64,<payload>`）：
+  ```json
+  {
+    "audioBase64": "<base64 或已带 data: 前缀的字符串>",
+    "audioMimeType": "audio/wav",
+    "language": "zh",
+    "enableItn": false
+  }
+  ```
+  | 字段 | 类型 | 必选 | 说明 |
+  |------|------|------|------|
+  | audioUrl | string | 与 audioBase64 二选一 | 可公网访问的音频 URL（与百炼示例一致） |
+  | audioBase64 | string | 与 audioUrl 二选一 | Base64 音频；可含 `data:audio/...;base64,` 前缀 |
+  | audioMimeType | string | 否 | 与 audioBase64 联用，默认 `audio/wav` |
+  | language | string | 否 | 传入上游 `asr_options.language` |
+  | enableItn | boolean | 否 | 传入上游 `asr_options.enable_itn` |
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "text": "识别出的全文",
+      "model": "qwen3-asr-flash"
+    },
+    "requestId": "string"
+  }
+  ```
+  当环境变量 **`DEBUG_AI_LOG=true`** 时，`data` 中可能额外包含 **`raw`**（上游完整 JSON，仅排障用）。
+- **环境变量**：**`ASR_API_KEY`**（推荐）或 **`DASHSCOPE_API_KEY`**；可选 **`ASR_BASE_URL`**（北京默认 `https://dashscope.aliyuncs.com/compatible-mode/v1`，新加坡见官方文档）、**`ASR_MODEL`**。
+- **异常场景**：
+  - **503** `ASR_001`：`ASR_API_KEY` / `DASHSCOPE_API_KEY` 均未配置
+  - **400** `ASR_004`：未提供音频、或同时提供 `audioUrl` 与 `audioBase64`
+  - **502** `ASR_002`：上游返回体非 JSON
+  - 其他：上游 HTTP 状态或 `error` 字段映射为 **`ASR_003`** 及可读 `message`
+
+### 6.7 实时语音合成 TTS 代理（WebSocket）`/ws/tts`
+
+与 §6.6 相同密钥来源，协议为百炼 **Qwen-TTS Realtime**（非 HTTP JSON）。**浏览器不持有 DashScope Key**，仅携带登录 **JWT**。
+
+- **完整 URL 示例**：`WebSocket` **`ws://<host>:<port>/ws/tts?token=<JWT>`**（开发环境经 Vite 代理：`ws://localhost:8001/ws/tts?...` → 后端 `:3000`）
+- **鉴权**：Query **`token`** 为 JWT；角色需为 **`executive`**、**`central`** 或 **`admin`**；否则关闭码 **4003**。
+- **未配置 Key**：关闭码 **4503**（与 HTTP `TTS` 类错误一致，客户端可提示「语音未配置」）。
+- **客户端 → 代理（JSON 文本帧）**：
+  - `{ "type": "start", "voice"?: "Cherry", "mode"?: "server_commit", "language_type"?: "Chinese" }` — 可选；默认由服务端在连接成功后已下发一次 `session.update`。
+  - `{ "type": "append", "text": "..." }` — 映射为 **`input_text_buffer.append`**。
+  - `{ "type": "finish" }` — 映射为 **`session.finish`**。
+- **代理 → 客户端**：透传上游事件 JSON（如 **`response.audio.delta`**，`delta` 为 PCM base64；采样率默认 **24000**、**pcm**）。连接就绪后代理会先发 **`{ "type": "ready", "source": "tot-tts-proxy" }`** 便于前端衔接。
+- **环境变量**：**`TTS_REALTIME_BASE_URL`**（可选）、**`TTS_MODEL`**（默认 `qwen3-tts-flash-realtime`）、**`TTS_VOICE`**（默认 `Cherry`）。
 
 ## 7. 权限校验 API
 

@@ -2,13 +2,18 @@
 
 const path = require('path');
 const os = require('os');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// 先读仓库根目录 `.env`（与前端/Vite 同一份配置）；再读 `TOT_backend/.env` 仅补全根目录未出现的键（不覆盖）
+const rootEnv = path.join(__dirname, '..', '..', '.env');
+const backendEnv = path.join(__dirname, '..', '.env');
+require('dotenv').config({ path: rootEnv });
+require('dotenv').config({ path: backendEnv });
 
 const http    = require('http');
 const express = require('express');
 const requestId        = require('./middleware/requestId');
 const { errorHandler } = require('./middleware/errorHandler');
 const { setupWebSocket } = require('./ws/manager');
+const { setupTtsRealtimeWebSocket } = require('./ws/ttsRealtime');
 
 const authRoutes          = require('./routes/auth');
 const tasksRoutes         = require('./routes/tasks');
@@ -21,6 +26,7 @@ const dashboardRoutes       = require('./routes/dashboard');
 const dashboardInsightRoutes = require('./routes/dashboardInsights');
 const mypalRoutes         = require('./routes/mypal');
 const chatRoutes          = require('./routes/chat');
+const asrRoutes           = require('./routes/asr');
 
 const MYPAL_MOCK = process.env.MYPAL_MOCK === '1';
 const mypalMockRoutes = MYPAL_MOCK ? require('./routes/mypalMock') : null;
@@ -70,6 +76,7 @@ app.use('/api/v1/dashboard',  dashboardRoutes);
 app.use('/api/v1/dashboard',  dashboardInsightRoutes);
 app.use('/api/v1/mypal',      mypalRoutes);
 app.use('/api/v1/chat',       chatRoutes);
+app.use('/api/v1/asr',        asrRoutes);
 
 // ─── MyPal（开发环境 Mock）──────────────────────────────────────────────────
 if (mypalMockRoutes) {
@@ -81,7 +88,26 @@ app.use(errorHandler);
 
 // ─── HTTP + WebSocket 服务器 ───────────────────────────────────────────────────
 const server = http.createServer(app);
-setupWebSocket(server);
+
+const dashboardWss = setupWebSocket();
+const ttsRealtimeWss = setupTtsRealtimeWebSocket();
+
+server.on('upgrade', (request, socket, head) => {
+  let pathname = request.url || '/';
+  const q = pathname.indexOf('?');
+  if (q !== -1) pathname = pathname.slice(0, q);
+  if (pathname === '/ws/tts') {
+    ttsRealtimeWss.handleUpgrade(request, socket, head, (ws) => {
+      ttsRealtimeWss.emit('connection', ws, request);
+    });
+  } else if (pathname === '/ws') {
+    dashboardWss.handleUpgrade(request, socket, head, (ws) => {
+      dashboardWss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
 
@@ -108,6 +134,7 @@ function printStartupBanner(port) {
   console.log(`  Local:   http://localhost:${port}`);
   console.log(`  LAN:     ${lanUrl}`);
   console.log(`  WS:      ws://localhost:${port}/ws?token=<JWT>`);
+  console.log(`  TTS WS:  ws://localhost:${port}/ws/tts?token=<JWT>  (Qwen-TTS Realtime 代理)`);
 }
 
 const PORT = Number(process.env.PORT) || 3000;

@@ -78,6 +78,16 @@ export const ExecutiveHomeRoute: RouteRecordRaw = {
   },
 };
 
+export const ExecutiveChartGalleryRoute: RouteRecordRaw = {
+  path: '/executive/chart-gallery',
+  name: 'ExecutiveChartGallery',
+  component: () => import('@/views/executive/ChartGallery.vue'),
+  meta: {
+    title: '图表展厅',
+    ignoreAuth: true,
+  },
+};
+
 export const ExecutiveLoginRoute: RouteRecordRaw = {
   path: '/executive/login',
   name: 'ExecutiveLogin',
@@ -113,6 +123,7 @@ export const constantRouter: RouteRecordRaw[] = [
   EmployeeLoginRoute,
   ExecutiveLoginRoute,
   ExecutiveHomeRoute,
+  ExecutiveChartGalleryRoute,
   EmployeeHomeRoute,
   LoginRedirectRoute,
   RootRoute,
