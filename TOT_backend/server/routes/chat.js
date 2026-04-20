@@ -116,7 +116,7 @@ function handleHistory(req, res, next) {
   try {
     const { sessionId } = req.params;
     const pageNum  = Math.max(1, parseInt(req.query.pageNum, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
 
     const data = chatService.getHistory(sessionId, pageNum, pageSize);
     res.json({

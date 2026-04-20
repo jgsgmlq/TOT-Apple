@@ -114,7 +114,7 @@ export const streamExecutiveChatMessage = async (
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onError: (error: unknown) => void,
-  signal?: AbortSignal
+  streamOptions?: { signal?: AbortSignal }
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
@@ -123,7 +123,7 @@ export const streamExecutiveChatMessage = async (
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
-    signal,
+    signal: streamOptions?.signal,
   });
 };
 

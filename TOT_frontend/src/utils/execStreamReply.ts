@@ -48,18 +48,50 @@ export interface ExecStyleAiPayload {
   thinkingSnapshot: string;
 }
 
+/** 与主气泡正文一致、供 TTS 朗读；不含 `thinking`（思考过程） */
+export function speechTextForExecutiveTts(p: ExecStyleAiPayload): string {
+  if (p.partialReply != null) {
+    return formatReplyContentText(p.partialReply).trim();
+  }
+  const c = (p.content || '').trim();
+  if (!c || c === '正在生成…') return '';
+  return c;
+}
+
+/** SSE `done` 后与主气泡 `markdownContent | formatReplyContentText` 对齐的朗读文本 */
+export function speechTextForSendResult(result: SendMessageResult): string {
+  const fromCard = formatReplyContentText(result.replyContent ?? null).trim();
+  if (fromCard) return fromCard;
+  return (result.markdownContent || '').trim();
+}
+
 export function execStreamStateToPayload(state: ExecStreamState): ExecStyleAiPayload {
   const split = splitPreambleAndJson(state.contentBuf);
-  const jsonRaw = split.jsonRaw;
+  const jsonRawFull = split.jsonRaw;
+  const jsonRawTrim = jsonRawFull.trim();
   const preamble = split.preamble.trim();
-  const thinkingMerged = [state.reasoningBuf.trim(), preamble].filter(Boolean).join('\n\n').trim();
-  const parsed = parseReplyContentProgressive(jsonRaw);
-  const narrativeDone = Boolean(thinkingMerged || jsonRaw);
+  const reasoningOnly = state.reasoningBuf.trim();
+  const parsed = parseReplyContentProgressive(jsonRawFull);
+
+  // FC / Markdown：无 ```json 围栏且正文在 preamble 时，必须进 MarkdownRenderer 的 content，不能并入 thinking 且不能把 content 置空
+  if (!jsonRawTrim && preamble) {
+    const snapshot = [reasoningOnly, preamble].filter(Boolean).join('\n\n').trim();
+    return {
+      thinking: reasoningOnly || undefined,
+      content: preamble,
+      partialReply: undefined,
+      jsonStream: undefined,
+      thinkingSnapshot: snapshot,
+    };
+  }
+
+  const thinkingMerged = [reasoningOnly, preamble].filter(Boolean).join('\n\n').trim();
+  const narrativeDone = Boolean(thinkingMerged || jsonRawTrim);
   return {
     thinking: thinkingMerged || undefined,
     content: parsed ? formatReplyContentText(parsed) : narrativeDone ? '' : '正在生成…',
     partialReply: parsed || undefined,
-    jsonStream: !parsed && jsonRaw ? jsonRaw : undefined,
+    jsonStream: !parsed && jsonRawFull ? jsonRawFull : undefined,
     thinkingSnapshot: thinkingMerged,
   };
 }
