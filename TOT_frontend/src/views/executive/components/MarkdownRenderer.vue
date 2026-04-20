@@ -48,7 +48,7 @@
 </template>
 
 <script lang="ts" setup>
-  import { ref, computed } from 'vue';
+  import { ref, computed, watch } from 'vue';
   import { MenuFoldOutlined, MenuUnfoldOutlined } from '@vicons/antd';
   // 注意：此处若未安装成功，可能会有编译错误，请手动运行 pnpm add markdown-it dompurify
   import MarkdownIt from 'markdown-it';
@@ -67,6 +67,13 @@
   }>();
 
   const showThinking = ref(false);
+
+  watch(
+    () => [props.streaming, props.thinking] as const,
+    ([s, t]) => {
+      if (s && t) showThinking.value = true;
+    }
+  );
 
   const md = new MarkdownIt({
     html: true,
