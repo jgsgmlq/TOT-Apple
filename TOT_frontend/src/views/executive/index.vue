@@ -230,18 +230,23 @@
 
                   <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
-                    v-if="!msg.replyContent && (msg.streamContent || msg.content)"
+                    v-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
                     :content="msg.streamContent || msg.content"
                     :thinking="msg.thinking"
                     :streaming="!msg.done"
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
-                  <!-- 旧版/兼容模式：结构化卡片渲染 -->
-                  <div
-                    v-else-if="msg.replyContent"
-                    class="exec-structured"
-                  >
+                  <!-- 旧版/兼容模式：结构化卡片渲染（流式结束后仍保留思考过程，与 Markdown 分支一致） -->
+                  <template v-else-if="msg.replyContent">
+                    <div v-if="msg.thinking" class="exec-thinking-wrap">
+                      <n-collapse :default-expanded-names="['think']">
+                        <n-collapse-item title="思考过程" name="think">
+                          <div class="exec-thinking-body">{{ msg.thinking }}</div>
+                        </n-collapse-item>
+                      </n-collapse>
+                    </div>
+                    <div class="exec-structured">
                     <p class="exec-overview">
                       {{ msg.replyContent.overview }}
                     </p>
@@ -331,8 +336,8 @@
                         </n-button>
                       </div>
                     </div>
-                  </div>
-                </template>
+                    </div>
+                  </template>
 
                 <!-- AI Feedback Actions -->
                 <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
@@ -382,6 +387,7 @@
                     </n-button>
                   </n-space>
                 </div>
+                </template>
               </div>
             </div>
           </n-spin>
@@ -941,7 +947,7 @@
         lastMsg.activeToolName = undefined;
         // FC 模式用 markdownContent，旧模式格式化 replyContent
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
-        lastMsg.thinking = thinkingSnapshot || lastMsg.thinking;
+        lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
       }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;

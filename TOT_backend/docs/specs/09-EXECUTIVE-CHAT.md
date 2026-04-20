@@ -31,6 +31,7 @@
 
 ### 3. 实时交互体验
 *   **状态透明**: 后端在调用工具期间推送 `tool_start/end` SSE 事件。前端实时显示“正在查询...”指示器。
+*   **思考过程气泡（SSE）：** FC 下流式拆分在 **`server/utils/fcStreamDeltaSplit.js`**（`createFcStreamDeltaSplitter`）。拆分优先级：① `` ```json `` 围栏 → ② 裸 `replyContent` JSON → ③ 正文直接以 Markdown 标记（`#`/`|`/非 json 围栏/`- *`/有序列表）起始 → ④ 首个空行（段落分隔）。分界前为 **`phase: reasoning`**（进前端「思考过程」折叠气泡），分界及之后为 **`phase: content`**（进主气泡 `MarkdownRenderer`）。前端 **`execStreamStateToPayload`** 仅取 `reasoningBuf` 作 `thinking`、`contentBuf` 作 `content`（解析后卡片用 `formatReplyContentText`）。冒烟：`npm --prefix TOT_backend/server run test:fc-stream-splitter` 覆盖 A–E 五个场景。
 *   **停止生成**: 用户可在生成过程中点击“停止”，前端通过 `AbortSignal` 联动后端立即中止 LLM 响应。
 *   **历史兼容**: 采用双轨渲染。若历史消息 content 能解析为旧版 JSON，则展示卡片；否则展示 Markdown。
 

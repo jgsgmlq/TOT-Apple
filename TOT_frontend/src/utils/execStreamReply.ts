@@ -14,6 +14,23 @@ export function initExecStreamState(): ExecStreamState {
   return { reasoningBuf: '', contentBuf: '', isFirstChunk: true, wasReasoning: false };
 }
 
+/** 归一化 SSE `delta` JSON（兼容字段名差异） */
+export function normalizeStreamDelta(raw: unknown): { text?: string; phase?: string } {
+  if (!raw || typeof raw !== 'object') return {};
+  const o = raw as Record<string, unknown>;
+  const text =
+    typeof o.text === 'string'
+      ? o.text
+      : typeof o.delta === 'string'
+        ? o.delta
+        : typeof o.content === 'string'
+          ? o.content
+          : '';
+  const phase = typeof o.phase === 'string' ? o.phase : undefined;
+  return { text, phase };
+}
+
+/** 流式 delta 分流：与仓库 c1cc69a63050b5c7e679c0c20ba584a9e9101c67 中 `execStreamReply` 一致 */
 export function feedExecStreamDelta(
   state: ExecStreamState,
   deltaData: { text?: string; phase?: string }
@@ -21,13 +38,13 @@ export function feedExecStreamDelta(
   if (state.isFirstChunk) {
     state.isFirstChunk = false;
     if (deltaData.phase === 'reasoning') {
-      state.reasoningBuf += '> **模型推理：**\n> ';
+      // state.reasoningBuf += '> **模型推理：**\n> ';
       state.wasReasoning = true;
     }
   }
   if (deltaData?.text) {
     if (deltaData.phase === 'reasoning') {
-      state.reasoningBuf += deltaData.text.replace(/\n/g, '\n> ');
+      state.reasoningBuf += deltaData.text.replace(/\n/g, '\n ');
       state.wasReasoning = true;
     } else {
       if (state.wasReasoning) {
@@ -65,34 +82,37 @@ export function speechTextForSendResult(result: SendMessageResult): string {
   return (result.markdownContent || '').trim();
 }
 
+/**
+ * 「思考过程」= `phase: reasoning` 累积的 `reasoningBuf`；正文 = `contentBuf`
+ * （未解析时原样 Markdown/JSON 流，解析成功后为 `formatReplyContentText` 摘要）。
+ * 依赖后端 `server/utils/fcStreamDeltaSplit.js` 正确拆分 FC 下的 `delta.content`。
+ */
 export function execStreamStateToPayload(state: ExecStreamState): ExecStyleAiPayload {
+  const reasoningTrim = state.reasoningBuf.trim();
+  const contentBufTrim = state.contentBuf.trim();
   const split = splitPreambleAndJson(state.contentBuf);
-  const jsonRawFull = split.jsonRaw;
-  const jsonRawTrim = jsonRawFull.trim();
-  const preamble = split.preamble.trim();
-  const reasoningOnly = state.reasoningBuf.trim();
-  const parsed = parseReplyContentProgressive(jsonRawFull);
+  const jsonRaw = split.jsonRaw;
+  const parsed = parseReplyContentProgressive(jsonRaw);
 
-  // FC / Markdown：无 ```json 围栏且正文在 preamble 时，必须进 MarkdownRenderer 的 content，不能并入 thinking 且不能把 content 置空
-  if (!jsonRawTrim && preamble) {
-    const snapshot = [reasoningOnly, preamble].filter(Boolean).join('\n\n').trim();
-    return {
-      thinking: reasoningOnly || undefined,
-      content: preamble,
-      partialReply: undefined,
-      jsonStream: undefined,
-      thinkingSnapshot: snapshot,
-    };
+  const thinking = reasoningTrim || undefined;
+  const thinkingSnapshot = reasoningTrim;
+
+  let content: string;
+  if (parsed) {
+    content = formatReplyContentText(parsed);
+  } else if (contentBufTrim) {
+    content = contentBufTrim;
+  } else {
+    const narrativeDone = Boolean(reasoningTrim || jsonRaw.trim());
+    content = narrativeDone ? '' : '正在生成…';
   }
 
-  const thinkingMerged = [reasoningOnly, preamble].filter(Boolean).join('\n\n').trim();
-  const narrativeDone = Boolean(thinkingMerged || jsonRawTrim);
   return {
-    thinking: thinkingMerged || undefined,
-    content: parsed ? formatReplyContentText(parsed) : narrativeDone ? '' : '正在生成…',
+    thinking,
+    content,
     partialReply: parsed || undefined,
-    jsonStream: !parsed && jsonRawFull ? jsonRawFull : undefined,
-    thinkingSnapshot: thinkingMerged,
+    jsonStream: !parsed && jsonRaw ? jsonRaw : undefined,
+    thinkingSnapshot,
   };
 }
 
@@ -122,6 +142,7 @@ export function finalizeExecStyleMessage(
 
 /**
  * SSE 流式对话（delta/done），将增量映射为与 Executive 一致的 payload。
+ * `done` 时 `thinkingSnapshot` 取最后一帧 delta 的快照。
  */
 export function runExecStyleSseChat(
   streamFn: (
@@ -144,7 +165,7 @@ export function runExecStyleSseChat(
       sessionId,
       userContent,
       (deltaData) => {
-        feedExecStreamDelta(state, deltaData);
+        feedExecStreamDelta(state, normalizeStreamDelta(deltaData));
         const p = execStreamStateToPayload(state);
         lastSnapshot = p.thinkingSnapshot;
         onStreamingPatch(p);

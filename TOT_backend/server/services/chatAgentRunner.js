@@ -92,6 +92,8 @@ function buildToolCacheSignature(toolName, args = {}, regionScope = null) {
   return `${toolName || 'unknown'}|${taskId || '-'}|${region || '-'}|${storeId || '-'}|${analysisType || '-'}|${scopeFp}`;
 }
 
+const { createFcStreamDeltaSplitter } = require('../utils/fcStreamDeltaSplit');
+
 function buildDisambiguationReply(toolResult) {
   if (!toolResult || !toolResult.needDisambiguation) return null;
   const baseOverview = typeof toolResult.message === 'string' && toolResult.message.trim()
@@ -331,7 +333,7 @@ echarts 代码块格式：
       messages,
       tools: chatToolsService.TOOL_SCHEMAS,
       tool_choice: 'auto',
-      onDelta: sc ? (chunk, meta) => sc.onDelta(chunk, meta) : null,
+      onDelta: sc ? createFcStreamDeltaSplitter((c, m) => sc.onDelta(c, m)) : null,
       signal: options.signal,
     });
 
