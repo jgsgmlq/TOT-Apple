@@ -39,6 +39,37 @@ function parseSessionRegionsStored(regionsJson, sessionId = null) {
   }
 }
 
+/** 写入 chat_messages.content：优先 Markdown；否则 JSON；避免 stringify 循环引用等导致 500 / NOT NULL */
+function storageContentFromAgentResult(result) {
+  if (!result || typeof result !== 'object') {
+    logger.warn('agent_result_invalid', { type: typeof result });
+    return JSON.stringify({
+      overview: '（无有效回复，请重试）',
+      keyNumbers: [],
+      attentionPoints: [],
+      followUpSuggestions: [],
+    });
+  }
+  if (typeof result.markdownContent === 'string' && result.markdownContent.trim() !== '') {
+    return result.markdownContent;
+  }
+  try {
+    return JSON.stringify(result);
+  } catch (e) {
+    logger.warn('agent_result_stringify_failed', { error: e.message });
+    const overview =
+      typeof result.overview === 'string' && result.overview.trim()
+        ? result.overview
+        : '（回答存储异常）请重试。';
+    return JSON.stringify({
+      overview,
+      keyNumbers: Array.isArray(result.keyNumbers) ? result.keyNumbers : [],
+      attentionPoints: Array.isArray(result.attentionPoints) ? result.attentionPoints : [],
+      followUpSuggestions: Array.isArray(result.followUpSuggestions) ? result.followUpSuggestions : [],
+    });
+  }
+}
+
 function buildExampleQuestions() {
   const task = db.get("SELECT title FROM tasks WHERE status = 'dispatched' ORDER BY created_at DESC LIMIT 1");
   const taskRef = task ? `"${task.title}"` : '最近的';
@@ -100,7 +131,7 @@ async function sendMessage(sessionId, userMessage, userId) {
     toolName: toolMeta.toolName, toolIterations: toolMeta.iterations, msgId: assistMsgId,
   });
 
-  const finalContent = result.markdownContent || JSON.stringify(result);
+  const finalContent = storageContentFromAgentResult(result);
 
   db.run('INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', [userMsgId, sessionId, 'user', userMessage, now]);
   db.run('INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)', [assistMsgId, sessionId, 'assistant', finalContent, intentType, now]);
@@ -176,7 +207,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
   const now = formatNowSqliteLocal();
   const userMsgId = nanoid();
   const assistMsgId = nanoid();
-  const finalContent = result.markdownContent || JSON.stringify(result);
+  const finalContent = storageContentFromAgentResult(result);
 
   logger.info('chat_turn', {
     sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
@@ -272,6 +303,9 @@ function setMessageFeedback(sessionId, messageId, userId, feedback) {
 async function regenerateLastAssistant(sessionId, messageId, userId) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
+  if (Number(session.user_id) !== Number(userId)) {
+    throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
+  }
 
   const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
   if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
@@ -283,25 +317,53 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   
   historyRows.pop(); // Remove assistant message being regenerated
   const userMessageRow = historyRows.pop();
-  if (userMessageRow.role !== 'user') throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
-  
+  if (!userMessageRow || userMessageRow.role !== 'user') {
+    throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
+  }
+  const userPrompt = typeof userMessageRow.content === 'string' ? userMessageRow.content : '';
+  if (!userPrompt.trim()) {
+    throw Object.assign(new Error('User message is empty'), { status: 400, code: 'CHAT_008' });
+  }
+
   const history = historyRows.map((r) => ({ role: r.role, content: compressAssistantContent(r.content) }));
   const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null };
 
   const startMs = Date.now();
-  const result = await chatAgentRunner.run(userMessageRow.content, history, regionScope, { sessionId });
+  let result;
+  try {
+    result = await chatAgentRunner.run(userPrompt, history, regionScope, { sessionId });
+  } catch (err) {
+    logger.error('regenerate_agent_failed', {
+      sessionId,
+      messageId,
+      error: err.message,
+      stack: err.stack,
+    });
+    throw err;
+  }
   const responseTime = Date.now() - startMs;
   const now = formatNowSqliteLocal();
   const newAssistMsgId = nanoid();
-  const finalContent = result.markdownContent || JSON.stringify(result);
+  const finalContent = storageContentFromAgentResult(result);
 
   logger.info('chat_turn', {
     sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
     toolName: result._toolMeta?.toolName, msgId: newAssistMsgId,
   });
 
-  db.run('INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)', [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType, now]);
-  db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+  // 替换最后一条 assistant：先删旧消息（及反馈），再插入新行，避免多次「重新生成」堆叠多条 assistant 导致 pop 错位与 500
+  db.transaction(() => {
+    db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
+    const del = db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+    if (!del.changes) {
+      throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
+    }
+    db.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+    );
+    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+  });
 
   return {
     messageId: newAssistMsgId,

@@ -2,8 +2,9 @@
  * Executive Chat：百炼 Qwen-TTS Realtime（经后端 /ws/tts 代理），与 SSE 流式文字并行朗读。
  * 朗读文本与气泡内 formatReplyContentText(partialReply) 对齐，随结构化字段增量而追加。
  */
+import type { ReplyContent, SendMessageResult } from '@/api/chat';
 import { formatReplyContentText } from '@/api/chat';
-import type { ReplyContent } from '@/api/chat';
+import { speechTextForSendResult } from '@/utils/execStreamReply';
 
 const LS_KEY = 'tot_executive_voice_enabled';
 
@@ -158,6 +159,14 @@ export class ExecutiveTtsSession {
     this.pushTextIncremental(full);
   }
 
+  /**
+   * Markdown / 无 JSON 结构化时的流式正文：与 `ExecStyleAiPayload.content` 同步增量朗读。
+   * （`pushPartialReply` 在 FC 模式下 partialReply 为空时不会收到任何文本，导致 TTS 全程静音。）
+   */
+  pushSpokenPlainText(full: string) {
+    this.pushTextIncremental(full);
+  }
+
   private pushTextIncremental(full: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (full.length < this.lastText.length) {
@@ -220,15 +229,17 @@ export class ExecutiveTtsSession {
   }
 }
 
-/** 非流式一整段朗读（如重新生成后） */
+/** 非流式一整段朗读（如重新生成后）；仅朗读与主气泡一致的正式内容，不含思考过程 */
 export async function speakReplyContent(
   getToken: () => string,
-  reply: ReplyContent | null | undefined
+  result: SendMessageResult
 ): Promise<void> {
+  const full = speechTextForSendResult(result);
+  if (!full) return;
   const s = new ExecutiveTtsSession();
   try {
     await s.connect(getToken);
-    s.pushPartialReply(reply ?? null);
+    s.pushSpokenPlainText(full);
     s.finish();
     await s.waitUntilClosed(60000);
   } finally {
