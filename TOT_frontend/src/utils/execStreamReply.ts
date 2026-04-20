@@ -129,10 +129,11 @@ export function finalizeExecStyleMessage(
   thinkingSnapshot: string,
   opts?: { messageId?: string }
 ) {
+  const finalContent = result.markdownContent || formatReplyContentText(result.replyContent);
   return {
     role: 'ai' as const,
     id: opts?.messageId ?? result.messageId,
-    content: formatReplyContentText(result.replyContent),
+    content: finalContent,
     replyContent: result.replyContent,
     thinking: thinkingSnapshot || undefined,
     jsonStream: undefined,
