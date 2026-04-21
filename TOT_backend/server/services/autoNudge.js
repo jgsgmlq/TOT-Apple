@@ -99,30 +99,35 @@ async function evaluateAndTriggerAutoNudges(taskId) {
       }
     }
   }
+const crisisBand = classifyDeadlineCrisisBand(rules, hoursLeft);
+if (crisisBand === 'p0') {
+  const h = getDeadlineCrisisHours(rules);
+  for (const a of assignments) {
+    triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0', threshold: h.p0Hours });
+  }
+} else if (crisisBand === 'p1') {
+  const h = getDeadlineCrisisHours(rules);
+  for (const a of assignments) {
+    triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'orange', ruleType: 'deadlineCrisisP1', threshold: h.p1Hours });
+  }
+}
 
-  const crisisBand = classifyDeadlineCrisisBand(rules, hoursLeft);
-  if (crisisBand === 'p0') {
-    const h = getDeadlineCrisisHours(rules);
-    for (const a of assignments) {
-      triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'red', ruleType: 'deadlineCrisisP0', threshold: h.p0Hours });
-    }
-  } else if (crisisBand === 'p1') {
-    const h = getDeadlineCrisisHours(rules);
-    for (const a of assignments) {
-      triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'deadlineCrisisP1', threshold: h.p1Hours });
+// 去重逻辑：一人一次最多一条预警。优先级：red > orange > yellow
+const severityWeight = { 'red': 3, 'orange': 2, 'yellow': 1 };
+const uniqueTargets = {};
+for (const t of triggeredUsers) {
+  if (!uniqueTargets[t.userId]) {
+    uniqueTargets[t.userId] = t;
+  } else {
+    const existingWeight = severityWeight[uniqueTargets[t.userId].severity] || 0;
+    const newWeight = severityWeight[t.severity] || 0;
+    if (newWeight > existingWeight) {
+      uniqueTargets[t.userId] = t;
     }
   }
+}
 
-  const uniqueTargets = {};
-  for (const t of triggeredUsers) {
-    if (!uniqueTargets[t.userId]) {
-      uniqueTargets[t.userId] = t;
-    } else if (t.severity === 'red') {
-      uniqueTargets[t.userId] = t;
-    }
-  }
-
-  const finalTargets = Object.values(uniqueTargets);
+const finalTargets = Object.values(uniqueTargets);
   const toProcess = [];
   for (const target of finalTargets) {
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
@@ -173,7 +178,9 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
     const content = formatAutoNudgeContent(taskName, target.ruleType);
 
     const eventId = nanoid();
-    const eventType = target.severity === 'red' ? 'nudge_red' : 'nudge_yellow';
+    let eventType = 'nudge_yellow';
+    if (target.severity === 'red') eventType = 'nudge_red';
+    if (target.severity === 'orange') eventType = 'nudge_orange';
     const now = formatNowSqliteLocal();
     let nudgeRecordId;
 
