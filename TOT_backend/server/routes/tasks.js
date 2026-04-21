@@ -114,6 +114,7 @@ function formatTask(row) {
     passScore:        row.pass_score,
     mypalTaskWeek:    row.mypal_task_week ?? null,
     mypalProductName: row.mypal_product_name ?? null,
+    subTasksConfig:   row.sub_tasks_config ? JSON.parse(row.sub_tasks_config) : null,
     ddlAt:            row.ddl_at,
     createdBy:        row.created_by,
     createdAt:        row.created_at,
@@ -224,7 +225,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
       rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,  // 保留 autoNudgeRules
-      mypalTaskWeek, mypalProductName,
+      mypalTaskWeek, mypalProductName, subTasksConfig,
     } = req.body;
 
     if (!title)      throw createError(400, 'title 不能为空', 'TASK_005');
@@ -253,6 +254,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     const rtmFilterStr = rtmFilter ? JSON.stringify(rtmFilter) : null;
     const storeScopeStr = (!storeScope || storeScope === 'all') ? 'all' : JSON.stringify(storeScope);
     const autoNudgeRulesStr = autoNudgeRules ? JSON.stringify(autoNudgeRules) : null; // 保留
+    const subTasksConfigStr = subTasksConfig ? JSON.stringify(subTasksConfig) : null;
     const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
     const startAtNorm = parseDdlAtToSqliteUtc(startAt);
 
@@ -260,11 +262,11 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
       `INSERT INTO tasks
         (id, title, description, has_mypal, has_smartsell, has_ai_demo, has_live_broadcast,
          status, rtm_filter, store_scope, auto_nudge_rules, start_at, pass_score,
-         mypal_task_week, mypal_product_name, ddl_at, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         mypal_task_week, mypal_product_name, sub_tasks_config, ddl_at, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
        rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAtNorm, passScore,
-       mypalWeekStr, mypalProductStr, ddlAtNorm, req.user.username, now, now]
+       mypalWeekStr, mypalProductStr, subTasksConfigStr, ddlAtNorm, req.user.username, now, now]
     );
 
     const row = db.get('SELECT * FROM tasks WHERE id = ?', [id]);
@@ -315,7 +317,9 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         (mypalTaskWeek !== undefined &&
           ((mypalTaskWeek != null && String(mypalTaskWeek).trim()) ? String(mypalTaskWeek).trim() : null) !== task.mypal_task_week) ||
         (mypalProductName !== undefined &&
-          ((mypalProductName != null && String(mypalProductName).trim()) ? String(mypalProductName).trim() : null) !== task.mypal_product_name);
+          ((mypalProductName != null && String(mypalProductName).trim()) ? String(mypalProductName).trim() : null) !== task.mypal_product_name) ||
+        (subTasksConfig !== undefined &&
+          (subTasksConfig ? JSON.stringify(subTasksConfig) : null) !== task.sub_tasks_config);
 
       if (forbiddenChanged) {
         throw createError(400, '已下发任务只允许修改截止时间和预警规则', 'TASK_004');
@@ -375,11 +379,16 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
       const startAtResolved =
         startAt !== undefined ? parseDdlAtToSqliteUtc(startAt) : task.start_at;
 
+      const subTasksConfigResolved =
+        subTasksConfig !== undefined
+          ? (subTasksConfig ? JSON.stringify(subTasksConfig) : null)
+          : task.sub_tasks_config;
+
       db.run(
         `UPDATE tasks
          SET title = ?, description = ?,
              has_mypal = ?, has_smartsell = ?, has_ai_demo = ?, has_live_broadcast = ?,
-             rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?,
+             rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?, sub_tasks_config = ?,
              start_at = ?, pass_score = ?, mypal_task_week = ?, mypal_product_name = ?,
              ddl_at = ?, updated_at = ?
          WHERE id = ?`,
@@ -390,6 +399,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           rtmFilterStr,
           storeScopeStr,
           autoNudgeRulesStr,  // 保留
+          subTasksConfigResolved,
           startAtResolved,
           passScore  !== undefined ? passScore : task.pass_score,
           platforms[0] === 1 ? mypalWeekResolved : null,

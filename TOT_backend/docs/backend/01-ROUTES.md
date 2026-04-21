@@ -109,7 +109,8 @@ const PUBLIC_PATHS = [
 **Gap 清单**
 - [ ] 接收 `title`，写入 `tasks.title`（数据库字段同步改）
 - [ ] 接收 `platforms`（数组），JSON.stringify 后写入 `tasks.platforms`
-- [ ] 接收 `rtmFilter`（数组），JSON.stringify 后写入 `tasks.rtm_filter`
+- [x] 接收 `rtmFilter`（数组），JSON.stringify 后写入 `tasks.rtm_filter`
+- [x] 接收 `subTasksConfig`（对象），JSON.stringify 后写入 `tasks.sub_tasks_config`
 - [ ] 接收 `ddlAt`，写入 `tasks.ddl_at`
 - [ ] 初始 status 改为 `'draft'`
 - [ ] 加 `requireRole('central', 'admin')` 中间件

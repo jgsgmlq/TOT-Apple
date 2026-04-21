@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.5.3（2026-04-21）
+
+- **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
+
 ### v1.5.2（2026-04-17）
 
 - **实时语音合成 TTS（百炼 Qwen-TTS Realtime）**：`server/app.js` 挂载 **`setupTtsRealtimeWebSocket`**，浏览器通过 **`WebSocket`** **`/ws/tts?token=<JWT>`** 连接（角色 **`executive`** / **`central`** / **`admin`**）；服务端用同一套 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发至 **`wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime`**（见 **`server/ws/ttsRealtime.js`**）。客户端事件：`session.update` 由代理在连接成功后自动下发；客户端发送 **`input_text_buffer.append`**（`type: append`）与 **`session.finish`**（`type: finish`）；服务端透传上游 JSON（含 **`response.audio.delta`**）。详见 §6.7。Executive Chat 前端可开关「语音」与 SSE 并行。
@@ -142,8 +146,8 @@
 
 | 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.13 |
-| 更新时间 | 2026-04-13 |
+| 文档版本 | 1.5.3 |
+| 更新时间 | 2026-04-21 |
 | 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
@@ -311,6 +315,7 @@
 >   passScore: number,         // 达标分数，整数，必填
 >   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
 >   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
+>   subTasksConfig: Record<string, string> | null, // 子任务独立配置 (针对合集任务)
 >   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 **本地墙钟** `YYYY-MM-DD HH:MM:SS`（与 `datetime('now', 'localtime')` / `parseDateToSqliteLocal` 一致）
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
@@ -365,6 +370,10 @@
       "progressLag": { "lifestyle": 3, "mono": 1 },
       "startDelay": 50,
       "deadlineCrisis": { "p0": 24, "p1": 48 }
+    },
+    "subTasksConfig": {          // 任务合集各平台的独立配置，可选
+      "MyPAL": "独立描述1...",
+      "SmartSell": "独立描述2..."
     },
     "mypalTaskWeek": "FY26Q2W1",  // hasMypal=true 时必填，否则 400（TASK_007）
     "mypalProductName": "string" // 可选；与 MyPal 产品名匹配
@@ -444,6 +453,7 @@
     "passScore": 100,
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
+    "subTasksConfig": { "MyPAL": "独立描述1...", "SmartSell": "独立描述2..." },
     "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "startDelay": 50, "deadlineCrisis": { "p0": 24, "p1": 48 } },
     "ddlAt": "2026-05-01T00:00:00Z"
   }
