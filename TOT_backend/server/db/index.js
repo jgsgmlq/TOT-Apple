@@ -22,6 +22,7 @@ function getDb() {
     ensureEmployeesEmailIndex(_db);
     ensureMypalLearningMockIndexes(_db);
     migrateTasksMypalColumns(_db);
+    migrateTasksSubTasksConfig(_db);
     migrateNudgeRecordsConstraints(_db);
     migrateNotificationEventsContent(_db);
     migrateUsersExecutiveScope(_db);
@@ -151,6 +152,13 @@ function migrateTasksMypalColumns(database) {
   if (!names.has('mypal_product_name')) {
     database.exec('ALTER TABLE tasks ADD COLUMN mypal_product_name TEXT');
   }
+}
+
+/** 已有库补列：tasks.sub_tasks_config（子任务独立配置） */
+function migrateTasksSubTasksConfig(database) {
+  const cols = database.prepare('PRAGMA table_info(tasks)').all();
+  if (cols.some((c) => c.name === 'sub_tasks_config')) return;
+  database.exec('ALTER TABLE tasks ADD COLUMN sub_tasks_config TEXT');
 }
 
 /** 已有库补列：notification_events.content（催办文案等） */

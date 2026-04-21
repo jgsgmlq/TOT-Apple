@@ -1,5 +1,11 @@
 # ToT API 接口定义文档
 
+### v1.5.3（2026-04-21）
+
+- **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
+- **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
+- **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
+
 ### v1.5.2（2026-04-17）
 
 - **实时语音合成 TTS（百炼 Qwen-TTS Realtime）**：`server/app.js` 挂载 **`setupTtsRealtimeWebSocket`**，浏览器通过 **`WebSocket`** **`/ws/tts?token=<JWT>`** 连接（角色 **`executive`** / **`central`** / **`admin`**）；服务端用同一套 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发至 **`wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime`**（见 **`server/ws/ttsRealtime.js`**）。客户端事件：`session.update` 由代理在连接成功后自动下发；客户端发送 **`input_text_buffer.append`**（`type: append`）与 **`session.finish`**（`type: finish`）；服务端透传上游 JSON（含 **`response.audio.delta`**）。详见 §6.7。Executive Chat 前端可开关「语音」与 SSE 并行。
@@ -142,8 +148,8 @@
 
 | 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.13 |
-| 更新时间 | 2026-04-13 |
+| 文档版本 | 1.5.3 |
+| 更新时间 | 2026-04-21 |
 | 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
@@ -311,6 +317,7 @@
 >   passScore: number,         // 达标分数，整数，必填
 >   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
 >   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
+>   subTasksConfig: Record<string, string> | null, // 子任务独立配置 (针对合集任务)
 >   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 **本地墙钟** `YYYY-MM-DD HH:MM:SS`（与 `datetime('now', 'localtime')` / `parseDateToSqliteLocal` 一致）
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
@@ -365,6 +372,10 @@
       "progressLag": { "lifestyle": 3, "mono": 1 },
       "startDelay": 50,
       "deadlineCrisis": { "p0": 24, "p1": 48 }
+    },
+    "subTasksConfig": {          // 任务合集各平台的独立配置，可选
+      "MyPAL": "独立描述1...",
+      "SmartSell": "独立描述2..."
     },
     "mypalTaskWeek": "FY26Q2W1",  // hasMypal=true 时必填，否则 400（TASK_007）
     "mypalProductName": "string" // 可选；与 MyPal 产品名匹配
@@ -444,6 +455,7 @@
     "passScore": 100,
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
+    "subTasksConfig": { "MyPAL": "独立描述1...", "SmartSell": "独立描述2..." },
     "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "startDelay": 50, "deadlineCrisis": { "p0": 24, "p1": 48 } },
     "ddlAt": "2026-05-01T00:00:00Z"
   }
@@ -502,6 +514,34 @@
 
 > **WS 推送：** 下发成功后，向所有目标用户（`targetUsers`）推送 `{ event: "task_assigned", data: { taskId, taskTitle, ddlAt } }`（见 §15.1）。
 
+### 2.4.1 撤销任务 **P0**
+
+- **接口名称**：撤销已下发任务（Revoke Task）
+- **接口路径**：`/tasks/{id}/revoke`
+- **请求方法**：POST
+- **权限要求**：`central` / `admin`
+- **路径参数**：`id`（必填）
+- **请求体**：无
+- **业务规则**：
+  - 任务必须是已下发（`status === 'dispatched'`）状态。
+  - 服务端会在**数据库事务中级联物理删除**关联该任务的所有子记录，包括 `read_receipts`（已读回执）、`notification_events`（通知事件）、`nudge_records`（催办记录）、`task_assignments`（员工任务分配记录）和 `dashboard_insights`（AI 洞察），最后**彻底删除任务主记录**。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "任务撤销并删除成功",
+    "data": { "id": "string", "deleted": true },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 404：任务不存在（`TASK_002`）
+  - 400：任务未下发，当前不在 `dispatched` 状态（`TASK_008`）
+
+> **WS 推送：**
+> 1. 向受影响的店员下发 `{ event: "task_deleted", data: { taskId, message: "任务已被总部撤销并删除" } }`，前端监听此事件可直接从 UI 移除该任务卡片。
+> 2. 向管理端看板推送 `{ event: "dashboard_updated", data: { taskId, operationType: "task_deleted" } }` 刷新数据。
+
 ### 2.5 获取任务列表 **P0**
 
 - **接口名称**：获取任务列表
@@ -511,7 +551,7 @@
 - **查询参数**：
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
-  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress` |
+  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress`, `overdue` |
 - **角色过滤规则**：
   - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
   - `employee`：仅返回本人有 `task_assignments` 记录的任务
@@ -713,7 +753,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 否 | 任务ID，筛选指定任务的分配记录 |
   | employeeId | string | 否 | 员工ID；`central`/`admin` 可筛任意；`employee` 仅允许本人（与 JWT 不一致则 403） |
   | storeId | string | 否 | 门店ID；`central`/`admin` 可筛 |
-  | status | string | 否 | 分配状态：pending/in_progress/completed |
+  | status | string | 否 | 分配状态：pending/in_progress/completed/overdue |
   | pageNum | int | 否 | 页码，**默认 1**；未传或非法返回 400（`ASSIGN_018`） |
   | pageSize | int | 否 | 页大小，**默认 20**，**最大 200**；非法返回 400（`ASSIGN_019`）；`status` 非法返回 `ASSIGN_020` |
 - **响应体（成功）**：

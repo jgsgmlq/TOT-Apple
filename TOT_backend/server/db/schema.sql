@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_at           TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate，如 FY26Q2W1（has_mypal 时建议必填）
-  mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空，见对接文档）
+  mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空）
+  sub_tasks_config   TEXT,                          -- 子任务独立配置 (JSON: {"MyPal": "描述1", "AI Coach": "描述2"})
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   CHECK (has_mypal + has_smartsell + has_ai_demo + has_live_broadcast >= 1),
   CHECK (rtm_filter IS NULL OR (json_valid(rtm_filter) AND json_type(rtm_filter) = 'array')),
   CHECK (store_scope = 'all' OR (json_valid(store_scope) AND json_type(store_scope) = 'array')),
-  CHECK (auto_nudge_rules IS NULL OR json_valid(auto_nudge_rules))
+  CHECK (auto_nudge_rules IS NULL OR json_valid(auto_nudge_rules)),
+  CHECK (sub_tasks_config IS NULL OR json_valid(sub_tasks_config))
 );
 
 -- 5. task_assignments

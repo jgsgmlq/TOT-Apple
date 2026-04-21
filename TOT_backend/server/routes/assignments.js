@@ -173,11 +173,16 @@ router.get('/', authenticate, (req, res, next) => {
       params.push(taskId);
     }
     if (status) {
-      if (!['pending', 'in_progress', 'completed'].includes(String(status))) {
+      if (!['pending', 'in_progress', 'completed', 'overdue'].includes(String(status))) {
         throw createError(400, 'status 非法', 'ASSIGN_020');
       }
-      where.push('ta.status = ?');
-      params.push(status);
+      if (status === 'overdue') {
+        where.push('ta.status != ? AND t.ddl_at < ?');
+        params.push('completed', formatNowSqliteLocal());
+      } else {
+        where.push('ta.status = ?');
+        params.push(status);
+      }
     }
 
     if (role === 'central' || role === 'admin') {
@@ -203,7 +208,9 @@ router.get('/', authenticate, (req, res, next) => {
     )`;
 
     const countRow = db.get(
-      `SELECT COUNT(*) AS total FROM task_assignments ta WHERE ${whereSql}`,
+      `SELECT COUNT(*) AS total FROM task_assignments ta 
+       LEFT JOIN tasks t ON ta.task_id = t.id
+       WHERE ${whereSql}`,
       params
     );
     const total = countRow ? countRow.total : 0;
@@ -212,6 +219,7 @@ router.get('/', authenticate, (req, res, next) => {
     const rows = db.all(
       `SELECT ta.*, ${eventSub} AS task_assigned_event_id
        FROM task_assignments ta
+       LEFT JOIN tasks t ON ta.task_id = t.id
        WHERE ${whereSql}
        ORDER BY ta.created_at DESC
        LIMIT ? OFFSET ?`,
