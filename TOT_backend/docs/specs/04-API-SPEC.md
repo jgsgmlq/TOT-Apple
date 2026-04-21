@@ -2,6 +2,7 @@
 
 ### v1.5.3（2026-04-21）
 
+- **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及起步异常 (startDelay) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
 - **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
 - **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
@@ -1180,7 +1181,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```json
   {
     // event_type 仅允许：task_assigned / task_updated
-    // ❌ nudge_yellow / nudge_red 禁止通过本接口创建，必须走 POST /nudges（§4.5）
+    // ❌ nudge_yellow / nudge_orange / nudge_red 禁止通过本接口创建，必须走 POST /nudges（§4.5）
     "eventType": "task_assigned/task_updated", // 必填
     "taskId": "string",       // 必填，notification_events.task_id
     "assignmentId": "string", // task_assigned 必填；task_updated 可空（notification_events.assignment_id）
@@ -1208,12 +1209,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：系统内部写入 `notification_events` 表。`dedupeKey` + DB 层 PARTIAL UNIQUE INDEX 保证 `task_assigned` 事件幂等（重复调用不报错，返回已有 eventId）。**催办事件（nudge_yellow / nudge_red）禁止通过本接口创建，必须通过 §4.5 发起催办，以保证 `nudge_records` 审计链完整。预警数据无独立存储表，从 `task_assignments` 实时聚合计算**（见 §5.5）。
+- **接口说明**：系统内部写入 `notification_events` 表。`dedupeKey` + DB 层 PARTIAL UNIQUE INDEX 保证 `task_assigned` 事件幂等（重复调用不报错，返回已有 eventId）。**催办事件（nudge_yellow / nudge_orange / nudge_red）禁止通过本接口创建，必须通过 §4.5 发起催办，以保证 `nudge_records` 审计链完整。预警数据无独立存储表，从 `task_assignments` 实时聚合计算**（见 §5.5）。
 - **权限要求**：
   - central：仅可触发本人有权限的任务事件
   - employee：无创建权限
 - **异常场景**：
-  - 400：必填参数缺失 / eventType非法（含nudge_yellow/nudge_red）/ task_assigned类assignmentId为空
+  - 400：必填参数缺失 / eventType非法（含nudge_yellow/nudge_orange/nudge_red）/ task_assigned类assignmentId为空
   - 403：越权创建
   - 409：dedupeKey已存在（幂等，返回已有eventId，不重复写入）
 
@@ -1226,12 +1227,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **查询参数**：
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
-  | eventType | string | 否 | 事件类型：task_assigned/nudge_yellow/nudge_red/task_updated |
+  | eventType | string | 否 | 事件类型：task_assigned/nudge_yellow/nudge_orange/nudge_red/task_updated |
   | taskId | string | 否 | 关联任务ID（notification_events.task_id） |
   | targetUserId | string | 否 | 目标用户ID（employees.id），不传则默认当前 Employee-Id |
   | assignmentId | string | 否 | 关联分配记录ID（notification_events.assignment_id） |
   | storeId | string | 否 | 门店ID过滤（notification_events.store_id，直接命中索引） |
-  | severity | string | 否 | 催办级别：yellow/red |
+  | severity | string | 否 | 催办级别：yellow/orange/red |
   | isActive | boolean | 否 | 活跃状态过滤（计算值：关联 assignment 未 completed 则为 true），默认 true |
   | readStatus | boolean | 否 | 是否已读（JOIN read_receipts 计算） |
   | pageNum | int | 是 | 页码，默认1 |
@@ -1248,16 +1249,16 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "list": [
         {
           "eventId": "string",     // notification_events.id（nanoid）
-          "eventType": "string",   // task_assigned/nudge_yellow/nudge_red/task_updated
+          "eventType": "string",   // task_assigned/nudge_yellow/nudge_orange/nudge_red/task_updated
           "taskId": "string",      // notification_events.task_id
           "assignmentId": "string", // notification_events.assignment_id，可为 null
           "targetUserId": "string", // notification_events.target_user_id（= employees.id）
           "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
-          "severity": "string",    // notification_events.severity（yellow/red），非催办事件时为 null
+          "severity": "string",    // notification_events.severity（yellow/orange/red），非催办事件时为 null
           "content": "string",     // notification_events.content；催办类为展示文案，异步写入完成后非 null；其它事件多为 null
           "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, startDelay），非预警时为 null
           // isActive 计算规则（不存储于 DB）：
-          //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+          //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
           //     → ta.status != 'completed'（任务未完成时为 true，完成后为 false）
           //   event_type = 'task_updated'
           //     → 始终为 true（不绑定 assignment 完成状态）
@@ -1353,7 +1354,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     AND rr.id IS NULL   -- 未读
     AND (
       -- task_assigned / nudge_* 事件：关联 assignment 未完成才计入铃铛
-      (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+      (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
         AND ta.status != 'completed')
       OR
       -- task_updated 事件：不绑定 assignment 状态，只要未读就计入
@@ -1380,7 +1381,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
                                   //   targetType=employee → employees.id（如 E001）
                                   //   targetType=store    → stores.id（如 S001）
                                   //   targetType=region   → 区域名称（如"华东"，仅 central 可用）
-    "severity": "yellow/red"      // 必填，nudge_records.severity（DB CHECK 约束）
+    "severity": "yellow/orange/red"      // 必填，nudge_records.severity（DB CHECK 约束）
     // initiator_id 来自 JWT `req.user.id`（写入 nudge_records.initiator_id）
     // notification 内容由服务端根据 event_type+task 信息模板生成，不需前端传入
     // auto 模式属于 P2 AI Agent 能力，本接口仅支持人工触发
@@ -1433,7 +1434,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 是 | 任务ID（nudge_records.task_id），必传 |
   | targetType | string | 否 | 催办范围过滤：employee/store/region |
   | targetId | string | 否 | 催办对象ID过滤（与 targetType 联用） |
-  | severity | string | 否 | 催办级别：yellow/red |
+  | severity | string | 否 | 催办级别：yellow/orange/red |
   | pageNum | int | 否 | 页码，默认1 |
   | pageSize | int | 否 | 页大小，默认20 |
 - **响应体（成功）**：
@@ -1448,7 +1449,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "taskId": "string",         // nudge_records.task_id
           "targetType": "string",     // employee / store / region
           "targetId": "string",       // employees.id / stores.id / 区域名称
-          "severity": "string",       // yellow / red
+          "severity": "string",       // yellow / orange / red
           "initiatorId": "string",    // nudge_records.initiator_id（users.id 串化）
           // nudgedCount：本次催办生成的 notification_events 数量（JSON 数组长度）
           "nudgedCount": 3,
@@ -1771,7 +1772,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "storeId": "string",      // 兼容字段：同 targetId
           "storeName": "string",    // 兼容字段：同 targetName
           "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
-          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0/P1=未完成人数/总人数×100（且任务已落在对应临期带）
+          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0(red)/P1(orange)=未完成人数/总人数×100（且任务已落在对应临期带）
           "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数

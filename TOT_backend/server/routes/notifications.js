@@ -12,12 +12,15 @@ const router = express.Router();
 // ─── 辅助：计算 isActive / resolvedAt（基于 assignment 状态）──────────────────
 
 function computeIsActive(eventType, assignmentStatus) {
-  if (eventType === 'task_updated') return true;
-  return assignmentStatus !== 'completed';
+  if (['task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red'].includes(eventType)) {
+    return assignmentStatus !== 'completed';
+  }
+  if (['task_updated', 'task_deleted'].includes(eventType)) return true;
+  return false;
 }
 
 function computeResolvedAt(eventType, assignmentCompletedAt) {
-  if (eventType === 'task_updated') return null;
+  if (['task_updated', 'task_deleted'].includes(eventType)) return null;
   return assignmentCompletedAt || null;
 }
 
@@ -77,11 +80,10 @@ router.get('/unread-count', authenticate, (req, res, next) => {
        WHERE ne.target_user_id = ?
          AND rr.id IS NULL
          AND (
-           (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+           (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
              AND (ta.status IS NULL OR ta.status != 'completed'))
            OR ne.event_type = 'task_updated'
-         )`,
-      [employeeId, employeeId]
+         )`,      [employeeId, employeeId]
     );
 
     res.json({
@@ -139,11 +141,11 @@ router.get('/', authenticate, (req, res, next) => {
       const wantActive = isActive === 'true' || isActive === '1';
       if (wantActive) {
         conditions.push(
-          "(ne.event_type = 'task_updated' OR (ta.status IS NULL OR ta.status != 'completed'))"
+          "(ne.event_type IN ('task_updated', 'task_deleted') OR (ta.status IS NULL OR ta.status != 'completed'))"
         );
       } else {
         conditions.push(
-          "(ne.event_type != 'task_updated' AND ta.status = 'completed')"
+          "(ne.event_type NOT IN ('task_updated', 'task_deleted') AND ta.status = 'completed')"
         );
       }
     }
@@ -218,10 +220,10 @@ router.post('/', authenticate, requireRole(['central', 'admin']), (req, res, nex
     const { eventType, taskId, assignmentId, targetUserId, targetRole, dedupeKey } = req.body;
 
     if (!eventType) throw createError(400, 'eventType 不能为空', 'EVENT_001');
-    if (['nudge_yellow', 'nudge_red'].includes(eventType)) {
+    if (['nudge_yellow', 'nudge_orange', 'nudge_red'].includes(eventType)) {
       throw createError(400, 'nudge 事件必须通过 POST /nudges 创建', 'EVENT_002');
     }
-    if (!['task_assigned', 'task_updated'].includes(eventType)) {
+    if (!['task_assigned', 'task_updated', 'task_deleted'].includes(eventType)) {
       throw createError(400, 'eventType 非法', 'EVENT_001');
     }
     if (!taskId)        throw createError(400, 'taskId 不能为空', 'EVENT_003');
