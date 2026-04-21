@@ -3,6 +3,7 @@
 ### v1.5.3（2026-04-21）
 
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
+- **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
 - **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
 
 ### v1.5.2（2026-04-17）
@@ -550,7 +551,7 @@
 - **查询参数**：
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
-  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress` |
+  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress`, `overdue` |
 - **角色过滤规则**：
   - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
   - `employee`：仅返回本人有 `task_assignments` 记录的任务
@@ -752,7 +753,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 否 | 任务ID，筛选指定任务的分配记录 |
   | employeeId | string | 否 | 员工ID；`central`/`admin` 可筛任意；`employee` 仅允许本人（与 JWT 不一致则 403） |
   | storeId | string | 否 | 门店ID；`central`/`admin` 可筛 |
-  | status | string | 否 | 分配状态：pending/in_progress/completed |
+  | status | string | 否 | 分配状态：pending/in_progress/completed/overdue |
   | pageNum | int | 否 | 页码，**默认 1**；未传或非法返回 400（`ASSIGN_018`） |
   | pageSize | int | 否 | 页大小，**默认 20**，**最大 200**；非法返回 400（`ASSIGN_019`）；`status` 非法返回 `ASSIGN_020` |
 - **响应体（成功）**：

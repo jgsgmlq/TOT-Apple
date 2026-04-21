@@ -161,8 +161,13 @@ router.get('/', authenticate, (req, res, next) => {
       const p = [employeeId];
 
       if (status) {
-        q += ` AND ta.status = ?`;
-        p.push(status);
+        if (status === 'overdue') {
+          q += ` AND ta.status != 'completed' AND t.ddl_at < ?`;
+          p.push(formatNowSqliteLocal());
+        } else {
+          q += ` AND ta.status = ?`;
+          p.push(status);
+        }
       }
 
       q += ` ORDER BY t.created_at DESC`;
