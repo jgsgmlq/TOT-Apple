@@ -2,6 +2,7 @@
 
 ### v1.5.3（2026-04-21）
 
+- **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
 - **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
 
 ### v1.5.2（2026-04-17）
@@ -511,6 +512,34 @@
   - 409：任务已下发（`TASK_003`）
 
 > **WS 推送：** 下发成功后，向所有目标用户（`targetUsers`）推送 `{ event: "task_assigned", data: { taskId, taskTitle, ddlAt } }`（见 §15.1）。
+
+### 2.4.1 撤销任务 **P0**
+
+- **接口名称**：撤销已下发任务（Revoke Task）
+- **接口路径**：`/tasks/{id}/revoke`
+- **请求方法**：POST
+- **权限要求**：`central` / `admin`
+- **路径参数**：`id`（必填）
+- **请求体**：无
+- **业务规则**：
+  - 任务必须是已下发（`status === 'dispatched'`）状态。
+  - 服务端会在**数据库事务中级联物理删除**关联该任务的所有子记录，包括 `read_receipts`（已读回执）、`notification_events`（通知事件）、`nudge_records`（催办记录）、`task_assignments`（员工任务分配记录）和 `dashboard_insights`（AI 洞察），最后**彻底删除任务主记录**。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "任务撤销并删除成功",
+    "data": { "id": "string", "deleted": true },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 404：任务不存在（`TASK_002`）
+  - 400：任务未下发，当前不在 `dispatched` 状态（`TASK_008`）
+
+> **WS 推送：**
+> 1. 向受影响的店员下发 `{ event: "task_deleted", data: { taskId, message: "任务已被总部撤销并删除" } }`，前端监听此事件可直接从 UI 移除该任务卡片。
+> 2. 向管理端看板推送 `{ event: "dashboard_updated", data: { taskId, operationType: "task_deleted" } }` 刷新数据。
 
 ### 2.5 获取任务列表 **P0**
 

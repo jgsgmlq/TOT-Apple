@@ -607,6 +607,66 @@ router.post('/:id/dispatch', authenticate, requireRole(['central', 'admin']), (r
   }
 });
 
+// ─── POST /api/v1/tasks/:id/revoke ──────────────────────────────────────────
+router.post('/:id/revoke', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
+  try {
+    const taskId = req.params.id;
+    const task = db.get('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    
+    if (!task) {
+      throw createError(404, '任务不存在', 'TASK_002');
+    }
+    
+    if (task.status !== 'dispatched') {
+      throw createError(400, '任务未下发，无需撤销', 'TASK_008');
+    }
+
+    // 获取需要通知的已分配员工
+    const targets = db.all(
+      'SELECT DISTINCT user_id FROM task_assignments WHERE task_id = ?',
+      [taskId]
+    );
+
+    db.transaction(() => {
+      // 必须先删除被通知引用的已读回执
+      db.run('DELETE FROM read_receipts WHERE event_id IN (SELECT id FROM notification_events WHERE task_id = ?)', [taskId]);
+      // 删除关联的通知事件
+      db.run('DELETE FROM notification_events WHERE task_id = ?', [taskId]);
+      // 删除关联的催办记录
+      db.run('DELETE FROM nudge_records WHERE task_id = ?', [taskId]);
+      // 删除所有下发的员工任务分配记录
+      db.run('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
+      // 删除关联的 AI 洞察
+      db.run('DELETE FROM dashboard_insights WHERE task_id = ?', [taskId]);
+      // 彻底删除任务本身
+      db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+
+    // 通知所有看板刷新
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: { taskId, operationType: 'task_deleted' }
+    });
+
+    // 通知受影响的店员，使任务卡片直接从店员 UI 上移除
+    if (targets && targets.length > 0) {
+      broadcastToUsers(targets.map(t => t.user_id), {
+        event: 'task_deleted',
+        data: { taskId, message: '任务已被总部撤销并删除' }
+      });
+    }
+
+    res.json({
+      code: 200,
+      message: '任务撤销并删除成功',
+      data: { id: taskId, deleted: true },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── DELETE /api/v1/tasks/:id ──────────────────────────────────────────
 // 保留：新版的删除功能
 router.delete('/:id', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
