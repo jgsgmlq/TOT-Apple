@@ -144,14 +144,26 @@
                 @keydown="onAiInsightKeydown"
               />
               <n-button
+                v-if="!aiInsightSending"
                 type="primary"
                 round
-                :disabled="!aiInsightInput.trim() || aiInsightSending"
-                :loading="aiInsightSending"
+                :disabled="!aiInsightInput.trim()"
                 class="hq-ai-insight-send"
                 @click="handleAiInsightSend"
               >
                 发送
+              </n-button>
+              <n-button
+                v-else
+                type="default"
+                round
+                class="hq-ai-insight-send hq-ai-insight-stop"
+                @click="handleAiInsightStop"
+              >
+                <template #icon>
+                  <n-icon><StopOutlined /></n-icon>
+                </template>
+                停止生成
               </n-button>
             </div>
             <p class="hq-ai-insight-tip">AI 生成内容仅供参考，请结合业务实际情况判断。</p>
@@ -1216,6 +1228,7 @@
     CopyOutlined,
     CheckOutlined,
     RobotOutlined,
+    StopOutlined,
   } from '@vicons/antd';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import aiWatchIcon from '@/assets/icons/AI_watch.png';
@@ -2066,6 +2079,21 @@
     const c = new AbortController();
     aiInsightStreamAbort.value = c;
     return c.signal;
+  }
+
+  /** 中止看板抽屉内 SSE，保留已流式输出的正文 */
+  function handleAiInsightStop() {
+    aiInsightStreamAbort.value?.abort();
+    aiInsightStreamAbort.value = null;
+    aiInsightSending.value = false;
+    const last = aiInsightMessages.value[aiInsightMessages.value.length - 1];
+    if (last?.role === 'ai') {
+      const c = (last.content || '').trim();
+      if (!c || c === '正在生成…') {
+        last.content = '（已停止生成）';
+      }
+    }
+    scrollAiInsightToBottom();
   }
 
   const aiInsightChatRef = ref<HTMLElement | null>(null);
@@ -3902,6 +3930,11 @@
     min-width: 88px;
     font-weight: 600;
     box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+  }
+
+  .hq-ai-insight-stop {
+    box-shadow: none;
+    border: 1px solid rgba(15, 23, 42, 0.12);
   }
 
   .hq-ai-insight-tip {

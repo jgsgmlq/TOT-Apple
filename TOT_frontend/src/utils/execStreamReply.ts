@@ -14,6 +14,23 @@ export function initExecStreamState(): ExecStreamState {
   return { reasoningBuf: '', contentBuf: '', isFirstChunk: true, wasReasoning: false };
 }
 
+/** 归一化 SSE `delta` JSON（兼容字段名差异） */
+export function normalizeStreamDelta(raw: unknown): { text?: string; phase?: string } {
+  if (!raw || typeof raw !== 'object') return {};
+  const o = raw as Record<string, unknown>;
+  const text =
+    typeof o.text === 'string'
+      ? o.text
+      : typeof o.delta === 'string'
+        ? o.delta
+        : typeof o.content === 'string'
+          ? o.content
+          : '';
+  const phase = typeof o.phase === 'string' ? o.phase : undefined;
+  return { text, phase };
+}
+
+/** 流式 delta 分流：与仓库 c1cc69a63050b5c7e679c0c20ba584a9e9101c67 中 `execStreamReply` 一致 */
 export function feedExecStreamDelta(
   state: ExecStreamState,
   deltaData: { text?: string; phase?: string }
@@ -21,13 +38,13 @@ export function feedExecStreamDelta(
   if (state.isFirstChunk) {
     state.isFirstChunk = false;
     if (deltaData.phase === 'reasoning') {
-      state.reasoningBuf += '> **模型推理：**\n> ';
+      // state.reasoningBuf += '> **模型推理：**\n> ';
       state.wasReasoning = true;
     }
   }
   if (deltaData?.text) {
     if (deltaData.phase === 'reasoning') {
-      state.reasoningBuf += deltaData.text.replace(/\n/g, '\n> ');
+      state.reasoningBuf += deltaData.text.replace(/\n/g, '\n ');
       state.wasReasoning = true;
     } else {
       if (state.wasReasoning) {
@@ -48,19 +65,54 @@ export interface ExecStyleAiPayload {
   thinkingSnapshot: string;
 }
 
+/** 与主气泡正文一致、供 TTS 朗读；不含 `thinking`（思考过程） */
+export function speechTextForExecutiveTts(p: ExecStyleAiPayload): string {
+  if (p.partialReply != null) {
+    return formatReplyContentText(p.partialReply).trim();
+  }
+  const c = (p.content || '').trim();
+  if (!c || c === '正在生成…') return '';
+  return c;
+}
+
+/** SSE `done` 后与主气泡 `markdownContent | formatReplyContentText` 对齐的朗读文本 */
+export function speechTextForSendResult(result: SendMessageResult): string {
+  const fromCard = formatReplyContentText(result.replyContent ?? null).trim();
+  if (fromCard) return fromCard;
+  return (result.markdownContent || '').trim();
+}
+
+/**
+ * 「思考过程」= `phase: reasoning` 累积的 `reasoningBuf`；正文 = `contentBuf`
+ * （未解析时原样 Markdown/JSON 流，解析成功后为 `formatReplyContentText` 摘要）。
+ * 依赖后端 `server/utils/fcStreamDeltaSplit.js` 正确拆分 FC 下的 `delta.content`。
+ */
 export function execStreamStateToPayload(state: ExecStreamState): ExecStyleAiPayload {
+  const reasoningTrim = state.reasoningBuf.trim();
+  const contentBufTrim = state.contentBuf.trim();
   const split = splitPreambleAndJson(state.contentBuf);
   const jsonRaw = split.jsonRaw;
-  const preamble = split.preamble.trim();
-  const thinkingMerged = [state.reasoningBuf.trim(), preamble].filter(Boolean).join('\n\n').trim();
   const parsed = parseReplyContentProgressive(jsonRaw);
-  const narrativeDone = Boolean(thinkingMerged || jsonRaw);
+
+  const thinking = reasoningTrim || undefined;
+  const thinkingSnapshot = reasoningTrim;
+
+  let content: string;
+  if (parsed) {
+    content = formatReplyContentText(parsed);
+  } else if (contentBufTrim) {
+    content = contentBufTrim;
+  } else {
+    const narrativeDone = Boolean(reasoningTrim || jsonRaw.trim());
+    content = narrativeDone ? '' : '正在生成…';
+  }
+
   return {
-    thinking: thinkingMerged || undefined,
-    content: parsed ? formatReplyContentText(parsed) : narrativeDone ? '' : '正在生成…',
+    thinking,
+    content,
     partialReply: parsed || undefined,
     jsonStream: !parsed && jsonRaw ? jsonRaw : undefined,
-    thinkingSnapshot: thinkingMerged,
+    thinkingSnapshot,
   };
 }
 
@@ -77,10 +129,11 @@ export function finalizeExecStyleMessage(
   thinkingSnapshot: string,
   opts?: { messageId?: string }
 ) {
+  const finalContent = result.markdownContent || formatReplyContentText(result.replyContent);
   return {
     role: 'ai' as const,
     id: opts?.messageId ?? result.messageId,
-    content: formatReplyContentText(result.replyContent),
+    content: finalContent,
     replyContent: result.replyContent,
     thinking: thinkingSnapshot || undefined,
     jsonStream: undefined,
@@ -90,6 +143,7 @@ export function finalizeExecStyleMessage(
 
 /**
  * SSE 流式对话（delta/done），将增量映射为与 Executive 一致的 payload。
+ * `done` 时 `thinkingSnapshot` 取最后一帧 delta 的快照。
  */
 export function runExecStyleSseChat(
   streamFn: (
@@ -112,7 +166,7 @@ export function runExecStyleSseChat(
       sessionId,
       userContent,
       (deltaData) => {
-        feedExecStreamDelta(state, deltaData);
+        feedExecStreamDelta(state, normalizeStreamDelta(deltaData));
         const p = execStreamStateToPayload(state);
         lastSnapshot = p.thinkingSnapshot;
         onStreamingPatch(p);

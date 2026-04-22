@@ -230,18 +230,23 @@
 
                   <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
-                    v-if="!msg.replyContent && (msg.streamContent || msg.content)"
+                    v-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
                     :content="msg.streamContent || msg.content"
                     :thinking="msg.thinking"
                     :streaming="!msg.done"
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
-                  <!-- 旧版/兼容模式：结构化卡片渲染 -->
-                  <div
-                    v-else-if="msg.replyContent"
-                    class="exec-structured"
-                  >
+                  <!-- 旧版/兼容模式：结构化卡片渲染（流式结束后仍保留思考过程，与 Markdown 分支一致） -->
+                  <template v-else-if="msg.replyContent">
+                    <div v-if="msg.thinking" class="exec-thinking-wrap">
+                      <n-collapse :default-expanded-names="['think']">
+                        <n-collapse-item title="思考过程" name="think">
+                          <div class="exec-thinking-body">{{ msg.thinking }}</div>
+                        </n-collapse-item>
+                      </n-collapse>
+                    </div>
+                    <div class="exec-structured">
                     <p class="exec-overview">
                       {{ msg.replyContent.overview }}
                     </p>
@@ -331,8 +336,8 @@
                         </n-button>
                       </div>
                     </div>
-                  </div>
-                </template>
+                    </div>
+                  </template>
 
                 <!-- AI Feedback Actions -->
                 <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
@@ -382,6 +387,7 @@
                     </n-button>
                   </n-space>
                 </div>
+                </template>
               </div>
             </div>
           </n-spin>
@@ -405,11 +411,16 @@
             >
               发送
             </n-button>
-            <n-button v-else type="default" @click="handleStop" class="send-btn">
+            <n-button
+              v-else
+              type="default"
+              @click="handleStop"
+              class="send-btn send-btn--stop"
+            >
               <template #icon>
                 <n-icon><StopOutlined /></n-icon>
               </template>
-              停止
+              停止生成
             </n-button>
           </div>
           <div class="footer-tip">AI 生成的内容仅供参考，请结合业务实际情况判断。</div>
@@ -453,6 +464,9 @@
   } from '@/api/chat';
   import {
     runExecStyleSseChat,
+    isStreamAbortError,
+    speechTextForExecutiveTts,
+    speechTextForSendResult,
   } from '@/utils/execStreamReply';
 
   const TOOL_DISPLAY_NAMES: Record<string, string> = {
@@ -679,12 +693,18 @@
       if (item.role === 'user' && item.content) {
         out.push({ id: item.messageId, role: 'user', content: item.content });
       } else if (item.role === 'assistant') {
+        const structured = item.replyContent ?? undefined;
+        const fromStructured = formatReplyContentText(structured);
+        const raw = typeof item.content === 'string' ? item.content : '';
+        // FC / Markdown 落库时 history 里 replyContent 为空，必须用 content（原始 Markdown）
+        const displayText = fromStructured.trim() !== '' ? fromStructured : raw;
         out.push({
           id: item.messageId,
           role: 'ai',
-          content: formatReplyContentText(item.replyContent ?? undefined),
-          replyContent: item.replyContent ?? undefined,
+          content: displayText,
+          replyContent: structured,
           userFeedback: item.userFeedback,
+          done: true,
         });
       }
     }
@@ -927,7 +947,7 @@
         lastMsg.activeToolName = undefined;
         // FC 模式用 markdownContent，旧模式格式化 replyContent
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
-        lastMsg.thinking = thinkingSnapshot || lastMsg.thinking;
+        lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
       }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
@@ -968,13 +988,16 @@
               partialReply: p.partialReply ?? undefined,
             };
             scrollToBottom();
-            if (tts && p.partialReply) {
-              tts.pushPartialReply(p.partialReply);
+            if (tts) {
+              const spoken = speechTextForExecutiveTts(p);
+              if (spoken) tts.pushSpokenPlainText(spoken);
             }
-          }
+          },
+          { signal: abortController.value?.signal }
         );
         if (tts) {
-          tts.pushPartialReply(result.replyContent);
+          const spoken = speechTextForSendResult(result);
+          if (spoken) tts.pushSpokenPlainText(spoken);
         }
         applySendSuccess(sid, result, thinkingSnapshot);
       } finally {
@@ -992,6 +1015,9 @@
     try {
       await runStreamSend(sessionId.value);
     } catch (e) {
+      if (isStreamAbortError(e)) {
+        return;
+      }
       if (isStaleExecutiveSessionError(e) && sessionId.value) {
         const staleId = sessionId.value;
         historyList.value = historyList.value.filter((h) => h.id !== staleId);
@@ -1059,7 +1085,7 @@
       };
       scrollToBottom();
       if (voiceEnabled.value) {
-        void speakReplyContent(() => userStore.getToken, result.replyContent).catch(() => undefined);
+        void speakReplyContent(() => userStore.getToken, result).catch(() => undefined);
       }
     } catch (error) {
       message.error('重新生成失败，请重试');
@@ -1607,6 +1633,11 @@
       gap: 16px;
       align-items: flex-end;
 
+      > :deep(.n-input) {
+        flex: 1;
+        min-width: 0;
+      }
+
       :deep(.n-input) {
         border-radius: 12px;
         padding: 6px;
@@ -1626,6 +1657,7 @@
       }
 
       .send-btn {
+        flex-shrink: 0;
         border-radius: 980px;
         height: 44px;
         padding: 0 24px;
@@ -1652,6 +1684,23 @@
           background-color: #fafafc;
           color: rgba(0, 0, 0, 0.48);
           border: 1px solid rgba(0, 0, 0, 0.04);
+        }
+      }
+
+      .send-btn--stop {
+        background-color: #f5f5f7;
+        color: #1f2937;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+        box-shadow: none;
+
+        &:hover {
+          background-color: #e8e8ed;
+          color: #0f172a;
+        }
+
+        &:active {
+          background-color: #d2d2d7;
+          color: #0f172a;
         }
       }
     }

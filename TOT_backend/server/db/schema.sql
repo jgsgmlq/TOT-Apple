@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_at           TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate，如 FY26Q2W1（has_mypal 时建议必填）
-  mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空，见对接文档）
+  mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空）
+  sub_tasks_config   TEXT,                          -- 子任务独立配置 (JSON: {"MyPal": "描述1", "AI Coach": "描述2"})
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   CHECK (has_mypal + has_smartsell + has_ai_demo + has_live_broadcast >= 1),
   CHECK (rtm_filter IS NULL OR (json_valid(rtm_filter) AND json_type(rtm_filter) = 'array')),
   CHECK (store_scope = 'all' OR (json_valid(store_scope) AND json_type(store_scope) = 'array')),
-  CHECK (auto_nudge_rules IS NULL OR json_valid(auto_nudge_rules))
+  CHECK (auto_nudge_rules IS NULL OR json_valid(auto_nudge_rules)),
+  CHECK (sub_tasks_config IS NULL OR json_valid(sub_tasks_config))
 );
 
 -- 5. task_assignments
@@ -98,15 +100,15 @@ CREATE TABLE IF NOT EXISTS notification_events (
   assignment_id  TEXT REFERENCES task_assignments(id),
   target_user_id TEXT NOT NULL REFERENCES employees(id),
   store_id       TEXT NOT NULL REFERENCES stores(id),
-  event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red', 'task_updated')),
-  severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'red')),
+  event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red', 'task_updated')),
+  severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'orange', 'red')),
   dedupe_key     TEXT,
   content        TEXT,                          -- 催办类展示文案（nudge_*）；任务类可为空，由前端关联 task 或后续扩展
   initiator_id   INTEGER REFERENCES users(id),
   created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (
     (event_type = 'task_assigned' AND dedupe_key IS NOT NULL AND assignment_id IS NOT NULL)
-    OR (event_type IN ('nudge_yellow', 'nudge_red') AND severity IS NOT NULL AND assignment_id IS NOT NULL)
+    OR (event_type IN ('nudge_yellow', 'nudge_orange', 'nudge_red') AND severity IS NOT NULL AND assignment_id IS NOT NULL)
     OR (event_type = 'task_updated')
   )
 );
@@ -135,7 +137,7 @@ CREATE TABLE IF NOT EXISTS nudge_records (
   target_type            TEXT NOT NULL CHECK (target_type IN ('employee', 'store', 'region')),
   target_id              TEXT NOT NULL,
   initiator_id           INTEGER NOT NULL REFERENCES users(id),
-  severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'red')),
+  severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'orange', 'red')),
   notification_event_ids TEXT NOT NULL,
   created_at             TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   CHECK (json_valid(notification_event_ids) AND json_type(notification_event_ids) = 'array')

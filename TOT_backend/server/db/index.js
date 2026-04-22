@@ -22,7 +22,9 @@ function getDb() {
     ensureEmployeesEmailIndex(_db);
     ensureMypalLearningMockIndexes(_db);
     migrateTasksMypalColumns(_db);
+    migrateTasksSubTasksConfig(_db);
     migrateNudgeRecordsConstraints(_db);
+    migrateNotificationEventsConstraints(_db);
     migrateNotificationEventsContent(_db);
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
@@ -153,11 +155,96 @@ function migrateTasksMypalColumns(database) {
   }
 }
 
+/** 已有库补列：tasks.sub_tasks_config（子任务独立配置） */
+function migrateTasksSubTasksConfig(database) {
+  const cols = database.prepare('PRAGMA table_info(tasks)').all();
+  if (cols.some((c) => c.name === 'sub_tasks_config')) return;
+  database.exec('ALTER TABLE tasks ADD COLUMN sub_tasks_config TEXT');
+}
+
 /** 已有库补列：notification_events.content（催办文案等） */
 function migrateNotificationEventsContent(database) {
   const cols = database.prepare('PRAGMA table_info(notification_events)').all();
   if (cols.some((c) => c.name === 'content')) return;
   database.exec('ALTER TABLE notification_events ADD COLUMN content TEXT');
+}
+
+/** 
+ * 已有库补齐 notification_events 约束以支持 orange 预警级别
+ */
+function migrateNotificationEventsConstraints(database) {
+  const ddlRow = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notification_events'")
+    .get();
+  const ddl = (ddlRow && ddlRow.sql) || '';
+  const hasEventOrange = ddl.includes("'nudge_orange'");
+  const hasSeverityOrange = ddl.includes("'orange'");
+  if (hasEventOrange && hasSeverityOrange) return;
+
+  // sqlite要求禁用外键检查才能使用 DROP TABLE 并替换有外键引用的表
+  database.pragma('foreign_keys = OFF');
+  database.exec('BEGIN');
+  try {
+    database.exec('ALTER TABLE notification_events RENAME TO notification_events_old');
+    database.exec(`
+      CREATE TABLE notification_events (
+        id             TEXT PRIMARY KEY,
+        task_id        TEXT NOT NULL REFERENCES tasks(id),
+        assignment_id  TEXT REFERENCES task_assignments(id),
+        target_user_id TEXT NOT NULL REFERENCES employees(id),
+        store_id       TEXT NOT NULL REFERENCES stores(id),
+        event_type     TEXT NOT NULL CHECK (event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red', 'task_updated', 'task_deleted')),
+        severity       TEXT CHECK (severity IS NULL OR severity IN ('yellow', 'orange', 'red')),
+        dedupe_key     TEXT,
+        content        TEXT,
+        initiator_id   INTEGER REFERENCES users(id),
+        created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        CHECK (
+          (event_type = 'task_assigned' AND dedupe_key IS NOT NULL AND assignment_id IS NOT NULL)
+          OR (event_type IN ('nudge_yellow', 'nudge_orange', 'nudge_red') AND severity IS NOT NULL AND assignment_id IS NOT NULL)
+          OR (event_type IN ('task_updated', 'task_deleted'))
+        )
+      )
+    `);
+    
+    // Check if content column existed in the old table
+    const cols = database.prepare('PRAGMA table_info(notification_events_old)').all();
+    const hasContent = cols.some((c) => c.name === 'content');
+    
+    if (hasContent) {
+      database.exec(`
+        INSERT INTO notification_events (
+          id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, content, initiator_id, created_at
+        )
+        SELECT
+          id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, content, initiator_id, created_at
+        FROM notification_events_old
+      `);
+    } else {
+      database.exec(`
+        INSERT INTO notification_events (
+          id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, initiator_id, created_at
+        )
+        SELECT
+          id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, initiator_id, created_at
+        FROM notification_events_old
+      `);
+    }
+    
+    database.exec('DROP TABLE notification_events_old');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_ne_target_user_id ON notification_events(target_user_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_ne_store_id       ON notification_events(store_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_ne_task_id        ON notification_events(task_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_ne_event_type     ON notification_events(event_type)');
+    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ne_dedupe  ON notification_events(dedupe_key) WHERE dedupe_key IS NOT NULL');
+    
+    database.exec('COMMIT');
+  } catch (err) {
+    database.exec('ROLLBACK');
+    console.error('Migration NotificationEventsConstraints failed:', err);
+  } finally {
+    database.pragma('foreign_keys = ON');
+  }
 }
 
 /** 已有库补列：users.executive_regions / executive_rtm（EChat 辖区绑定） */
@@ -254,7 +341,7 @@ function migrateNudgeRecordsConstraints(database) {
     .get();
   const ddl = (ddlRow && ddlRow.sql) || '';
   const hasTargetTypeCheck = ddl.includes("CHECK (target_type IN ('employee', 'store', 'region'))");
-  const hasSeverityCheck = ddl.includes("CHECK (severity IN ('yellow', 'red'))");
+  const hasSeverityCheck = ddl.includes("CHECK (severity IN ('yellow', 'orange', 'red'))");
   const hasEventIdsJsonCheck = ddl.includes(
     "CHECK (json_valid(notification_event_ids) AND json_type(notification_event_ids) = 'array')"
   );
@@ -270,7 +357,7 @@ function migrateNudgeRecordsConstraints(database) {
         target_type            TEXT NOT NULL CHECK (target_type IN ('employee', 'store', 'region')),
         target_id              TEXT NOT NULL,
         initiator_id           INTEGER NOT NULL REFERENCES users(id),
-        severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'red')),
+        severity               TEXT NOT NULL CHECK (severity IN ('yellow', 'orange', 'red')),
         notification_event_ids TEXT NOT NULL,
         created_at             TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         CHECK (json_valid(notification_event_ids) AND json_type(notification_event_ids) = 'array')
