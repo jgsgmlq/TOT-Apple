@@ -2,7 +2,7 @@
 
 ### v1.5.3（2026-04-21）
 
-- **看板智能 Agent 进阶重构**：看板智能 Agent 诊断接口 (`GET /dashboard/agent/diagnose`) 的底层逻辑已从单次调用升级为完整的 **ReAct 架构** 结合 **Tool Calling** (函数调用)。Agent 现在能在后台执行循环对话，自主决定何时调用预设工具：`read_agent_guidelines`（读取本 Agent 的历史经验规则）、`query_active_tasks`（获取当前实时任务看板数据），并且在得出分析结果时通过 `add_agent_guideline`（追加新规则到系统全局的 `agent_guidelines` 表内）实现**永久记忆与自我进化**，做到越用越聪明。
+- **看板智能 Agent 进阶重构**：看板智能 Agent 诊断接口 (`GET /dashboard/agent/diagnose`) 的底层逻辑已从单次调用升级为完整的 **ReAct 架构** 结合 **Tool Calling** (函数调用)。Agent 现在能在后台执行循环对话，自主决定何时调用预设工具：`read_agent_guidelines`（读取本 Agent 的历史经验规则）、`query_active_tasks`（获取当前实时任务看板数据），并且在得出分析结果时通过 `upsert_agent_guidelines`（追加新规则到系统全局的 `agent_guidelines` 表内）实现**单行覆写式维基记忆与自我进化**，做到越用越聪明且不膨胀。
 - **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及时间进度过半 (P2) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
 - **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
@@ -1970,7 +1970,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 后端设有定时任务（每小时执行一次）自动在后台请求 AI 获取结果并存入数据库，并通过 WebSocket 广播 `dashboard_agent_updated` 给前端，提醒前端可以重新拉取。
   - 本诊断接口底层已升级为 **ReAct** (Reasoning and Acting) 框架，Agent 执行时会自动进行多轮思考（Chain of Thought）。
   - Agent 具备 **Tool Calling** (函数调用) 能力，能够自主调用工具获取当前任务列表。
-  - Agent 具备 **长期记忆与自我进化** 能力：每次分析前它会自主调用 `read_agent_guidelines` 读取属于自己领域的经验；在分析遇到新情况时，会主动调用 `add_agent_guideline` 将新经验写入数据库表 `agent_guidelines` 以便下次使用。
+  - Agent 具备 **长期记忆与自我进化** 能力：每次分析前它会自主调用 `read_agent_guidelines` 读取属于自己领域的经验；在分析遇到新情况时，会主动调用 `upsert_agent_guidelines` 将新旧知识融合成不超过 1000 字的精华维基文档，覆盖写入数据库表 `agent_guidelines`。
   - Agent 根据读取到的数据和经验，评判各任务的紧急程度：`red`（最多1个）、`orange`、`green`。
   - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块)。
   - 对总体其余任务情况提供一句业务总结 `overallSummary`。

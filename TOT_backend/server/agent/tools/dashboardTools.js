@@ -30,14 +30,14 @@ const dashboardToolsSchema = [
   {
     type: 'function',
     function: {
-      name: 'add_agent_guideline',
-      description: '追加一条新的经验准则到你的记忆库。如果你在本次分析中发现了值得以后注意的新规律、易错点或更好的沟通口吻，可以调用它自我进化。',
+      name: 'upsert_agent_guidelines',
+      description: '更新你的经验记忆库。如果你在本次分析中获得了新知识或教训，必须将新旧知识融合成一篇不超过1000字的完整 Markdown 文档，然后调用此工具进行【全量覆写】。这是你在维护一份状态维基，而不是写日记。',
       parameters: {
         type: 'object',
         properties: {
-          rule_text: { type: 'string', description: '要追加的具体规则或经验内容' }
+          merged_markdown_content: { type: 'string', description: '融合了新旧知识的、精炼后的全量经验 Markdown 文本' }
         },
-        required: ['rule_text']
+        required: ['merged_markdown_content']
       }
     }
   }
@@ -60,14 +60,24 @@ async function executeDashboardTool(name, args, context) {
     return rows.map((r, i) => `${i + 1}. ${r.rule_text}`).join('\n');
   }
 
-  if (name === 'add_agent_guideline') {
-    const { rule_text } = args;
-    if (!rule_text) return { error: 'rule_text 不能为空' };
-    db.run(
-      'INSERT INTO agent_guidelines (id, agent_type, rule_text) VALUES (?, ?, ?)',
-      [nanoid(), agentType, rule_text]
-    );
-    return { status: 'success', added: rule_text };
+  if (name === 'upsert_agent_guidelines') {
+    const { merged_markdown_content } = args;
+    if (!merged_markdown_content) return { error: 'merged_markdown_content 不能为空' };
+    
+    try {
+      db.transaction(() => {
+        // 先清理该 agentType 下的所有旧记忆
+        db.run('DELETE FROM agent_guidelines WHERE agent_type = ?', [agentType]);
+        // 插入全量融合成的一条最新记录
+        db.run(
+          'INSERT INTO agent_guidelines (id, agent_type, rule_text) VALUES (?, ?, ?)',
+          [nanoid(), agentType, merged_markdown_content]
+        );
+      });
+      return { status: 'success', message: '记忆库维基已成功覆写' };
+    } catch (e) {
+      return { error: '覆写记忆库失败: ' + e.message };
+    }
   }
 
   throw new Error(`Unknown tool ${name}`);

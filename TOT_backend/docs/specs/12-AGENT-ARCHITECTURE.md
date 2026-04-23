@@ -21,17 +21,17 @@
 
 ### `agent_guidelines` 表结构
 
-此表由 Agent 自主决定何时写入（通过调用 `add_agent_guideline` 工具）。
+此表由 Agent 自主决定何时写入（通过调用 `upsert_agent_guidelines` 工具）。
 
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT | 主键，nanoid |
 | `agent_type` | TEXT | 区分是哪一个 Agent 写下的规律（如 'dashboard', 'e-chat'），实现命名空间隔离。 |
-| `rule_text` | TEXT | Agent 自我总结的业务经验或人工预设的规则，如“当逾期率超90%，必须标红干预”。 |
+| `rule_text` | TEXT | Agent 自我总结提炼的全量经验文档（不超过 1000 字）。 |
 | `created_at` | TEXT | 创建时间 (localtime) |
 
-**机制：**
-每次 Agent 被唤醒诊断数据前，都会强制（或主动）调用 `read_agent_guidelines` 工具，将该表内属于自己 `agent_type` 的所有文本记录加载至本次对话的上下文窗口中，从而实现跨 Session 的长期记忆能力。
+**机制（定长维基记忆）：**
+为了防止 Agent 记忆无限膨胀和产生逻辑冲突，系统并未采用无限 Append 模式。每次 Agent 被唤醒时，会调用 `read_agent_guidelines` 加载自身的一条聚合经验。当 Agent 想要更新经验时，会被强制要求将新旧知识融合成一篇精炼的短 Markdown，然后调用 `upsert_agent_guidelines` 对该 `agent_type` 的记录进行 **全量覆盖替换（DELETE + INSERT）**。
 
 ## 3. 工具链 (Toolbox) 定义与扩展
 
@@ -40,8 +40,8 @@ Agent 可使用的能力封装在 `server/agent/tools/` 目录下（如 `dashboa
 ### 3.1 现有工具清单（Dashboard Agent）
 
 - **`query_active_tasks`**：无参。返回当前活跃任务的进度、逾期率等系统实时大盘数据。
-- **`read_agent_guidelines`**：无参。读取 `agent_guidelines` 表的全部经验条目并返回为拼接文本。
-- **`add_agent_guideline`**：参数 `{ "rule_text": "string" }`。Agent 在分析过程中如果发现新规律或纠错经验，自主调用此接口沉淀至数据库。
+- **`read_agent_guidelines`**：无参。读取 `agent_guidelines` 表中对应 `agent_type` 的全部经验条目并返回为拼接文本。
+- **`upsert_agent_guidelines`**：参数 `{ "merged_markdown_content": "string" }`。Agent 在分析过程中如果发现新规律或纠错经验，会要求它将新知识与旧知识进行合并、去重、压缩（限制在 1000 字以内），然后调用此接口进行全量覆盖写入（UPSERT 逻辑）。这防止了记忆库的无限膨胀和内容冲突。
 
 ### 3.2 开发者如何扩展新工具
 
