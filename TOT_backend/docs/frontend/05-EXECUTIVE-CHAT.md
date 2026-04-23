@@ -1,18 +1,43 @@
-# Executive Chat 前端对接指南
+# Executive Chat 前端对接指南 (v4.0 升级版)
 
-**版本:** 1.0.3 | **角色:** `executive` | **终端:** H5 / 桌面（与 PRD 独立 Chat 页一致；当前工程为 Vue 3）
-**基于:** [../specs/04-API-SPEC.md](../specs/04-API-SPEC.md) **§6**（HTTP 正本）+ [../specs/09-EXECUTIVE-CHAT.md](../specs/09-EXECUTIVE-CHAT.md)（产品行为、权限、溯源）
-**图例:** ✅ 已对齐可实现 | ⚠️ 部分占位 / 待联调（以 04 各接口正本为准；`/api/v1/chat` 已在 `app.js` 挂载）
+**版本:** 4.0.0 | **角色:** `executive`, `central` | **终端:** H5 / 桌面
+**基于:** [../specs/04-API-SPEC.md](../specs/04-API-SPEC.md) **§6**（HTTP 正本）+ [../plans/2026-04-22-executive-chat-evolution-proposal.md](../plans/2026-04-22-executive-chat-evolution-proposal.md)（演进提案）
 
 ---
 
-## 1. 实现状态（与仓库对齐）
+## 1. v4.0 核心 UX 交互升级 (Agentic UX)
 
-| 项目 | 说明 |
-|------|------|
-| 后端 HTTP | **`/api/v1/chat/*` 已挂载**（`server/app.js` → `routes/chat.js`）；正本见 04 §6。 |
-| 前端工程 | `TOT_frontend`：`/executive`、`/executive/login`，主界面 `src/views/executive/index.vue`；历史列表与回复目前可为占位，**需按本节契约接入真实 API**。 |
-| 优先级 | 产品 **P1**；与 [../internal/FRONTEND-HANDOFF.md](../internal/FRONTEND-HANDOFF.md)「不在本期范围」一致时，仅作规格对齐，不阻塞 P0。 |
+Executive Chat 在 v4.0 引入了深度推理 (CoT) 与动态沙盒能力，前端的渲染模型需要从“一问一答”升级为“支持状态流转的智能体 UI”。
+
+### 1.1 透明思维链面板 (CoT Reasoning Summary)
+**背景**：当后端执行复杂的 SQL 聚合或 Python 沙盒分析时，请求可能耗时 5-10 秒。
+**渲染契约**：
+1. **状态定义**：在消息模型中新增 `isThinking` (boolean) 和 `reasoningText` (string)。
+2. **SSE 监听**：当收到 `phase: 'reasoning'` 且 `reasoningLevel: 'summary'` 时，将 `isThinking` 置为 true，并将 `delta.text` 追加到 `reasoningText`。
+3. **UI 组件**：在当前气泡上方渲染一个**折叠面板 (Thinking...)**，实时展示 AI 的内部推导步骤。
+4. **结束态**：当收到第一个 `phase: 'content'` 事件时，立刻将 `isThinking` 置为 false，并**自动折叠**该面板，将视线焦点还给主结论。
+
+### 1.2 行内消歧与恢复 (Stateful Clarification Resume)
+**背景**：当用户的提问存在歧义（如“南京店”命中多个重名门店）时，后端会下发 `clarify` 事件。
+**渲染契约**：
+1. **拦截渲染**：解析 SSE 中的 `{"candidates": [...], "toolCallId": "..."}`。
+2. **交互式卡片**：在当前对话流的末尾，不显示报错，而是渲染一个**候选列表卡片**（`<ClarificationCard />`），供高管点击选择。
+3. **恢复请求 (Resume)**：用户点击选项后，前端需向 `/messages` 发起 POST 请求，并在 `req.body` 中携带：
+   ```json
+   {
+     "messageId": "msg_xxx", // 必须携带，防重复点击 (409)
+     "content": "南京新街口店", // 用于前端展示的气泡文本
+     "clarificationResponse": {
+       "toolCallId": "...", // 从 clarify 事件获取
+       "result": { "storeId": "S001" } // 用户的选择
+     }
+   }
+   ```
+4. **UI 锁定**：发出请求后，必须立即禁用或隐藏该卡片的选项，防止二次点击。
+
+### 1.3 动态图表与代码解释器反馈 (Generative UI)
+*   **Markdown 图表挂载**：后端下发的分析图表目前仍包裹在 ` ```echarts\n{...}\n``` ` 中。前端 Markdown 解析器必须拦截该 `lang=echarts`，并替换为内部的 `<ChartGallery config={json} />` 进行富交互渲染。
+*   *(v4.1 预告)* **沙盒图片流**：未来通过 Code Interpreter 执行 Python 生成的图表，可能会以 `Base64` 图片的 Markdown 格式下发，前端需确保对 `![alt](data:image/png;base64,...)` 格式的良好支持。
 
 ---
 

@@ -102,8 +102,8 @@ import sys,json
 d=json.load(sys.stdin)
 ids = [item['messageId'] for item in d['data']['historyList']]
 assert '$NEW_MESSAGE_ID' in ids, 'New message not in history'
-assert '$MESSAGE_ID' in ids, 'Old message should still be in history'
-print('history includes both regenerated and old messages OK')
+assert '$MESSAGE_ID' not in ids, 'Old message should not be in history anymore'
+print('history includes regenerated and correctly removed old message OK')
 "
 
 # Clean up

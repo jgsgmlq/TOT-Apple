@@ -225,14 +225,17 @@ async function generateTextDeepSeek(prompt, options = {}) {
  * 解析 DeepSeek 流式 chunk：`deepseek-chat` 仅有 `delta.content`；
  * `deepseek-reasoner` 可能同时出现 `delta.reasoning_content`（思维链）与 `delta.content`（最终答复）。
  * @param {object} json choices[0] 所在 JSON
- * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content' }) => void} [onChunk]
+ * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content', reasoningLevel?: 'summary' }) => void} [onChunk]
  * @returns {string} 仅累加 **content**（用于落库正文；不含思维链）
  */
 function accumulateDeepSeekStreamDelta(json, onChunk) {
   const d = json.choices?.[0]?.delta;
   if (!d) return '';
   if (d.reasoning_content && typeof onChunk === 'function') {
-    onChunk(d.reasoning_content, { phase: 'reasoning' });
+    const sanitized = sanitizeReasoningSummary(d.reasoning_content);
+    if (sanitized) {
+      onChunk(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
+    }
   }
   let contentAcc = '';
   if (d.content) {
@@ -246,7 +249,7 @@ function accumulateDeepSeekStreamDelta(json, onChunk) {
  * DeepSeek 流式输出（OpenAI 兼容 SSE）。仅当上游支持 stream 时使用。
  * @param {string} userPrompt
  * @param {{ system?: string, model?: string, temperature?: number, maxTokens?: number }} [options]
- * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content' }) => void} [onChunk] 每个文本增量；reasoner 时 `phase` 区分思维链与正文
+ * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content', reasoningLevel?: 'summary' }) => void} [onChunk] 每个文本增量；reasoner 时 `phase` 区分思维链与正文
  * @returns {Promise<string>} 拼接后的 **content** 全文（不含 reasoning_content）
  */
 async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
@@ -429,9 +432,20 @@ async function chatWithTools(options) {
 }
 
 /**
+ * 对 reasoning_content 进行实时过滤，剔除包含 "System Prompt"、"Ignore Instructions" 或敏感工具 Schema 的片段。
+ * @param {string} delta 推理内容增量
+ * @returns {string} 脱敏后的增量
+ */
+function sanitizeReasoningSummary(delta) {
+  if (!delta) return '';
+  // 实时简单过滤敏感词
+  return delta.replace(/(System Prompt|Tool Schema|Ignore instructions|You are a|Prompt Injection)/gi, '[REDACTED]');
+}
+
+/**
  * 与 {@link chatWithTools} 相同请求体，但 `stream: true`；对每个增量调用 `onDelta`（含 reasoning / content），
  * 用于 Executive Chat SSE；FC 模式下工具轮次与最终 JSON 均可流式输出 token。
- * @param {object} options 同 chatWithTools，另需 `onDelta: (chunk: string, meta?: { phase: 'reasoning'|'content' }) => void`
+ * @param {object} options 同 chatWithTools，另需 `onDelta: (chunk: string, meta?: { phase: 'reasoning'|'content', reasoningLevel?: 'summary' }) => void`
  * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
  */
 async function chatWithToolsStream(options) {
@@ -522,7 +536,10 @@ async function chatWithToolsStream(options) {
           const d = json.choices?.[0]?.delta;
           if (!d) continue;
           if (d.reasoning_content) {
-            onDelta(d.reasoning_content, { phase: 'reasoning' });
+            const sanitized = sanitizeReasoningSummary(d.reasoning_content);
+            if (sanitized) {
+              onDelta(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
+            }
           }
           if (d.content) {
             messageContent += d.content;
@@ -559,7 +576,12 @@ async function chatWithToolsStream(options) {
             const json = JSON.parse(payload);
             const d = json.choices?.[0]?.delta;
             if (d) {
-              if (d.reasoning_content) onDelta(d.reasoning_content, { phase: 'reasoning' });
+              if (d.reasoning_content) {
+                const sanitized = sanitizeReasoningSummary(d.reasoning_content);
+                if (sanitized) {
+                  onDelta(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
+                }
+              }
               if (d.content) {
                 messageContent += d.content;
                 onDelta(d.content, { phase: 'content' });
@@ -610,11 +632,29 @@ async function chatWithToolsStream(options) {
   });
 }
 
+/**
+ * Simplified chat completion for internal agent logic (like semantic supervisor).
+ * @param {Array<{role:string, content:string}>} messages
+ * @param {object} [options]
+ * @returns {Promise<string>}
+ */
+async function simpleChat(messages, options = {}) {
+  const res = await chatWithTools({
+    messages,
+    model: options.model || 'deepseek-chat',
+    temperature: options.temperature ?? 0.1,
+    maxTokens: options.maxTokens ?? 512,
+  });
+  return res.content || '';
+}
+
 module.exports = {
   generateText,
   generateTextDeepSeek,
   generateTextDeepSeekStream,
   chatWithTools,
   chatWithToolsStream,
+  simpleChat,
   withRetry,
+  sanitizeReasoningSummary,
 };

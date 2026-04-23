@@ -1,7 +1,7 @@
 # MVP 项目文档中心
 
-**最后更新:** 2026-04-14  
-**文档版本:** 1.2  
+**最后更新:** 2026-04-23  
+**文档版本:** 1.3  
 **适用于:** AI、开发者、测试、产品
 
 **产品需求口径：** 以 [`product/PRODUCT_REQUIREMENTS.md`](product/PRODUCT_REQUIREMENTS.md) 为准（版本与日期以该文件头部为准）。
@@ -32,6 +32,7 @@
 5. [`backend/03-DATABASE.md`](backend/03-DATABASE.md) — 库表实现与迁移对照  
 6. [`backend/02-SERVICES.md`](backend/02-SERVICES.md) — 服务层与实现对照  
 7. [`tests/QUICK_START.md`](tests/QUICK_START.md) — 启动与验证  
+8. [`specs/11-EXECUTIVE-CHAT-REQUEST-FLOW.md`](specs/11-EXECUTIVE-CHAT-REQUEST-FLOW.md) — Executive Chat 单条消息服务端流程（路由 → Agent → 工具 → 落库，与代码对照）  
 
 ---
 
