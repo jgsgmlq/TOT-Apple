@@ -144,10 +144,18 @@ async function generateText(prompt) {
 }
 
 /**
- * 调用 DeepSeek Chat（OpenAI 兼容 HTTP API），密钥仅来自环境变量 DEEPSEEK_API_KEY，禁止硬编码
+ * 调用 DeepSeek Chat（OpenAI 兼容 HTTP API），密钥仅来自环境变量 DEEPSEEK_API_KEY，禁止硬编码。
+ *
+ * 返回值契约（见 `docs/plans/2026-04-23-agent-execution-telemetry.md` §3.6.3）：
+ *   - 默认（`options.returnUsage !== true`）保持历史签名，返回 `string`。
+ *   - `options.returnUsage === true` 时返回 `{ content, usage, model }`，供 Langfuse generation 消费。
+ *
  * @param {string} prompt 用户提示词
- * @param {{ system?: string, model?: string, temperature?: number, maxTokens?: number }} [options]
- * @returns {Promise<string>} 助手回复正文
+ * @param {{
+ *   system?: string, model?: string, temperature?: number, maxTokens?: number,
+ *   returnUsage?: boolean
+ * }} [options]
+ * @returns {Promise<string | { content: string, usage: object|null, model: string|null }>}
  */
 async function generateTextDeepSeek(prompt, options = {}) {
   return withRetry(async () => {
@@ -204,6 +212,8 @@ async function generateTextDeepSeek(prompt, options = {}) {
 
     const data = await response.json();
     const rawContent = data.choices?.[0]?.message?.content || "";
+    const usage = data.usage || null;
+    const model = data.model || body.model || null;
 
     if (isDebugEnabled) {
       appendDebugLog({
@@ -212,11 +222,16 @@ async function generateTextDeepSeek(prompt, options = {}) {
         request: body,
         response: {
           rawContent,
+          usage,
+          model,
           latencyMs: Date.now() - startTime
         }
       });
     }
 
+    if (options.returnUsage) {
+      return { content: rawContent, usage, model };
+    }
     return rawContent;
   });
 }
@@ -247,10 +262,21 @@ function accumulateDeepSeekStreamDelta(json, onChunk) {
 
 /**
  * DeepSeek 流式输出（OpenAI 兼容 SSE）。仅当上游支持 stream 时使用。
+ *
+ * 返回值契约（见 `docs/plans/2026-04-23-agent-execution-telemetry.md` §3.6.3）：
+ *   - 默认（`options.returnUsage !== true`）保持历史签名，返回 `string`（拼接后的 content 全文，不含 reasoning_content）。
+ *   - `options.returnUsage === true` 时返回 `{ content, usage, model }`，供 Langfuse generation 消费。
+ *
+ * 为了拿到流式 `usage`，请求 body 显式传 `stream_options: { include_usage: true }`，
+ * 最后一个 chunk 的 `choices` 为空数组、`usage` 非空（详见 §3.6.2）。
+ *
  * @param {string} userPrompt
- * @param {{ system?: string, model?: string, temperature?: number, maxTokens?: number }} [options]
+ * @param {{
+ *   system?: string, model?: string, temperature?: number, maxTokens?: number,
+ *   returnUsage?: boolean
+ * }} [options]
  * @param {(chunk: string, meta?: { phase: 'reasoning' | 'content', reasoningLevel?: 'summary' }) => void} [onChunk] 每个文本增量；reasoner 时 `phase` 区分思维链与正文
- * @returns {Promise<string>} 拼接后的 **content** 全文（不含 reasoning_content）
+ * @returns {Promise<string | { content: string, usage: object|null, model: string|null }>}
  */
 async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
   return withRetry(async () => {
@@ -271,6 +297,7 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
       temperature: options.temperature ?? 0.1,
       max_tokens: options.maxTokens ?? 2048,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     const response = await fetch('https://api.deepseek.com/chat/completions', {
@@ -297,6 +324,18 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
     const decoder = new TextDecoder();
     let buffer = '';
     let full = '';
+    let usageRecord = null;
+    let modelRecord = body.model;
+
+    const absorb = (json) => {
+      // 关键：`include_usage` 开启后，最后一个 chunk 的 `choices` 为空数组 `[]`，
+      // 但 `usage` 非空。必须在 `accumulateDeepSeekStreamDelta` 之前抢占，否则该函数会被 `!d` 吃掉。
+      if (json && json.usage && (json.usage.prompt_tokens != null || json.usage.total_tokens != null)) {
+        usageRecord = json.usage;
+        modelRecord = json.model || modelRecord;
+      }
+      return accumulateDeepSeekStreamDelta(json, onChunk);
+    };
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -313,7 +352,7 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
         if (payload === '[DONE]') continue;
         try {
           const json = JSON.parse(payload);
-          full += accumulateDeepSeekStreamDelta(json, onChunk);
+          full += absorb(json);
         } catch {
           /* 忽略不完整 JSON 行 */
         }
@@ -327,7 +366,7 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
         if (payload && payload !== '[DONE]') {
           try {
             const json = JSON.parse(payload);
-            full += accumulateDeepSeekStreamDelta(json, onChunk);
+            full += absorb(json);
           } catch {
             /* ignore */
           }
@@ -335,6 +374,13 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
       }
     }
 
+    if (!usageRecord) {
+      logger.warn('langfuse_stream_usage_missing', { fn: 'generateTextDeepSeekStream', model: modelRecord });
+    }
+
+    if (options.returnUsage) {
+      return { content: full, usage: usageRecord, model: modelRecord };
+    }
     return full;
   });
 }
@@ -351,7 +397,12 @@ async function generateTextDeepSeekStream(userPrompt, options = {}, onChunk) {
  *   temperature?: number,
  *   maxTokens?: number
  * }} options
- * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
+ * @returns {Promise<{
+ *   content: string|null,
+ *   tool_calls: any[]|null,
+ *   usage: { prompt_tokens?: number, completion_tokens?: number, total_tokens?: number }|null,
+ *   model: string|null
+ * }>}
  */
 async function chatWithTools(options) {
   return withRetry(async () => {
@@ -411,6 +462,9 @@ async function chatWithTools(options) {
     const choice = data.choices?.[0];
     if (!choice) throw new Error('DeepSeek returned no choices');
 
+    const usage = data.usage || null;
+    const model = data.model || body.model || null;
+
     if (isDebugEnabled) {
       appendDebugLog({
         timestamp: new Date().toISOString(),
@@ -419,6 +473,8 @@ async function chatWithTools(options) {
         response: {
           content: choice.message?.content,
           tool_calls: choice.message?.tool_calls,
+          usage,
+          model,
           latencyMs: Date.now() - startTime
         }
       });
@@ -427,6 +483,8 @@ async function chatWithTools(options) {
     return {
       content:    choice.message?.content ?? null,
       tool_calls: choice.message?.tool_calls ?? null,
+      usage,
+      model,
     };
   });
 }
@@ -445,8 +503,20 @@ function sanitizeReasoningSummary(delta) {
 /**
  * 与 {@link chatWithTools} 相同请求体，但 `stream: true`；对每个增量调用 `onDelta`（含 reasoning / content），
  * 用于 Executive Chat SSE；FC 模式下工具轮次与最终 JSON 均可流式输出 token。
+ *
+ * 返回值包含 Langfuse generation 所需的 `usage` / `model` / `firstTokenLatencyMs` / `reasoningChunks` / `contentChunks`
+ * （非破坏性追加，详见 `docs/plans/2026-04-23-agent-execution-telemetry.md` §3.6）。
+ *
  * @param {object} options 同 chatWithTools，另需 `onDelta: (chunk: string, meta?: { phase: 'reasoning'|'content', reasoningLevel?: 'summary' }) => void`
- * @returns {Promise<{ content: string|null, tool_calls: any[]|null }>}
+ * @returns {Promise<{
+ *   content: string|null,
+ *   tool_calls: any[]|null,
+ *   usage: { prompt_tokens?: number, completion_tokens?: number, total_tokens?: number }|null,
+ *   model: string|null,
+ *   firstTokenLatencyMs: number|null,
+ *   reasoningChunks: number,
+ *   contentChunks: number
+ * }>}
  */
 async function chatWithToolsStream(options) {
   const onDelta = options.onDelta;
@@ -466,6 +536,7 @@ async function chatWithToolsStream(options) {
       temperature: options.temperature ?? 0.1,
       max_tokens: options.maxTokens ?? 2048,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools && options.tools.length > 0) {
@@ -517,6 +588,54 @@ async function chatWithToolsStream(options) {
     let messageContent = '';
     /** @type {Array<{ id: string, type: string, function: { name: string, arguments: string } }>} */
     const toolCallSlots = [];
+    let usageRecord = null;
+    let modelRecord = body.model;
+    let firstTokenAt = 0;
+    let reasoningChunks = 0;
+    let contentChunks = 0;
+    const streamStartAt = Date.now();
+
+    // 单个 SSE JSON 解析：所有 chunk 走同一条路径，避免 main/tail 两份分支漂移。
+    const consume = (json) => {
+      // 关键：`include_usage` 开启后，最后一个 chunk 的 `choices` 为 `[]`，但 `usage` 非空。
+      // 必须在 `!d continue` 之前抢占，否则会被吃掉（详见 §3.6.2）。
+      if (json && json.usage && (json.usage.prompt_tokens != null || json.usage.total_tokens != null)) {
+        usageRecord = json.usage;
+        modelRecord = json.model || modelRecord;
+      }
+      const d = json.choices?.[0]?.delta;
+      if (!d) return;
+      if (d.reasoning_content) {
+        reasoningChunks += 1;
+        if (!firstTokenAt) firstTokenAt = Date.now();
+        const sanitized = sanitizeReasoningSummary(d.reasoning_content);
+        if (sanitized) {
+          onDelta(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
+        }
+      }
+      if (d.content) {
+        contentChunks += 1;
+        if (!firstTokenAt) firstTokenAt = Date.now();
+        messageContent += d.content;
+        onDelta(d.content, { phase: 'content' });
+      }
+      if (d.tool_calls && Array.isArray(d.tool_calls)) {
+        for (const p of d.tool_calls) {
+          const idx = typeof p.index === 'number' ? p.index : 0;
+          if (!toolCallSlots[idx]) {
+            toolCallSlots[idx] = {
+              id: '',
+              type: 'function',
+              function: { name: '', arguments: '' },
+            };
+          }
+          if (p.id) toolCallSlots[idx].id = p.id;
+          if (p.type) toolCallSlots[idx].type = p.type;
+          if (p.function?.name) toolCallSlots[idx].function.name += p.function.name;
+          if (p.function?.arguments) toolCallSlots[idx].function.arguments += p.function.arguments;
+        }
+      }
+    };
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -532,35 +651,7 @@ async function chatWithToolsStream(options) {
         const payload = trimmed.slice(6).trim();
         if (payload === '[DONE]') continue;
         try {
-          const json = JSON.parse(payload);
-          const d = json.choices?.[0]?.delta;
-          if (!d) continue;
-          if (d.reasoning_content) {
-            const sanitized = sanitizeReasoningSummary(d.reasoning_content);
-            if (sanitized) {
-              onDelta(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
-            }
-          }
-          if (d.content) {
-            messageContent += d.content;
-            onDelta(d.content, { phase: 'content' });
-          }
-          if (d.tool_calls && Array.isArray(d.tool_calls)) {
-            for (const p of d.tool_calls) {
-              const idx = typeof p.index === 'number' ? p.index : 0;
-              if (!toolCallSlots[idx]) {
-                toolCallSlots[idx] = {
-                  id: '',
-                  type: 'function',
-                  function: { name: '', arguments: '' },
-                };
-              }
-              if (p.id) toolCallSlots[idx].id = p.id;
-              if (p.type) toolCallSlots[idx].type = p.type;
-              if (p.function?.name) toolCallSlots[idx].function.name += p.function.name;
-              if (p.function?.arguments) toolCallSlots[idx].function.arguments += p.function.arguments;
-            }
-          }
+          consume(JSON.parse(payload));
         } catch {
           /* 忽略不完整 JSON */
         }
@@ -573,36 +664,7 @@ async function chatWithToolsStream(options) {
         const payload = trimmed.slice(6).trim();
         if (payload && payload !== '[DONE]') {
           try {
-            const json = JSON.parse(payload);
-            const d = json.choices?.[0]?.delta;
-            if (d) {
-              if (d.reasoning_content) {
-                const sanitized = sanitizeReasoningSummary(d.reasoning_content);
-                if (sanitized) {
-                  onDelta(sanitized, { phase: 'reasoning', reasoningLevel: 'summary' });
-                }
-              }
-              if (d.content) {
-                messageContent += d.content;
-                onDelta(d.content, { phase: 'content' });
-              }
-              if (d.tool_calls && Array.isArray(d.tool_calls)) {
-                for (const p of d.tool_calls) {
-                  const idx = typeof p.index === 'number' ? p.index : 0;
-                  if (!toolCallSlots[idx]) {
-                    toolCallSlots[idx] = {
-                      id: '',
-                      type: 'function',
-                      function: { name: '', arguments: '' },
-                    };
-                  }
-                  if (p.id) toolCallSlots[idx].id = p.id;
-                  if (p.type) toolCallSlots[idx].type = p.type;
-                  if (p.function?.name) toolCallSlots[idx].function.name += p.function.name;
-                  if (p.function?.arguments) toolCallSlots[idx].function.arguments += p.function.arguments;
-                }
-              }
-            }
+            consume(JSON.parse(payload));
           } catch {
             /* ignore */
           }
@@ -611,6 +673,11 @@ async function chatWithToolsStream(options) {
     }
 
     const tool_calls = toolCallSlots.length ? toolCallSlots.filter(Boolean) : null;
+    const firstTokenLatencyMs = firstTokenAt ? (firstTokenAt - streamStartAt) : null;
+
+    if (!usageRecord) {
+      logger.warn('langfuse_stream_usage_missing', { fn: 'chatWithToolsStream', model: modelRecord });
+    }
 
     if (isDebugEnabled) {
       appendDebugLog({
@@ -620,6 +687,11 @@ async function chatWithToolsStream(options) {
         response: {
           contentLen: messageContent?.length ?? 0,
           toolCallCount: tool_calls?.length ?? 0,
+          usage: usageRecord,
+          model: modelRecord,
+          firstTokenLatencyMs,
+          reasoningChunks,
+          contentChunks,
           latencyMs: Date.now() - startTime,
         },
       });
@@ -628,15 +700,25 @@ async function chatWithToolsStream(options) {
     return {
       content: messageContent || null,
       tool_calls: tool_calls && tool_calls.length ? tool_calls : null,
+      usage: usageRecord,
+      model: modelRecord,
+      firstTokenLatencyMs,
+      reasoningChunks,
+      contentChunks,
     };
   });
 }
 
 /**
- * Simplified chat completion for internal agent logic (like semantic supervisor).
+ * Simplified chat completion for internal agent logic (like semantic supervisor, memory extractor).
+ *
+ * 返回值契约（见 `docs/plans/2026-04-23-agent-execution-telemetry.md` §3.6.3）：
+ *   - 默认（`options.returnUsage !== true`）保持历史签名，返回 `string`。
+ *   - `options.returnUsage === true` 时返回 `{ content, usage, model }`，供 Langfuse generation 消费。
+ *
  * @param {Array<{role:string, content:string}>} messages
- * @param {object} [options]
- * @returns {Promise<string>}
+ * @param {{ model?: string, temperature?: number, maxTokens?: number, returnUsage?: boolean }} [options]
+ * @returns {Promise<string | { content: string, usage: object|null, model: string|null }>}
  */
 async function simpleChat(messages, options = {}) {
   const res = await chatWithTools({
@@ -645,6 +727,13 @@ async function simpleChat(messages, options = {}) {
     temperature: options.temperature ?? 0.1,
     maxTokens: options.maxTokens ?? 512,
   });
+  if (options.returnUsage) {
+    return {
+      content: res.content || '',
+      usage: res.usage || null,
+      model: res.model || null,
+    };
+  }
   return res.content || '';
 }
 

@@ -3,6 +3,10 @@
 const { generateTextDeepSeek, generateTextDeepSeekStream } = require('../utils/ai');
 const { compressAssistantContent } = require('../utils/chatHistoryCompress');
 const logger = require('../utils/logger');
+const { endGeneration, maskPII, preview, promptHash, NOOP_TRACE } = require('../utils/tracer');
+
+// §5.10：升级 System Prompt 时同步 bump 版本号。
+const ANSWER_PROMPT_VERSION = 'executive-chat-answer/v4.0';
 
 const SYSTEM_PROMPT = `你是一个培训数据分析助手，请根据以下查询结果，用中文回答用户问题。
 输出严格符合以下 JSON 格式（不加代码块标记，不加任何说明文字）:
@@ -34,6 +38,9 @@ const SYSTEM_PROMPT = `你是一个培训数据分析助手，请根据以下查
 - visualizationSummary: [必填若有图] 面向下一轮对话模型的简短图表记忆（不展示给用户），含轴含义、关键趋势/异常点等
 - visualizations: [可选] 仅在回答包含分布、趋势、相关性或排名时生成；data 数组长度须与 xAxis 对齐。**[注意]** 如果用户追问"生成图表"或点击绘图气泡，请结合上下文中的可视化摘要（visualizationSummary）信息，在当前回答中正式组装此字段。
 - 如果查询结果为空或 null，overview 说明"暂无相关数据"，其余字段返回空数组`;
+
+const ANSWER_PROMPT_HASH = promptHash(SYSTEM_PROMPT);
+
 function buildFormatPrompt(userMessage, toolResult, history) {
   const isForcePlot = userMessage.includes('[绘图]');
   const forcePlotInstruction = isForcePlot 
@@ -157,45 +164,125 @@ function compensateVisualization(reply, toolResult, userMessage) {
  * @param {any} toolResult
  * @param {Array<{role:string, content:string}>} history
  * @param {{ onDelta?: (chunk: string, meta?: { phase?: string }) => void } | null} [streamCallbacks] 若提供 onDelta，则走 DeepSeek 流式，与看板智能洞察一致
+ * @param {{ trace?: object }} [options] options.trace 用于建 Answer_Format generation（Langfuse）
  * @returns {Promise<ReplyContent>}
  */
-async function format(userMessage, toolResult, history, streamCallbacks = null) {
+async function format(userMessage, toolResult, history, streamCallbacks = null, options = {}) {
   const prompt = buildFormatPrompt(userMessage, toolResult, history);
+  const trace = options.trace || NOOP_TRACE;
+  const streamed = !!(streamCallbacks && typeof streamCallbacks.onDelta === 'function');
 
-  if (streamCallbacks && typeof streamCallbacks.onDelta === 'function') {
-    let full;
+  const gen = trace.generation({
+    name: 'Answer_Format',
+    model: 'deepseek-chat',
+    input: maskPII(preview(userMessage)),
+    metadata: {
+      promptVersion: ANSWER_PROMPT_VERSION,
+      promptHash: ANSWER_PROMPT_HASH,
+      streamed,
+      hasToolResult: toolResult != null,
+      historyLen: history.length,
+    },
+  });
+
+  const t0 = Date.now();
+
+  if (streamed) {
+    let streamResp;
     try {
-      full = await generateTextDeepSeekStream(
+      streamResp = await generateTextDeepSeekStream(
         prompt,
         {
           system: SYSTEM_PROMPT,
           temperature: 0.3,
           maxTokens: 1024,
+          returnUsage: true,
         },
         (chunk, meta) => streamCallbacks.onDelta(chunk, meta)
       );
     } catch (err) {
       logger.error('answer_llm_stream_failed', { error: err.message });
+      endGeneration(gen, {
+        output: null,
+        level: 'ERROR',
+        statusMessage: err.message,
+        metadata: { durationMs: Date.now() - t0 },
+      });
       throw Object.assign(new Error('LLM inference failed'), { status: 503, code: 'CHAT_001' });
     }
-    const reply = parseReplyFromRaw(full);
-    return compensateVisualization(reply, toolResult, userMessage);
+    const full = streamResp.content;
+    let reply;
+    try {
+      reply = parseReplyFromRaw(full);
+    } catch (err) {
+      endGeneration(gen, {
+        output: preview(full),
+        usage: streamResp.usage || undefined,
+        model: streamResp.model || undefined,
+        level: 'ERROR',
+        statusMessage: err.message,
+        metadata: { durationMs: Date.now() - t0 },
+      });
+      throw err;
+    }
+    reply = compensateVisualization(reply, toolResult, userMessage);
+    endGeneration(gen, {
+      output: preview(full),
+      usage: streamResp.usage || undefined,
+      model: streamResp.model || undefined,
+      metadata: {
+        durationMs: Date.now() - t0,
+        hasVisualizations: Array.isArray(reply.visualizations) && reply.visualizations.length > 0,
+      },
+    });
+    return reply;
   }
 
-  let raw;
+  let resp;
   try {
-    raw = await generateTextDeepSeek(prompt, {
+    resp = await generateTextDeepSeek(prompt, {
       system: SYSTEM_PROMPT,
       temperature: 0.3,
       maxTokens: 1024,
+      returnUsage: true,
     });
   } catch (err) {
     logger.error('answer_llm_failed', { error: err.message });
+    endGeneration(gen, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - t0 },
+    });
     throw Object.assign(new Error('LLM inference failed'), { status: 503, code: 'CHAT_001' });
   }
 
-  const reply = parseReplyFromRaw(raw);
-  return compensateVisualization(reply, toolResult, userMessage);
+  const raw = resp.content;
+  let reply;
+  try {
+    reply = parseReplyFromRaw(raw);
+  } catch (err) {
+    endGeneration(gen, {
+      output: preview(raw),
+      usage: resp.usage || undefined,
+      model: resp.model || undefined,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - t0 },
+    });
+    throw err;
+  }
+  reply = compensateVisualization(reply, toolResult, userMessage);
+  endGeneration(gen, {
+    output: preview(raw),
+    usage: resp.usage || undefined,
+    model: resp.model || undefined,
+    metadata: {
+      durationMs: Date.now() - t0,
+      hasVisualizations: Array.isArray(reply.visualizations) && reply.visualizations.length > 0,
+    },
+  });
+  return reply;
 }
 
-module.exports = { format, buildFormatPrompt };
+module.exports = { format, buildFormatPrompt, ANSWER_PROMPT_VERSION };

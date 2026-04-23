@@ -147,4 +147,41 @@ server.listen(PORT, '0.0.0.0', () => {
   startDashboardAgentScheduler();
 });
 
+// ─── Graceful shutdown: Langfuse flush ──────────────────────────────────────
+// Langfuse v3 SDK 走后台批量上报，直接进程退出会丢最后一批 trace（见
+// `docs/plans/2026-04-23-agent-execution-telemetry.md` §5.8）。SIGTERM/SIGINT
+// 到达时触发一次带 5s 超时的 flushAsync，再关闭 HTTP server 与退出。
+const { getClient: getLangfuseClient } = require('./utils/tracer');
+const logger = require('./utils/logger');
+
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('graceful_shutdown_start', { signal });
+
+  const client = getLangfuseClient();
+  if (client && typeof client.flushAsync === 'function') {
+    try {
+      await Promise.race([
+        client.flushAsync(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('flush_timeout')), 5000)),
+      ]);
+      logger.info('langfuse_flush_ok', { signal });
+    } catch (err) {
+      logger.warn('langfuse_flush_failed', { signal, message: err.message });
+    }
+  }
+
+  server.close(() => {
+    logger.info('graceful_shutdown_done', { signal });
+    process.exit(0);
+  });
+  // 兜底：若 server.close 15s 内未完成，强退。
+  setTimeout(() => process.exit(1), 15000).unref();
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 module.exports = { app, server };
