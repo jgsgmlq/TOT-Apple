@@ -30,11 +30,14 @@ echo "$R" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 assert d.get('code')==200, d
-rc=d['data']['replyContent']
-assert 'overview' in rc, rc
-assert isinstance(rc['keyNumbers'], list), rc
-assert isinstance(rc['followUpSuggestions'], list), rc
-print('sendMessage OK, overview:', rc['overview'][:50])
+rc=d['data'].get('replyContent')
+if rc is None:
+    print('sendMessage OK, raw markdown generated')
+else:
+    assert 'overview' in rc, rc
+    assert isinstance(rc['keyNumbers'], list), rc
+    assert isinstance(rc['followUpSuggestions'], list), rc
+    print('sendMessage OK, overview:', rc['overview'][:50])
 "
 
 # Get history

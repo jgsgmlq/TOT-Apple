@@ -1,6 +1,6 @@
 # Executive Chat 意图与工具实现说明（As-Is）
 
-**最后更新：** 2026-04-17  
+**最后更新：** 2026-04-21  
 **状态：** Current  
 **适用范围：** `TOT_backend/server/services/chatIntentService.js`、`chatAgentRunner.js`、`chatToolsService.js`、`server/chat_tools/*`
 
@@ -29,7 +29,9 @@
 
 ## 1. 当前已实现意图（intentType）
 
-当前代码中有效意图集合定义于 `chatIntentService.js` 的 `VALID_INTENTS`：
+### 1.1 分类器合法集合（`VALID_INTENTS`）
+
+当前代码中 **意图分类 LLM** 的输出会被约束为 `chatIntentService.js` 的 `VALID_INTENTS`：
 
 | intentType | 语义 | 示例问题 | 当前状态 |
 |-----------|------|----------|----------|
@@ -38,50 +40,93 @@
 | `warning_query` | 预警与风险查询 | 「现在有哪些门店需要重点关注？」 | 已实现 |
 | `drill_down` | 区域或门店下钻查询 | 「华东区怎么样？」/「上海环球港店怎么样？」 | 已实现 |
 | `analytics_query` | 统计分析查询（依赖 `analysisType`） | 「华东区 P90 完成耗时是多少？」 | 已实现 |
+| `matrix_query` | 矩阵式多维指标查询（统一工具 `queryExecutiveMetrics`） | 「各区域的完成率和 P0 预警数是多少？」 | 已实现（v3.0） |
 | `unknown` | 闲聊或超范围问题兜底 | 「你好」「谢谢」 | 已实现 |
+
+### 1.2 Agent 响应侧扩展 `_intentType`（非分类器枚举）
+
+`chatAgentRunner.run()` 在 **不经过意图分类** 的分支上也会直接返回结构化回复，此时 `_intentType` 可能为：
+
+| `_intentType` | 说明 |
+|---------------|------|
+| `chat_only` | 轻量寒暄/空输入等，由 `classifyExecutionMode` 判定为仅对话，不调工具 |
+| `deny` | 语义监工判定为危险写操作（代发邮件、改库等），只读拦截 |
+
+落库字段 `intent_type` 以实际返回值为准；与 §1.1 并列理解即可。
 
 ---
 
 ## 2. 当前已注册工具（tool name）
 
-工具由 `chatToolsService.js` 在启动时动态加载 `server/chat_tools/*.js` 并注册。
+工具由 `chatToolsService.js` 在启动时动态加载 `server/chat_tools/*.js` 并注册。当前仓库内文件与注册名如下：
 
 | tool name | 文件 | 核心用途 |
-|----------|------|----------|
+|-----------|------|----------|
 | `getOverviewData` | `server/chat_tools/tool_getProgressMetrics.js` | 在**当前高管数据权限**下，对已下发任务做**全量或按任务/大区**汇总：门店 assignment 总数、已完成/进行中/待开始人数、整体完成率、按时完成率、平均完成耗时（小时）；可选 `taskId`、`region` 收窄范围。 |
-| `getTaskListData` | `server/chat_tools/tool_getProjectStatus.js` | 列出**状态为已下发**的培训任务：每项任务的标题、截止时间、下发门店 assignment 数、已完成数及该项任务的完成率；用于回答「有哪些任务、各自进度到哪了」。 |
-| `getWarningsData` | `server/chat_tools/tool_getWarnings.js` | 优先返回**完成率低于阈值**的门店清单（风险门店）；若无足够明细，按实现**依次降级**：低完成率门店排行 → 权限内整体完成概览 → 近 7 日完成趋势，并在结果里标明数据来源，避免「无数据却沉默」。 |
-| `getRegionDetailData` | `server/chat_tools/tool_getRegionDetailData.js` | **指定大区名称**（必填 `region`）：该区在权限内的 assignment 汇总（总数、完成率、进行中/待开始、平均耗时），并给出门店**完成率最低/最高**各 `topN` 家，用于区域对比与垫底门店定位。 |
-| `getStoreDetailData` | `server/chat_tools/tool_getDrillDownMetrics.js` | **指定门店**（`storeId`，或传入名称由后端在权限内模糊匹配）：若名称命中多家则返回**候选列表**请用户消歧；确定门店后返回该店在某一任务下的**员工级** assignment 状态与进度字段，用于「这家店每个人做到哪一步」。 |
-| `runAnalytics` | `server/chat_tools/tool_runAnalytics.js` | 根据参数 **`analysisType`** 执行一类统计：如完成耗时 **P90/分位**、耗时**分布桶**、**nudge 与 progress 相关性**、按渠道的完成率**方差**、基于近期速度的**完成率预测**、**截尾均值**等；可配合 `taskId` / `region` / `storeId` 过滤。 |
+| `queryExecutiveMetrics` | `server/chat_tools/tool_queryExecutiveMetrics.js` | **（v3.0 统一入口）** 多维度（区域/业态/经销商/门店）、多度量（完成率/预警/耗时/读取等）组合查询；支持过滤与排序；意图 `matrix_query` 在 intent_routing 下默认走此工具。 |
+| `getTaskListData` | `server/chat_tools/tool_getProjectStatus.js` | 列出**状态为已下发**的培训任务：每项任务的标题、截止时间、下发门店 assignment 数、已完成数及该项任务的完成率。 |
+| `getWarningsData` | `server/chat_tools/tool_getWarnings.js` | 优先返回**完成率低于阈值**的门店清单；若无足够明细，按实现**依次降级**：低完成率门店排行 → 权限内整体完成概览 → 近 7 日完成趋势，并在结果里标明数据来源。 |
+| `getRegionDetailData` | `server/chat_tools/tool_getRegionDetailData.js` | **指定大区名称**（必填 `region`）：该区在权限内的 assignment 汇总及门店**完成率最低/最高**各 `topN` 家。 |
+| `getStoreDetailData` | `server/chat_tools/tool_getDrillDownMetrics.js` | **指定门店**（`storeId` 或名称模糊匹配）；名称命中多家则返回**候选列表**消歧；确定后返回员工级 assignment 状态。 |
+| `runAnalytics` | `server/chat_tools/tool_runAnalytics.js` | 按 **`analysisType`** 执行统计：分位数/分布/相关性/方差/预测/截尾均值等；可配合 `taskId` / `region` / `storeId` 过滤。 |
+
+### 2.1 `queryExecutiveMetrics` 参数契约（与 schema 对齐）
+
+| 参数名 | 类型 | 必填 | 默认值 | 说明/合法值 |
+|--------|------|------|--------|-------------|
+| `dimensions` | string[] | 否 | 空或 `["all"]` 语义见 schema | `channel_l3`（大区）、`channel_l4`（业态）、`dealer`、`store` |
+| `metrics` | string[] | **是** | - | `completion_rate`、`completed_count`、`total_count`、`avg_completion_time_hours`、`read_rate`、`start_delay_rate`、`crisis_p0_rate`、`crisis_p1_rate`、`crisis_p0_count`、`crisis_p1_count` |
+| `taskName` | string | 条件 | - | 任务标题关键词；与 `productName` **业务上二选一**（服务层会校验任务上下文）。 |
+| `productName` | string | 条件 | - | MyPAL 产品名；与 `taskName` 二选一。 |
+| `filters` | object | 否 | `{}` | `region`、`rtm`、`format`、`dealerName`、`storeId` |
+| `sort` | object | 否 | - | `{ sortBy: string, order: "asc" \| "desc" }` |
 
 ---
 
-## 3. 当前意图 -> 工具映射关系
+## 3. 运行模式与意图 → 工具映射
 
-### 3.1 Intent Routing 模式（默认）
+### 3.1 默认：`function_calling`（`CHAT_AGENT_MODE`）
 
-`CHAT_AGENT_MODE=intent_routing` 时，映射由 `chatAgentRunner.js` 中 `toolMap` 控制：
+环境变量 **`CHAT_AGENT_MODE`** 未设置时，默认值为 **`function_calling`**（见 `chatAgentRunner.js`）。模型可在一个用户轮次内自主选择并串联多个工具；落库 **`intentType`** 由下列规则推导：
+
+1. 若发生工具调用：按 **`deriveIntentType(calledToolNames, fallbackIntent)`** 根据**已调用工具名集合**映射（见 §3.3）。
+2. 若无工具调用：使用 **`inferIntentFromMessage(userMessage)`** 正则/关键词兜底（含 `matrix_query`、`analytics_query` 等优先级）。
+
+### 3.2 兜底：`intent_routing`
+
+`CHAT_AGENT_MODE=intent_routing` 时，先由 `chatIntentService.classify` 得到 `intentType` + `entities`，再查 **`toolMap`**（见 §3.4）。适用于 FC 不稳定时的故障回退。
+
+### 3.3 FC 模式：工具名 → `intentType`（`deriveIntentType` 顺序）
+
+以下按代码判定顺序（先命中先生效）：
+
+| 条件 | 落库 intentType |
+|------|-----------------|
+| 调用过 `queryExecutiveMetrics` | `matrix_query` |
+| 调用过 `runAnalytics` | `analytics_query` |
+| 调用过 `getWarningsData` | `warning_query` |
+| 调用过 `getRegionDetailData` 或 `getStoreDetailData` | `drill_down` |
+| 调用过 `getTaskListData` | `project_status` |
+| 调用过 `getOverviewData` | `progress_query` |
+| 以上皆无 | `fallbackIntent`（来自 `inferIntentFromMessage`）或 `unknown` |
+
+### 3.4 Intent routing：`intentType` → 工具
+
+`runIntentRouting` 中 **`toolMap`**：
 
 | intentType | 工具映射规则 |
 |-----------|--------------|
 | `progress_query` | `getOverviewData` |
+| `matrix_query` | `queryExecutiveMetrics`（`entities` 会归一化为工具入参，含 `dimensions`/`metrics`/`taskName`/`productName`/`filters`/`sort`） |
 | `project_status` | `getTaskListData` |
 | `warning_query` | `getWarningsData` |
-| `drill_down` | 若 `entities.region` 存在且 `storeId/storeName` 均为空 -> `getRegionDetailData`；否则 -> `getStoreDetailData` |
-| `analytics_query` | `runAnalytics` |
-| `unknown` | 不调用工具，直接返回对话/引导内容 |
-
-### 3.2 Function Calling 模式（可切换）
-
-`CHAT_AGENT_MODE=function_calling` 时，模型可自主选择调用多个工具；最终 `intentType` 由以下逻辑推导：
-
-1. 若发生工具调用：按调用过的工具名集合推导（`deriveIntentType`）
-2. 若无工具调用：使用正则兜底推导（`inferIntentFromMessage`）
+| `drill_down` | 若 `entities.region` 存在且 `storeId`/`storeName` 均为空 → `getRegionDetailData`；否则 → `getStoreDetailData` |
+| `analytics_query` | `runAnalytics`（若缺 `analysisType` 且无 `[绘图]` 缓存命中，可能直接返回引导文案而不调工具） |
+| `unknown` | 不调用工具，返回对话/引导内容 |
 
 ---
 
-## 4. analytics_query 的 analysisType 子能力
+## 4. `analytics_query` 的 `analysisType` 子能力
 
 `runAnalytics` 当前支持以下 `analysisType`：
 
@@ -102,38 +147,48 @@
 
 为了确保高管在移动端能够获得“先看结论，再看详情”的体验，系统设计了一套结合了 AI 推理与硬编码补偿的可视化闭环。
 
-1.  **分析触发 (Phase 1)**: 用户提出分析类问题。AI 识别意图并获取数据，首轮返回 Markdown 文字总结，并在文末通过 **` ```suggestions ` 建议区块** 放入带有 `[绘图]` 标记的建议。
-2.  **一键直达 (Phase 2)**: 前端检测到建议区块包含 `[绘图]`，点击后跳过输入框直接发送请求。
-3.  **上下文恢复与复用**: 
-    *   后端 `chatAgentRunner.js` 探测到 `[绘图]` 关键字，自动回溯 Session 缓存。
-    *   **极速出数**: 优先复用上一轮成功的 `toolResult`，实现瞬间响应。
+1. **分析触发 (Phase 1)**：用户提出分析类问题。AI 识别意图并获取数据，首轮返回 Markdown 文字总结，并在文末通过 **` ```suggestions `** 建议区块放入带有 `[绘图]` 标记的建议。
+2. **一键直达 (Phase 2)**：前端检测到建议区块包含 `[绘图]`，点击后跳过输入框直接发送请求。
+3. **上下文恢复与复用**：
+   - 后端 `chatAgentRunner.js` 探测到 `[绘图]` 关键字，可结合 Session 状态（`chatSessionStateService`）复用上一轮 `runAnalytics` 上下文。
+   - **极速出数**：在 intent_routing 与 session 缓存命中时，可跳过重复工具执行（实现以代码为准）。
 
 ### 5.2 后端实现与补偿 (Compensate Logic)
 
 为了对抗 LLM 输出 JSON 格式的不稳定性，采用了 **“AI 生成为主，代码补偿为辅”** 的策略：
 
-*   **Prompt 引导**: 在提示词中约束模型必须将图表 JSON 放入 **` ```echarts ` 代码块**。
-*   **硬逻辑补偿**: 若 LLM 返回结果缺失该代码块，后端逻辑层会根据 `toolResult` 自动生成标准的 ECharts 载荷补位。
+- **Prompt 引导**：在提示词中约束模型将图表 JSON 放入 **` ```echarts `** 代码块。
+- **硬逻辑补偿**：若 LLM 返回结果缺失该代码块，后端可根据 `toolResult` 自动生成标准 ECharts 载荷补位（见各分析路径实现）。
 
-### 5.3 前端渲染规范
+### 5.3 前端渲染规范（与 `TOT_frontend` 对齐）
 
-*   **流式闸门**: 为防止解析半截 JSON 导致崩溃，`AiChartRenderer` 仅在 SSE 消息标记为 `done` 后才正式挂载 ECharts 实例。
-*   **JSON 修复**: 前端集成 `repairJson` 工具，自动修复 LLM 常见的末尾逗号、未闭合引号等语法错误。
-*   **交互优化**:
-    *   **多图 Swiper**: 图表 > 1 时启用 CSS 横向滑动容器。
-    *   **手势增强**: 默认开启 `inside` 型 DataZoom 支持双指缩放。
+- **流式**：Markdown 由 `MarkdownRenderer` 解析；`echarts` / `suggestions` 块在组件内抽取后分别交给 `AiChartRenderer` 与追问气泡。
+- **JSON 修复**：前端 `repairJson` 等用于修复流式半截结构化输出（与 Executive 流式协议配合）。
+- **交互**：多图横向滑动、DataZoom 等与 `09` / 前端实现一致。
 
-### 5.4 工具执行指示器 (Implemented)
+### 5.4 工具执行阶段与 SSE（`delta` 事件）
 
-为了解决分析类请求耗时较长导致的“黑盒等待”问题，系统在 `function_calling` 模式下实现了实时状态同步：
+FC 循环中，工具调用前后通过 `streamFormatCallbacks.onDelta` 通知流式层：
 
-1.  **后端触发**: 在 `chatAgentRunner.js` 的 FC 循环中，每次工具调用前后分别推送 `tool_start` 和 `tool_end` 事件。
-2.  **SSE 载荷**: `data: {"text": "toolName", "phase": "tool_start"}`。
-3.  **前端展示**: `executive/index.vue` 接收该事件，并根据 `TOOL_DISPLAY_NAMES` 映射表，在 AI 消息气泡顶部显示带 `n-spin` 的“正在查询...”文案。
+- **`chatAgentRunner.js`**：`tool_start` / `tool_end` 等 **phase** 与文本增量一并传入回调。
+- **`chatService.js`（stream）**：当前将每条增量序列化为  
+  `event: delta`，`data: JSON.stringify({ text, phase })`，其中 **`phase`** 可为 `reasoning`、`content`、`tool_start`、`tool_end` 等（以 `meta.phase` 为准）。  
+  **说明**：若工具名仅存在于回调 `meta` 的扩展字段而未合并进 `text`，则客户端收到的 `text` 在工具边界处可能为空字符串；如需展示具体工具名，应在后端统一扩展 `data` 字段或把名称并入 `text`（实现演进时同步更新本文与 `04-API-SPEC.md`）。
 
 ---
 
-## 6. 如何新增意图（Intent）
+## 6. 语音播报与正文范围（产品约定，前端实现）
+
+与 [`09-EXECUTIVE-CHAT.md`](./09-EXECUTIVE-CHAT.md) §1.1 一致：Executive Chat 支持 TTS（经后端 `/ws/tts` 代理至百炼实时 TTS）。**朗读文本必须与主气泡「正式回答」一致**：
+
+- **不朗读**折叠区「思考过程」（SSE `phase: reasoning` 对应的前端 `thinking` 展示）。
+- **朗读**：结构化卡片字段格式化后的正文，或 Markdown **正文**（`content` / `markdownContent`），与 `TOT_frontend` 中 `speechTextForExecutiveTts` / `speechTextForSendResult` 语义对齐。
+
+后端仍只负责 `reasoning_content` 与 `content` 分流（见 `server/utils/ai.js` `chatWithToolsStream`）；TTS 裁剪在前端完成。
+
+---
+
+## 7. 如何新增意图（Intent）
 
 以下流程适用于新增例如 `ranking_query` 这类新意图。
 
@@ -149,8 +204,7 @@
 
 修改 `server/services/chatAgentRunner.js`：
 
-1. `runIntentRouting()` 中的 `toolMap` 新增映射  
-   例如：`ranking_query: 'getRankingData'`
+1. `runIntentRouting()` 中的 `toolMap` 新增映射（例如 `ranking_query: 'getRankingData'`）
 2. `deriveIntentType()` 新增反推规则（用于 FC 模式落库语义）
 3. 如需 regex 兜底识别，更新 `inferIntentFromMessage()`
 
@@ -171,7 +225,7 @@
 
 ---
 
-## 6. 如何新增工具（Tool）
+## 8. 如何新增工具（Tool）
 
 以下流程适用于新增例如 `getRankingData` 的新工具。
 
@@ -215,7 +269,7 @@
 
 ---
 
-## 7. 新增意图 + 新增工具的最小变更清单（Checklist）
+## 9. 新增意图 + 新增工具的最小变更清单（Checklist）
 
 - [ ] `chatIntentService.js`：新增 intent 定义与提示词样例  
 - [ ] `chat_tools/tool_<name>.js`：新增工具 schema/meta/handler  
@@ -223,15 +277,15 @@
 - [ ] 测试脚本与 fixtures：新增覆盖  
 - [ ] `09-EXECUTIVE-CHAT.md`：能力描述与示例更新  
 - [ ] `04-API-SPEC.md`：若有外部契约变化则更新  
-- [ ] 本文档：更新 As-Is 清单与映射表
+- [ ] 本文档：更新 As-Is 清单与映射表  
 
 ---
 
-## 8. 常见坑位
+## 10. 常见坑位
 
 - 只加了工具文件，**没加映射**，导致 intent_routing 永远不会调用新工具
 - 只加了映射，**没加 `deriveIntentType`**，导致 FC 落库 `intentType` 语义不准
 - 只加了意图，**没补提示词样例**，分类精度下降
 - 忽略 `regionScope`，造成越权风险（应返回统一权限错误）
 - 更新了实现，**未同步 09/04 文档**，造成文档与代码漂移
-
+- **`matrix_query` 未抽取 `taskName`/`productName`**，导致 `queryExecutiveMetrics` 缺少任务上下文而失败

@@ -1984,15 +1984,23 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```json
   {
     "messageId": "string", // 消息唯一ID（前端生成）
-    "content": "string", // 自然语言问题，必填
+    "content": "string",   // 自然语言问题，或在消歧场景下作为点击文本展示
     "executiveId": "string", // 发送人ID
     "contextId": "string", // 上下文ID，必填（创建会话返回）
-    "stream": false
+    "stream": false,
+    "clarificationResponse": {  // [可选] v3.0 Phase 1.2 消歧恢复响应
+      "toolCallId": "string",  // 关联的上一次工具调用 ID
+      "result": {              // 用户选择的结构化数据（如具体的 storeId）
+        "storeId": "string"
+      }
+    }
   }
   ```
   **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
-  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end" }`。
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify", "reasoningLevel": "summary" }`。
+    - `reasoningLevel`：仅当 `phase="reasoning"` 时出现，目前固定为 `"summary"` 表示已脱敏摘要。
     - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
+    - `clarify` 时 `text` 为消歧请求 JSON（含备选门店列表），前端应展示选择 UI。
   - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
   - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
 
@@ -2019,6 +2027,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
+  - 409：`CHAT_009`，重复的 messageId（幂等拦截）
   - 503：AI Agent服务未就绪（响应超时）
 
 ### 6.2.1 删除Executive Chat会话**P1**

@@ -84,6 +84,13 @@ function handleFeedback(req, res, next) {
 async function handleRegenerate(req, res, next) {
   try {
     const { sessionId, messageId } = req.params;
+    const { stream } = req.body;
+
+    if (stream === true) {
+      await chatService.regenerateLastAssistantStream(sessionId, messageId, req.user.id, req, res);
+      return;
+    }
+
     const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
 
     res.json({

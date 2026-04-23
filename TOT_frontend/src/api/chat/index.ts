@@ -171,9 +171,34 @@ export const submitChatFeedback = (
 };
 
 /**
+ * Executive Chat 重新生成流式发送
+ */
+export const streamRegenerateChatMessage = async (
+  sessionId: string,
+  messageId: string,
+  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onComplete: (data: SendMessageResult) => void,
+  onError: (error: unknown) => void,
+  streamOptions?: { signal?: AbortSignal }
+) => {
+  return streamSsePostJson({
+    path: `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`,
+    body: { stream: true },
+    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDone: (d) => onComplete(d as SendMessageResult),
+    onError,
+    fallbackErrorMessage: 'Executive Chat 重新生成处理失败',
+    signal: streamOptions?.signal,
+  });
+};
+
+/**
  * 重新生成 AI 的最后一条回复
  */
-export const regenerateChatMessage = (sessionId: string, messageId: string) => {
+export const regenerateChatMessage = (sessionId: string, messageId: string, stream?: boolean) => {
+  if (stream) {
+    return Alova.Post<SendMessageResult>(`/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`, { stream });
+  }
   return Alova.Post<SendMessageResult>(
     `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`
   );

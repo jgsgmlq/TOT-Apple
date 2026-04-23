@@ -8,6 +8,7 @@ const { compressAssistantContent } = require('../utils/chatHistoryCompress');
 const chatAgentRunner = require('./chatAgentRunner');
 const { AGENT_MODE } = chatAgentRunner;
 const chatSessionStateService = require('./chatSessionStateService');
+const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
@@ -37,6 +38,35 @@ function parseSessionRegionsStored(regionsJson, sessionId = null) {
     logger.warn('session_regions_parse_error', { sessionId, error: e.message });
     return null;
   }
+}
+
+/**
+ * Executive Chat 非流式 API（sendMessage / regenerate）返回体：只暴露前端契约字段，避免 `_toolMeta` 等混入 `res.json` 异常。
+ */
+function buildExecutiveMessageApiData(result) {
+  const md =
+    typeof result.markdownContent === 'string' && result.markdownContent.trim() !== ''
+      ? result.markdownContent.trim()
+      : null;
+  if (md) {
+    return { replyContent: null, markdownContent: md };
+  }
+  return {
+    replyContent: {
+      overview: typeof result.overview === 'string' ? result.overview : '',
+      keyNumbers: Array.isArray(result.keyNumbers) ? result.keyNumbers : [],
+      attentionPoints: Array.isArray(result.attentionPoints) ? result.attentionPoints : [],
+      followUpSuggestions: Array.isArray(result.followUpSuggestions) ? result.followUpSuggestions : [],
+      ...(Array.isArray(result.visualizations) ? { visualizations: result.visualizations } : {}),
+      ...(result.statisticsProvenance && typeof result.statisticsProvenance === 'object'
+        ? { statisticsProvenance: result.statisticsProvenance }
+        : {}),
+      ...(typeof result.forecastDisclaimer === 'string'
+        ? { forecastDisclaimer: result.forecastDisclaimer }
+        : {}),
+    },
+    markdownContent: null,
+  };
 }
 
 /** 写入 chat_messages.content：优先 Markdown；否则 JSON；避免 stringify 循环引用等导致 500 / NOT NULL */
@@ -98,11 +128,72 @@ function createSession(userId) {
   return { sessionId, contextId: sessionId, exampleQuestions: buildExampleQuestions() };
 }
 
+async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {}) {
+  const { clarificationResponse, messageId } = reqBody;
+  const now = formatNowSqliteLocal();
+
+  // 1. 幂等检查
+  if (messageId) {
+    const existing = db.get('SELECT id FROM chat_messages WHERE client_message_id = ?', [messageId]);
+    if (existing) {
+      const err = new Error('Duplicate messageId');
+      err.status = 409;
+      err.code = 'CHAT_009';
+      throw err;
+    }
+  }
+
+  if (clarificationResponse && clarificationResponse.toolCallId) {
+    // Phase 1.2: 如果是针对歧义的选择，插入一条 tool 角色消息
+    // 注意：为了保持 FC 序列连贯，我们先插入 Tool 消息，再插入用于前端展示的 User 消息
+    const toolMsgId = nanoid();
+    db.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [toolMsgId, sessionId, 'tool', JSON.stringify(clarificationResponse.result), clarificationResponse.toolCallId, now]
+    );
+    
+    // 此时 userMessage 是用户的点击文本（用于展示），关联 client_message_id
+    const userMsgId = nanoid();
+    db.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', 
+      [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
+    );
+    return true; 
+  }
+
+  // 普通消息
+  const userMsgId = nanoid();
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', 
+    [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
+  );
+  return false;
+}
+
+/** 辅助：从数据库加载并格式化历史记录，传给 Agent 引擎 */
+function loadFormattedHistory(sessionId) {
+  const rows = db.all(
+    `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages 
+     WHERE session_id = ? 
+     ORDER BY created_at ASC, rowid ASC LIMIT 10`,
+    [sessionId]
+  );
+  return rows.map(r => ({
+    role: r.role,
+    content: r.role === 'assistant' ? compressAssistantContent(r.content) : r.content,
+    tool_calls: r.tool_calls ? JSON.parse(r.tool_calls) : undefined,
+    tool_call_id: r.tool_call_id || undefined,
+    client_message_id: r.client_message_id || undefined
+  }));
+}
+
 // ─── sendMessage (Non-stream) ──────────────────────────────────────────────────
-async function sendMessage(sessionId, userMessage, userId) {
+async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
   if (Number(session.user_id) !== Number(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
+
+  await handleIncomingMessage(sessionId, userMessage, userId, reqBody);
 
   const regionScope = {
     type: session.role_scope,
@@ -110,37 +201,30 @@ async function sendMessage(sessionId, userMessage, userId) {
     rtm: session.rtm || null,
   };
 
-  const historyRows = db.all(
-    `SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 6`,
-    [sessionId]
-  ).reverse();
-
-  const history = historyRows.map((r) => ({ role: r.role, content: compressAssistantContent(r.content) }));
+  const history = loadFormattedHistory(sessionId);
   const startMs = Date.now();
-  const result = await chatAgentRunner.run(userMessage, history, regionScope, { sessionId });
+  const result = await chatAgentRunner.run(userMessage, history, regionScope, { sessionId, userId: session.user_id });
   const responseTime = Date.now() - startMs;
 
   const now = formatNowSqliteLocal();
-  const userMsgId = nanoid();
   const assistMsgId = nanoid();
-  const intentType = result._intentType || null;
-  const toolMeta = result._toolMeta || {};
-
-  logger.info('chat_turn', {
-    sessionId, userId, intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
-    toolName: toolMeta.toolName, toolIterations: toolMeta.iterations, msgId: assistMsgId,
-  });
-
   const finalContent = storageContentFromAgentResult(result);
+  const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
 
-  db.run('INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', [userMsgId, sessionId, 'user', userMessage, now]);
-  db.run('INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)', [assistMsgId, sessionId, 'assistant', finalContent, intentType, now]);
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 
+    [assistMsgId, sessionId, 'assistant', finalContent, result._intentType || null, toolCallsStr, now]
+  );
   db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+
+  // 异步提取记忆
+  setImmediate(() => {
+    chatMemoryService.extract(sessionId).catch(e => logger.warn('memory_extract_error', { sessionId, error: e.message }));
+  });
 
   return {
     messageId: assistMsgId,
-    replyContent: result.markdownContent ? null : result,
-    markdownContent: result.markdownContent || null,
+    ...buildExecutiveMessageApiData(result),
     responseTime,
     contextId: sessionId,
     timestamp: now,
@@ -159,18 +243,15 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     return;
   }
 
+  await handleIncomingMessage(sessionId, userMessage, userId, req.body);
+
   const regionScope = {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
   };
 
-  const historyRows = db.all(
-    `SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 6`,
-    [sessionId]
-  ).reverse();
-
-  const history = historyRows.map((r) => ({ role: r.role, content: compressAssistantContent(r.content) }));
+  const history = loadFormattedHistory(sessionId);
 
   writeSseHeaders(res);
   const send = createSseSender(res);
@@ -186,10 +267,15 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
   try {
     result = await chatAgentRunner.run(userMessage, history, regionScope, {
       sessionId,
+      userId: session.user_id,
       signal: abortController.signal,
       streamFormatCallbacks: {
         onDelta: (text, meta) => {
-          send('delta', { text, phase: meta?.phase || 'content' });
+          send('delta', { 
+            text, 
+            phase: meta?.phase || 'content',
+            reasoningLevel: meta?.reasoningLevel || undefined 
+          });
         },
       },
     });
@@ -205,26 +291,32 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   const responseTime = Date.now() - startMs;
   const now = formatNowSqliteLocal();
-  const userMsgId = nanoid();
   const assistMsgId = nanoid();
   const finalContent = storageContentFromAgentResult(result);
+  const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
 
   logger.info('chat_turn', {
     sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
     toolName: result._toolMeta?.toolName, msgId: assistMsgId, stream: true,
   });
 
-  db.run('INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', [userMsgId, sessionId, 'user', userMessage, now]);
-  db.run('INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)', [assistMsgId, sessionId, 'assistant', finalContent, result._intentType, now]);
+  db.run(
+    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 
+    [assistMsgId, sessionId, 'assistant', finalContent, result._intentType, toolCallsStr, now]
+  );
   db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+
+  // 异步提取记忆
+  setImmediate(() => {
+    chatMemoryService.extract(sessionId).catch(e => logger.warn('memory_extract_error', { sessionId, error: e.message }));
+  });
 
   send('done', {
     code: 200,
     message: 'success',
     data: {
       messageId: assistMsgId,
-      replyContent: result.markdownContent ? null : result,
-      markdownContent: result.markdownContent || null,
+      ...buildExecutiveMessageApiData(result),
       responseTime,
       contextId: sessionId,
       timestamp: now,
@@ -299,6 +391,130 @@ function setMessageFeedback(sessionId, messageId, userId, feedback) {
   }
 }
 
+// ─── regenerateLastAssistantStream ────────────────────────────────────────────
+async function regenerateLastAssistantStream(sessionId, messageId, userId, req, res) {
+  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) {
+    res.status(404).json({ code: 404, message: 'Session not found', errorCode: 'CHAT_003' });
+    return;
+  }
+  if (Number(session.user_id) !== Number(userId)) {
+    res.status(403).json({ code: 403, message: 'Forbidden', errorCode: 'CHAT_004' });
+    return;
+  }
+
+  const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
+  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
+    res.status(400).json({ code: 400, message: 'Can only regenerate the last assistant message', errorCode: 'CHAT_008' });
+    return;
+  }
+
+  const chronological = loadFormattedHistory(sessionId);
+  if (chronological.length < 2) {
+    res.status(400).json({ code: 400, message: 'Not enough history to regenerate', errorCode: 'CHAT_008' });
+    return;
+  }
+  
+  const lastTurn = chronological[chronological.length - 1];
+  const prevTurn = chronological[chronological.length - 2];
+  if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
+    res.status(400).json({ code: 400, message: 'Expected user message before assistant message', errorCode: 'CHAT_008' });
+    return;
+  }
+  
+  const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
+  if (!userPrompt.trim()) {
+    res.status(400).json({ code: 400, message: 'User message is empty', errorCode: 'CHAT_008' });
+    return;
+  }
+
+  const prior = chronological.slice(0, -2);
+  const history = prior
+    .filter((m) => m.role !== 'tool')
+    .map((m) => ({
+      role: m.role,
+      content: m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
+    }));
+
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null };
+
+  writeSseHeaders(res);
+  const send = createSseSender(res);
+  const abortController = new AbortController();
+
+  req.on('close', () => {
+    logger.info('client_aborted_stream_regenerate', { sessionId });
+    abortController.abort();
+  });
+
+  const onDelta = (chunk, meta) => {
+    send('message', {
+      type: meta?.phase === 'reasoning' ? 'reasoning' : 'content',
+      content: chunk,
+      reasoningLevel: meta?.reasoningLevel,
+    });
+  };
+
+  const startMs = Date.now();
+  let result;
+  try {
+    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
+      sessionId,
+      userId,
+      signal: abortController.signal,
+      streamFormatCallbacks: {
+        onDelta: (text, meta) => {
+          send('delta', { 
+            text, 
+            phase: meta?.phase || 'content',
+            reasoningLevel: meta?.reasoningLevel || undefined 
+          });
+        },
+      },
+    });
+
+    const responseTime = Date.now() - startMs;
+    const now = formatNowSqliteLocal();
+    const newAssistMsgId = nanoid();
+    const finalContent = storageContentFromAgentResult(result);
+
+    db.transaction(() => {
+      db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
+      db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+      db.run(
+        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+      );
+      db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    });
+
+    logger.info('chat_turn_regenerate_stream', {
+      sessionId, userId, intentType: result._intentType, responseTimeMs: responseTime, msgId: newAssistMsgId,
+    });
+
+    const payload = buildExecutiveMessageApiData(result);
+
+    send('done', {
+      messageId: newAssistMsgId,
+      intentType: result._intentType,
+      replyContent: payload.replyContent,
+      markdownContent: payload.markdownContent,
+      toolData: result.toolData,
+      suggestions: result.followUpSuggestions,
+      _debug: result._debug,
+    });
+    res.end();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      logger.info('chat_stream_regenerate_aborted', { sessionId });
+      return;
+    }
+    logger.error('regenerate_agent_stream_failed', { sessionId, error: err.message, stack: err.stack });
+    send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
+    res.end();
+  }
+}
+
 // ─── regenerateLastAssistant ──────────────────────────────────────────────────
 async function regenerateLastAssistant(sessionId, messageId, userId) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
@@ -312,20 +528,32 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
     throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
   }
 
-  const historyRows = db.all(`SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 7`, [sessionId]).reverse();
-  if (historyRows.length < 2) throw Object.assign(new Error('Not enough history to regenerate'), { status: 400, code: 'CHAT_008' });
-  
-  historyRows.pop(); // Remove assistant message being regenerated
-  const userMessageRow = historyRows.pop();
-  if (!userMessageRow || userMessageRow.role !== 'user') {
+  // 与 sendMessageStream 一致：全量 ASC 历史（含 tool 行），再截取待重算的一轮 user+assistant
+  const chronological = loadFormattedHistory(sessionId);
+  if (chronological.length < 2) {
+    throw Object.assign(new Error('Not enough history to regenerate'), { status: 400, code: 'CHAT_008' });
+  }
+  const lastTurn = chronological[chronological.length - 1];
+  const prevTurn = chronological[chronological.length - 2];
+  if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
     throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
   }
-  const userPrompt = typeof userMessageRow.content === 'string' ? userMessageRow.content : '';
+  const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
   if (!userPrompt.trim()) {
     throw Object.assign(new Error('User message is empty'), { status: 400, code: 'CHAT_008' });
   }
 
-  const history = historyRows.map((r) => ({ role: r.role, content: compressAssistantContent(r.content) }));
+  const prior = chronological.slice(0, -2);
+  // DeepSeek/OpenAI 要求 tool 角色消息携带 tool_call_id；runFunctionCalling 仅转发 content，会触发 400。
+  // 歧义澄清等场景下库内可能存在 tool 行，这里在重生成上下文中省略（保留 user/assistant 与压缩后的正文）。
+  const history = prior
+    .filter((m) => m.role !== 'tool')
+    .map((m) => ({
+      role: m.role,
+      content:
+        m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
+    }));
+
   const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null };
 
   const startMs = Date.now();
@@ -365,10 +593,11 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
     db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
   });
 
+  const payload = buildExecutiveMessageApiData(result);
   return {
     messageId: newAssistMsgId,
-    replyContent: result.markdownContent ? null : result,
-    markdownContent: result.markdownContent || null,
+    replyContent: payload.replyContent,
+    markdownContent: payload.markdownContent,
     responseTime,
     contextId: sessionId,
     timestamp: now,
@@ -386,4 +615,4 @@ function deleteSessionById(sessionId) {
   chatSessionStateService.clearSession(sessionId);
 }
 
-module.exports = { createSession, sendMessage, sendMessageStream, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant };
+module.exports = { createSession, sendMessage, sendMessageStream, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream };

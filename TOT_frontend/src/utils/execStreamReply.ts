@@ -121,6 +121,62 @@ export function finalizeExecStyleMessage(
 }
 
 /**
+ * SSE 流式重新生成（由于 API 参数不同，这里单独封装）
+ */
+export function runExecRegenerateSseChat(
+  streamFn: (
+    sessionId: string,
+    messageId: string,
+    onDelta: (chunk: { text: string; phase?: string }) => void,
+    onComplete: (data: SendMessageResult) => void,
+    onError: (error: unknown) => void,
+    streamOptions?: { signal?: AbortSignal }
+  ) => Promise<void>,
+  sessionId: string,
+  messageId: string,
+  onUpdate: (payload: ExecStreamPayload) => void,
+  options?: { signal?: AbortSignal }
+): Promise<SendMessageResult> {
+  return new Promise((resolve, reject) => {
+    let partialReply = '';
+    let thinkingSnapshot = '';
+
+    void streamFn(
+      sessionId,
+      messageId,
+      (chunk) => {
+        if (chunk.phase === 'reasoning') {
+          thinkingSnapshot += chunk.text;
+        } else {
+          partialReply += chunk.text;
+        }
+
+        onUpdate({
+          id: messageId,
+          type: 'streaming',
+          partialReply,
+          thinking: thinkingSnapshot,
+        });
+      },
+      (data) => {
+        onUpdate({
+          id: data.messageId || messageId,
+          type: 'done',
+          result: data,
+          thinking: thinkingSnapshot,
+        });
+        resolve(data);
+      },
+      (err) => {
+        onUpdate({ id: messageId, type: 'error', error: err });
+        reject(err);
+      },
+      { signal: options?.signal }
+    );
+  });
+}
+
+/**
  * SSE 流式对话（delta/done），将增量映射为与 Executive 一致的 payload。
  */
 export function runExecStyleSseChat(
