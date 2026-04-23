@@ -28,3 +28,4 @@
 | [09-EXECUTIVE-CHAT.md](./09-EXECUTIVE-CHAT.md) | Executive Chat P1 规格（自然语言查询）| 10 | Current |
 | [10-EXECUTIVE-CHAT-INTENTS-TOOLS.md](./10-EXECUTIVE-CHAT-INTENTS-TOOLS.md) | Executive Chat 当前意图/工具清单与新增流程 | 11 | Current |
 | [11-EXECUTIVE-CHAT-REQUEST-FLOW.md](./11-EXECUTIVE-CHAT-REQUEST-FLOW.md) | Executive Chat 请求处理流程（代码级：从路由到 FC/工具/落库） | 12 | Current |
+| [12-AGENT-ARCHITECTURE.md](./12-AGENT-ARCHITECTURE.md) | 基础智能 Agent 架构（ReAct / 工具链 / 自主读写记忆库）| 13 | Current |
