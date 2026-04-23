@@ -9,6 +9,21 @@ const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 let _db;
 
+function ensureAgentGuidelinesTable(database) {
+  // 如果旧表存在（本地测试残留），先 drop 掉，保持干净
+  database.exec('DROP TABLE IF EXISTS dashboard_guidelines');
+  
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS agent_guidelines (
+      id          TEXT PRIMARY KEY,
+      agent_type  TEXT NOT NULL,
+      rule_text   TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    )
+  `);
+  database.exec('CREATE INDEX IF NOT EXISTS idx_ag_type ON agent_guidelines(agent_type)');
+}
+
 function getDb() {
   if (!_db) {
     _db = new Database(DB_PATH);
@@ -35,6 +50,7 @@ function getDb() {
     ensureUserMemoriesTable(_db);
     migrateDashboardInsightCounts(_db);
     migrateDashboardInsightModuleTypes(_db);
+    ensureAgentGuidelinesTable(_db);
   }
   return _db;
 }
