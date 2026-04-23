@@ -7,7 +7,7 @@ const { parseAutoNudgeRules, classifyDeadlineCrisisBand } = require('../services
  * 概览 = 全量汇总；下钻门店 = 同一公式在单店分子分母上计算。
  */
 function computeAssignmentWarningRates(assignRows, total, nowMs = Date.now()) {
-  let startDelayN = 0;
+  let p2N = 0;
   let p0N = 0;
   let p1N = 0;
   for (const row of assignRows) {
@@ -20,18 +20,16 @@ function computeAssignmentWarningRates(assignRows, total, nowMs = Date.now()) {
     const incomplete = row.status !== 'completed';
     const prog = row.progress != null ? Number(row.progress) : 0;
 
-    if (rules.startDelay && passedPct >= rules.startDelay && incomplete && prog === 0) {
-      startDelayN++;
-    }
     if (incomplete) {
-      const band = classifyDeadlineCrisisBand(rules, hoursLeft);
+      const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
       if (band === 'p0') p0N++;
       else if (band === 'p1') p1N++;
+      else if (band === 'p2') p2N++; // reusing variable name temporarily
     }
   }
   const t = total || 0;
   return {
-    startDelayRate: t > 0 ? parseFloat(((100 * startDelayN) / t).toFixed(2)) : 0,
+    crisisP2Rate: t > 0 ? parseFloat(((100 * p2N) / t).toFixed(2)) : 0,
     crisisP0Rate: t > 0 ? parseFloat(((100 * p0N) / t).toFixed(2)) : 0,
     crisisP1Rate: t > 0 ? parseFloat(((100 * p1N) / t).toFixed(2)) : 0,
   };
@@ -39,15 +37,12 @@ function computeAssignmentWarningRates(assignRows, total, nowMs = Date.now()) {
 
 /**
  * 门店维度预警率（与概览同一含义，仅范围缩到该店该任务）
- * @param {'startDelay'|'p0'|'p1'} kind
+ * @param {'p2'|'p0'|'p1'} kind
  * @param {object} row aggregate 行须含 total_count、zero_prog_incomplete、uncompleted_count
  */
 function ruleBasedStoreWarningRate(kind, row) {
   const tot = row.total_count || 0;
   if (!tot) return 0;
-  if (kind === 'startDelay') {
-    return parseFloat(((100 * (row.zero_prog_incomplete || 0)) / tot).toFixed(2));
-  }
   return parseFloat(((100 * (row.uncompleted_count || 0)) / tot).toFixed(2));
 }
 

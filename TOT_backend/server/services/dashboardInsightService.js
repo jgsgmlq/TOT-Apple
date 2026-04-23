@@ -194,7 +194,7 @@ function buildFunnelFacts(body) {
       (nudgeRow && nudgeRow.converted_nudged) || 0,
       (nudgeRow && nudgeRow.total_nudged) || 0
     ),
-    startDelayRate: wr.startDelayRate,
+    crisisP2Rate: wr.crisisP2Rate,
     crisisP1Rate: wr.crisisP1Rate,
     crisisP0Rate: wr.crisisP0Rate,
     pushUserCount: push,
