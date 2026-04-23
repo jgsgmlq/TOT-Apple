@@ -2,6 +2,7 @@
 
 ### v1.5.3（2026-04-21）
 
+- **新增催办转化率看板接口**：新增 `GET /api/v1/dashboard/nudge-conversion` 以支持对各下钻维度（门店/大区）的红/橙/黄各级别历史累计催办下发人数与真实转化完课人数的统计报表。
 - **看板智能 Agent 进阶重构**：看板智能 Agent 诊断接口 (`GET /dashboard/agent/diagnose`) 的底层逻辑已从单次调用升级为完整的 **ReAct 架构** 结合 **Tool Calling** (函数调用)。Agent 现在能在后台执行循环对话，自主决定何时调用预设工具：`read_agent_guidelines`（读取本 Agent 的历史经验规则）、`query_active_tasks`（获取当前实时任务看板数据），并且在得出分析结果时通过 `upsert_agent_guidelines`（追加新规则到系统全局的 `agent_guidelines` 表内）实现**单行覆写式维基记忆与自我进化**，做到越用越聪明且不膨胀。
 - **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及时间进度过半 (P2) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
@@ -2003,6 +2004,47 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   }
   ```
 
+
+### 5.9 获取催办转化率看板**P0**
+
+- **接口名称**：获取各预警级别的累计催办事实与转化率
+- **接口路径**：`/dashboard/nudge-conversion`
+- **请求方法**：GET
+- **权限要求**：`central`, `executive`, `admin`
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | taskId | string | 否 | 任务ID，为空则汇总所有已下发的系统任务事实 |
+  | level | string | 否 | 聚合维度：`store`（默认）、`rtm`、`format`、`dealer` |
+  | pageNum | int | 否 | 页码，默认1 |
+  | pageSize | int | 否 | 页大小，默认20 |
+  | rtm / format / dealerName / storeId | string | 否 | 下钻过滤条件 |
+- **业务规则**：
+  - 本看板展示的是**历史累计发生过的事件事实**，不受任务进度实时变化导致“已消除”预警状态的影响。
+  - **触发人数（nudged）**：历史上记录在 `notification_events` 表中的催办接收人数。
+  - **转化人数（converted）**：收到该级别预警后，在预警下发时间之后最终将 `status` 变更为 `completed` 的人数。如果同一个人在完成前收到过多次同一级别的预警，只计算1次转化。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "list": [
+        {
+          "targetId": "string",
+          "targetName": "string",
+          "targetType": "store",
+          "red": { "nudged": 50, "converted": 10, "rate": 20.0 },
+          "orange": { "nudged": 100, "converted": 30, "rate": 30.0 },
+          "yellow": { "nudged": 200, "converted": 100, "rate": 50.0 },
+          "total": { "nudged": 250, "converted": 120, "rate": 48.0 }
+        }
+      ],
+      "pagination": { "pageNum": 1, "pageSize": 20, "total": 1, "totalPages": 1 }
+    },
+    "requestId": "string"
+  }
+  ```
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 

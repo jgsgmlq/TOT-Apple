@@ -644,4 +644,138 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
   }
 });
 
+
+// ─── GET /api/v1/dashboard/nudge-conversion ──────────────────────────────
+router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', 'executive']), (req, res, next) => {
+  try {
+    const { taskId, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
+    const drill = parseStoreDrill(req.query);
+
+    const page = Math.max(1, parseInt(pageNum, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    const conditions = ["ne.event_type IN ('nudge_red', 'nudge_orange', 'nudge_yellow')"];
+    const params = [];
+    if (taskId) {
+      conditions.push('ne.task_id = ?');
+      params.push(taskId);
+    }
+    if (drill.hasDrill) {
+      conditions.push(drill.sql.replace(/^\s*AND\s+/, ''));
+      params.push(...drill.params);
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    let selectId, selectName, groupByDim;
+    const lvl = level.toLowerCase();
+    if (lvl === 'rtm') {
+      selectId = 's.rtm AS target_id';
+      selectName = 's.rtm AS target_name';
+      groupByDim = 's.rtm';
+    } else if (lvl === 'format') {
+      selectId = 's.format AS target_id';
+      selectName = 's.format AS target_name';
+      groupByDim = 's.format';
+    } else if (lvl === 'dealer_name' || lvl === 'dealer') {
+      selectId = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS target_id";
+      selectName = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS target_name";
+      groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
+    } else {
+      selectId = 'ne.store_id AS target_id';
+      selectName = 's.name AS target_name';
+      groupByDim = 'ne.store_id';
+    }
+
+    const sql = `
+      SELECT 
+        ${selectId},
+        ${selectName},
+        ne.severity,
+        COUNT(DISTINCT ne.target_user_id) AS total_nudged,
+        COUNT(DISTINCT CASE 
+          WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+          ELSE NULL 
+        END) AS converted_nudged
+      FROM notification_events ne
+      JOIN stores s ON s.id = ne.store_id
+      LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
+      WHERE ${whereClause}
+      GROUP BY ${groupByDim}, ne.severity
+      ORDER BY ${groupByDim} ASC
+    `;
+
+    const rawRows = db.all(sql, params);
+
+    const map = new Map();
+    for (const r of rawRows) {
+      if (!map.has(r.target_id)) {
+        map.set(r.target_id, {
+          targetId: r.target_id,
+          targetName: r.target_name,
+          targetType: lvl,
+          red: { nudged: 0, converted: 0, rate: 0 },
+          orange: { nudged: 0, converted: 0, rate: 0 },
+          yellow: { nudged: 0, converted: 0, rate: 0 },
+          total: { nudged: 0, converted: 0, rate: 0 }
+        });
+      }
+      
+      const item = map.get(r.target_id);
+      const sev = r.severity; 
+      if (item[sev]) {
+        item[sev].nudged += r.total_nudged;
+        item[sev].converted += r.converted_nudged;
+        item[sev].rate = item[sev].nudged > 0 ? parseFloat(((100 * item[sev].converted) / item[sev].nudged).toFixed(2)) : 0;
+      }
+    }
+
+    const totalSql = `
+      SELECT 
+        ${selectId},
+        COUNT(DISTINCT ne.target_user_id) AS overall_nudged,
+        COUNT(DISTINCT CASE 
+          WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+          ELSE NULL 
+        END) AS overall_converted
+      FROM notification_events ne
+      JOIN stores s ON s.id = ne.store_id
+      LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
+      WHERE ${whereClause}
+      GROUP BY ${groupByDim}
+    `;
+
+    const totalRows = db.all(totalSql, params);
+    for (const tr of totalRows) {
+      if (map.has(tr.target_id)) {
+        const item = map.get(tr.target_id);
+        item.total.nudged = tr.overall_nudged;
+        item.total.converted = tr.overall_converted;
+        item.total.rate = tr.overall_nudged > 0 ? parseFloat(((100 * tr.overall_converted) / tr.overall_nudged).toFixed(2)) : 0;
+      }
+    }
+
+    const matched = Array.from(map.values());
+    matched.sort((a, b) => b.total.nudged - a.total.nudged);
+
+    const totalRecords = matched.length;
+    const totalPages = totalRecords === 0 ? 0 : Math.ceil(totalRecords / limit);
+    const list = matched.slice(offset, offset + limit);
+
+    res.json({
+      code: 200,
+      message: 'success',
+      data: {
+        list,
+        pagination: { pageNum: page, pageSize: limit, total: totalRecords, totalPages }
+      },
+      requestId: req.requestId
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
