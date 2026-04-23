@@ -15,26 +15,29 @@ function parseAutoNudgeRules(raw) {
   }
 }
 
-/** @returns {{ p0Hours: number, p1Hours: number } | null} */
+/** @returns {{ p0Hours: number, p1Hours: number, p2Percent: number } | null} */
 function getDeadlineCrisisHours(rules) {
   if (!rules || !rules.deadlineCrisis) return null;
   return {
     p0Hours: rules.deadlineCrisis.p0 || 24,
     p1Hours: rules.deadlineCrisis.p1 || 48,
+    p2Percent: rules.deadlineCrisis.p2 || rules.startDelay || 50,
   };
 }
 
 /**
  * @param {object} rules 已 parse 的 auto_nudge_rules
  * @param {number} hoursLeft 与 autoNudge 一致：(ddlAt - Date.now()) / 3600000
- * @returns {'p0'|'p1'|null}
+ * @param {number} passedPercent 与 autoNudge 一致：已过时间百分比 (0-100)
+ * @returns {'p0'|'p1'|'p2'|null}
  */
-function classifyDeadlineCrisisBand(rules, hoursLeft) {
+function classifyDeadlineCrisisBand(rules, hoursLeft, passedPercent) {
   if (hoursLeft <= 0) return null;
   const h = getDeadlineCrisisHours(rules);
   if (!h) return null;
   if (hoursLeft <= h.p0Hours) return 'p0';
   if (hoursLeft <= h.p1Hours) return 'p1';
+  if (typeof passedPercent === 'number' && passedPercent >= h.p2Percent) return 'p2';
   return null;
 }
 

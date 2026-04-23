@@ -7,7 +7,7 @@
  *   GET /api/v1/dashboard/overview   §5.1 总部/Executive 概览 KPI
  *   GET /api/v1/dashboard/heatmap    §5.2 RTM/区域热力图
  *   GET /api/v1/dashboard/store-rank §5.3 Top/Bottom N 门店排行
- *   GET /api/v1/dashboard/warnings   §5.5 预警列表（临期 p0/p1 + 起步 startDelay）
+ *   GET /api/v1/dashboard/warnings   §5.5 预警列表（临期 p0/p1 + 起步 p2）
  *
  * 门店层级下钻（可选 query，可组合，AND）：rtm、format、dealerName、storeId
  * 对应 stores：rtm → format → dealer_name → id。不传则与旧行为一致。
@@ -191,9 +191,12 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       const rules = parseAutoNudgeRules(row.auto_nudge_rules);
       const ddlAt = new Date(row.ddl_at).getTime();
       const hoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
-      const band = classifyDeadlineCrisisBand(rules, hoursLeft);
+      const createdAtMs = new Date(row.task_created_at || row.created_at).getTime();
+      const passedPct = ddlAt - createdAtMs > 0 ? ((nowMs - createdAtMs) / (ddlAt - createdAtMs)) * 100 : 100;
+      const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
       if (band === 'p0') warnP0++;
       else if (band === 'p1') warnP1++;
+      else if (band === 'p2') warnP2++;
     }
 
     // ─ 预警及链路相关指标 (PRD 1.3) ──
@@ -224,7 +227,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       allParams
     );
     const {
-      startDelayRate,
+      crisisP2Rate,
       crisisP0Rate,
       crisisP1Rate,
     } = computeAssignmentWarningRates(assignRateRows, total, nowMs);
@@ -267,14 +270,14 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         nudgeConversionRate,
         
         // 预警数据
-        startDelayRate,
+        crisisP2Rate,
         crisisP1Rate,
         crisisP0Rate,
 
         inProgressCount: inProgCnt,
         pendingCount:    pendingCnt,
         overdueCount,
-        warningCount: { p1: warnP1, p0: warnP0 },
+        warningCount: { p2: warnP2, p1: warnP1, p0: warnP0 },
         updatedAt: base.last_updated || formatNowSqliteLocal(),
       },
       requestId: req.requestId,
@@ -436,8 +439,8 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const { taskId, warningLevel, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
     const drill = parseStoreDrill(req.query);
 
-    if (warningLevel && !['p1', 'p0', 'startDelay'].includes(warningLevel)) {
-      throw createError(400, 'warningLevel 非法（p1/p0/startDelay）', 'DASH_003');
+    if (warningLevel && !['p2', 'p1', 'p0'].includes(warningLevel)) {
+      throw createError(400, 'warningLevel 非法（p2/p1/p0）', 'DASH_003');
     }
 
     const page  = Math.max(1, parseInt(pageNum,  10) || 1);
@@ -477,8 +480,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       groupByDim = 'ta.store_id';
     }
 
-    if (warningLevel === 'startDelay') {
-      const startDelaySql = `
+    const mainSql = `
       SELECT
         ta.task_id,
         ${selectId},
@@ -489,93 +491,6 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         COUNT(ta.id) AS total_count,
         SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
         SUM(CASE WHEN ta.status!='completed' THEN 1 ELSE 0 END) AS uncompleted_count,
-        SUM(CASE WHEN ta.status!='completed' AND COALESCE(ta.progress, 0) = 0 THEN 1 ELSE 0 END) AS zero_prog_incomplete,
-        SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
-        ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
-        MAX(ta.updated_at) AS last_updated
-      FROM task_assignments ta
-      JOIN stores s ON s.id = ta.store_id
-      JOIN tasks t ON t.id = ta.task_id
-      WHERE ${whereClause}
-      GROUP BY ${groupByDim}, ta.task_id
-      HAVING SUM(CASE WHEN EXISTS (
-          SELECT 1 FROM notification_events ne
-          WHERE ne.dedupe_key LIKE '%startDelay%'
-            AND ne.task_id = ta.task_id
-            AND ne.store_id = ta.store_id
-        ) THEN 1 ELSE 0 END) > 0
-    `;
-      const rawRows = db.all(startDelaySql, [nowIso, ...params]);
-      const matchedStartDelay = [];
-      for (const r of rawRows) {
-        const rules = parseAutoNudgeRules(r.auto_nudge_rules);
-        if (!rules.startDelay) continue;
-        const zp = r.zero_prog_incomplete || 0;
-        if (!zp) continue;
-        const createdAtMs = new Date(r.task_created_at).getTime();
-        const ddlMs = new Date(r.ddl_at).getTime();
-        const totalDur = ddlMs - createdAtMs;
-        const passedPct = totalDur > 0 ? ((nowMs - createdAtMs) / totalDur) * 100 : 100;
-        if (passedPct < rules.startDelay) continue;
-        matchedStartDelay.push(r);
-      }
-      matchedStartDelay.forEach((r) => {
-        r._warningRate = r.total_count > 0 ? Number(((r.zero_prog_incomplete / r.total_count) * 100).toFixed(2)) : 0;
-      });
-      matchedStartDelay.sort((a, b) => (b._warningRate || 0) - (a._warningRate || 0));
-      const total = matchedStartDelay.length;
-      const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
-      const pageSlice = matchedStartDelay.slice(offset, offset + limit);
-
-      const list = pageSlice.map((r) => {
-        const rules = parseAutoNudgeRules(r.auto_nudge_rules);
-        const completionRate = r.completion_rate || 0;
-        const warningRate = r._warningRate ?? 0;
-        const threshold = rules.startDelay;
-        const triggerDesc =
-          threshold != null && threshold !== ''
-            ? `任务时间进度已达 ${Number(threshold).toFixed(0)}% 阈值（startDelay），仍有学员进度为 0`
-            : `仍有学员进度为 0（起步异常 / startDelay）`;
-        return {
-          taskId:         r.task_id,
-          targetId:       r.target_id,
-          targetName:     r.target_name,
-          targetType:     lvl,
-          storeId:        r.target_id,   // 保留兼容旧结构
-          storeName:      r.target_name, // 保留兼容旧结构
-          warningLevel:   'startDelay',
-          warningRate,
-          completionRate,
-          completedCount: r.completed_count,
-          totalCount:     r.total_count,
-          overdueCount:   r.overdue_count || 0,
-          triggerDesc,
-          aiSuggestion:   aiSuggestion(completionRate),
-          calculatedAt:   nowIso,
-        };
-      });
-
-      return res.json({
-        code: 200,
-        message: 'success',
-        data: {
-          list,
-          pagination: { pageNum: page, pageSize: limit, total, totalPages },
-        },
-        requestId: req.requestId,
-      });
-    }
-
-    const aggregateSql = `
-      SELECT
-        ta.task_id,
-        ${selectId},
-        ${selectName},
-        t.ddl_at,
-        t.auto_nudge_rules,
-        COUNT(ta.id) AS total_count,
-        SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
-        SUM(CASE WHEN ta.status!='completed' THEN 1 ELSE 0 END) AS uncompleted_count,
         SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
         MAX(ta.updated_at) AS last_updated
@@ -585,53 +500,66 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       WHERE ${whereClause}
       GROUP BY ${groupByDim}, ta.task_id
     `;
-
-    const rawRows = db.all(aggregateSql, [nowIso, ...params]);
-
+    const rawRows = db.all(mainSql, [nowIso, ...params]);
     const matched = [];
     for (const r of rawRows) {
       if (!r.uncompleted_count) continue;
-      const rules = parseAutoNudgeRules(r.auto_nudge_rules);
-      const ddlAt = new Date(r.ddl_at).getTime();
-      const hoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
-      const band = classifyDeadlineCrisisBand(rules, hoursLeft);
-      if (!band) continue;
-      if (warningLevel && band !== warningLevel) continue;
+      const createdAtMs = new Date(r.task_created_at).getTime();
+      const ddlMs = new Date(r.ddl_at).getTime();
+      const hoursLeft = (ddlMs - nowMs) / (1000 * 60 * 60);
+      if (hoursLeft <= 0) continue; // 已过期不计入预警
+      
+      const passedMs = nowMs - createdAtMs;
+      const totalDur = ddlMs - createdAtMs;
+      const passedPct = totalDur > 0 ? (passedMs / totalDur) * 100 : 100;
 
-      r._warningRate = r.total_count > 0 ? Number(((r.uncompleted_count / r.total_count) * 100).toFixed(2)) : 0;
-      matched.push({ row: r, band });
+      const rules = parseAutoNudgeRules(r.auto_nudge_rules);
+      const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
+      if (!band) continue;
+      if (warningLevel && warningLevel !== band) continue;
+
+      r._band = band;
+      r._warningRate = ruleBasedStoreWarningRate(band, r);
+      matched.push(r);
     }
 
-    matched.sort((a, b) => (b.row._warningRate || 0) - (a.row._warningRate || 0));
-
+    matched.sort((a, b) => (b._warningRate || 0) - (a._warningRate || 0));
     const total = matched.length;
     const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     const pageSlice = matched.slice(offset, offset + limit);
 
-    const list = pageSlice.map(({ row: r, band }) => {
+    const list = pageSlice.map((r) => {
+      const band = r._band;
       const rules = parseAutoNudgeRules(r.auto_nudge_rules);
       const h = getDeadlineCrisisHours(rules);
       const completionRate = r.completion_rate || 0;
       const warningRate = r._warningRate ?? 0;
-      const triggerDesc = band === 'p0'
-        ? `距 Deadline 不足${h.p0Hours}小时，仍有 ${r.uncompleted_count} 人未完成（P0）`
-        : `距 Deadline 不足${h.p1Hours}小时，仍有 ${r.uncompleted_count} 人未完成（P1）`;
+      
+      let triggerDesc = '';
+      if (band === 'p0') {
+        triggerDesc = `距 Deadline 不足\${h.p0Hours}小时，仍有 \${r.uncompleted_count} 人未完成（P0）`;
+      } else if (band === 'p1') {
+        triggerDesc = `距 Deadline 不足\${h.p1Hours}小时，仍有 \${r.uncompleted_count} 人未完成（P1）`;
+      } else if (band === 'p2') {
+        triggerDesc = `任务时间进度已达 \${Number(h.p2Percent).toFixed(0)}% 阈值，仍有 \${r.uncompleted_count} 人未完成（P2）`;
+      }
+
       return {
         taskId:         r.task_id,
         targetId:       r.target_id,
         targetName:     r.target_name,
         targetType:     lvl,
-        storeId:        r.target_id,   // 保留兼容旧结构
-        storeName:      r.target_name, // 保留兼容旧结构
+        storeId:        r.target_id,
+        storeName:      r.target_name,
         warningLevel:   band,
         warningRate,
         completionRate,
         completedCount: r.completed_count,
         totalCount:     r.total_count,
-        overdueCount:   r.overdue_count || 0,
+        overdueCount:   r.overdue_count,
         triggerDesc,
-        aiSuggestion:   aiSuggestion(completionRate),
-        calculatedAt:   nowIso,
+        aiSuggestion:   '建议及时督促对应门店/区域进行学习',
+        updatedAt:      r.last_updated || nowIso,
       };
     });
 
@@ -640,89 +568,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       message: 'success',
       data: {
         list,
-        pagination: { pageNum: page, pageSize: limit, total, totalPages },
-      },
-      requestId: req.requestId,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── GET /api/v1/dashboard/store-detail ───────────────────────────────────────
-// 门店员工进度明细（下钻用）
-
-router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
-  try {
-    const { taskId, storeId: qStoreId } = req.query;
-    const { role, storeId: userStoreId } = req.user;
-
-    if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
-
-    const targetStoreId = qStoreId || null;
-    if (!targetStoreId) throw createError(400, 'storeId 为必填参数（非 central 角色）', 'DASH_004');
-
-    const rows = db.all(
-      `SELECT
-         e.id AS employee_id,
-         e.name AS employee_name,
-         ta.status,
-         ta.progress,
-         ta.mypal_completed,
-         ta.smartsell_completed,
-         ta.ai_demo_completed,
-         ta.live_broadcast_completed,
-         ta.nudge_count,
-         ta.received_at,
-         ta.started_at,
-         ta.completed_at,
-         ta.updated_at
-       FROM task_assignments ta
-       JOIN employees e ON e.id = ta.user_id
-       WHERE ta.task_id = ? AND ta.store_id = ?
-       ORDER BY ta.progress DESC`,
-      [taskId, targetStoreId]
-    );
-
-    const store = db.get('SELECT id, name, region, rtm, format FROM stores WHERE id = ?', [targetStoreId]);
-
-    const total     = rows.length;
-    const completed = rows.filter(r => r.status === 'completed').length;
-    const completionRate =
-      total > 0 ? parseFloat(((100 * completed) / total).toFixed(2)) : 0;
-
-    res.json({
-      code: 200,
-      message: 'success',
-      data: {
-        taskId,
-        store: store || { id: targetStoreId },
-        summary: {
-          totalCount:      total,
-          completedCount:  completed,
-          completionRate,
-          inProgressCount: rows.filter(r => r.status === 'in_progress').length,
-          pendingCount:    rows.filter(r => r.status === 'pending').length,
-        },
-        employees: rows.map(r => ({
-          employeeId:   r.employee_id,
-          employeeName: r.employee_name,
-          status:       r.status,
-          progress:     r.progress,
-          lagLevel:     r.progress >= 80 ? 'fast' : r.progress >= 50 ? 'medium' : 'behind',
-          platformStatus: {
-            mypalCompleted:          r.mypal_completed === 1,
-            smartsellCompleted:      r.smartsell_completed === 1,
-            aiDemoCompleted:         r.ai_demo_completed === 1,
-            liveBroadcastCompleted:  r.live_broadcast_completed === 1,
-          },
-          nudgeCount:   r.nudge_count,
-          receivedAt:   r.received_at || null,
-          startedAt:    r.started_at  || null,
-          completedAt:  r.completed_at || null,
-          updatedAt:    r.updated_at,
-        })),
-        updatedAt: formatNowSqliteLocal(),
+        pagination: { pageNum: page, pageSize: limit, total, totalPages }
       },
       requestId: req.requestId,
     });
@@ -732,7 +578,6 @@ router.get('/store-detail', authenticate, requireRole(['central', 'admin']), (re
 });
 
 // ─── GET /api/v1/dashboard/trend ──────────────────────────────────────────────
-// 完成人数的时间趋势（按天/按小时）
 router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
   try {
     const { taskId, type = 'daily', date } = req.query;
