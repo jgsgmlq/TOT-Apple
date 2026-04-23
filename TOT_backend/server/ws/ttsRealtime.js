@@ -31,6 +31,20 @@ function buildUpstreamUrl() {
 }
 
 /**
+ * `ws` 库要求出站 close 码必须符合 isValidStatusCode；
+ * 上游收到的 1005/1006/1015 等不能原样转发，否则会抛 TypeError 并拖垮进程。
+ */
+function safeCloseCodeForClient(code) {
+  if (code === undefined || code === null) return 1000;
+  const n = typeof code === 'number' ? code : parseInt(String(code), 10);
+  if (!Number.isInteger(n)) return 1000;
+  const ok =
+    (n >= 1000 && n <= 1014 && n !== 1004 && n !== 1005 && n !== 1006) ||
+    (n >= 3000 && n <= 4999);
+  return ok ? n : 1000;
+}
+
+/**
  * 使用 noServer：由 app.js 与 /ws 共用 upgrade 时按 pathname 分发（见 manager.js 头注释）。
  */
 function setupTtsRealtimeWebSocket() {
@@ -118,8 +132,21 @@ function setupTtsRealtimeWebSocket() {
     });
 
     upstream.on('close', (code, reason) => {
-      if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.close(code || 1000, reason?.toString() || '');
+      if (clientWs.readyState !== WebSocket.OPEN) return;
+      const c = safeCloseCodeForClient(code);
+      let r;
+      if (reason !== undefined && reason !== null && reason !== '') {
+        r = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason);
+        if (r.length > 123) r = r.slice(0, 123);
+      }
+      try {
+        clientWs.close(c, r || undefined);
+      } catch (err) {
+        try {
+          clientWs.close(1000);
+        } catch (_) {
+          /* ignore */
+        }
       }
     });
 

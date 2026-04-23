@@ -175,19 +175,37 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE TABLE IF NOT EXISTS chat_messages (
   id          TEXT PRIMARY KEY,
   session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
-  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
   content     TEXT NOT NULL,
   intent_type TEXT,
+  tool_calls  TEXT,
+  tool_call_id TEXT,
+  client_message_id TEXT UNIQUE, -- 幂等键，关联前端生成的 messageId
   created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 
--- 10. 看板智能洞察（AI 生成文案；赞/踩仅记汇总次数，不记投票人）
+-- 10. 全局记忆系统
+CREATE TABLE IF NOT EXISTS user_memories (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  memory_hash TEXT NOT NULL, -- 对 user_id + content 的 hash，用于稳健 Upsert
+  memory_type TEXT DEFAULT 'bias', -- 'bias', 'fact', 'scope'
+  content TEXT NOT NULL,
+  confidence_score REAL DEFAULT 0.5,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  UNIQUE(user_id, memory_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_um_user_id ON user_memories(user_id);
+CREATE INDEX IF NOT EXISTS idx_um_hash    ON user_memories(memory_hash);
+
+-- 11. 看板智能洞察（AI 生成文案；赞/踩仅记汇总次数，不记投票人）
 CREATE TABLE IF NOT EXISTS dashboard_insights (
   id                  TEXT PRIMARY KEY,
   module_type         TEXT NOT NULL
-                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts')),
+                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts', 'global_agent')),
   task_id             TEXT REFERENCES tasks(id),
   filter_rtm          TEXT,
   filter_format       TEXT,

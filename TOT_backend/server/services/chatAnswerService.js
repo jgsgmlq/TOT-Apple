@@ -123,6 +123,26 @@ function compensateVisualization(reply, toolResult, userMessage) {
       series: [{ name: '数据点', data: toolResult.points.map(p => [p.x, p.y]) }]
     }];
   }
+  // 4. 补偿矩阵查询图 (Bar/Line)
+  else if (toolResult.dataSource === 'aggregated_matrix' && Array.isArray(toolResult.data)) {
+    const dimKeys = toolResult.summary.dimensions;
+    const metricKeys = toolResult.summary.metrics;
+    
+    if (dimKeys.length > 0 && metricKeys.length > 0) {
+      const mainDim = dimKeys[0];
+      const mainMetric = metricKeys[0];
+      
+      reply.visualizations = [{
+        type: 'bar',
+        title: `按${mainDim}维度的${mainMetric}对比`,
+        xAxis: toolResult.data.map(row => row.dimensions[mainDim]),
+        series: metricKeys.map(m => ({
+          name: m,
+          data: toolResult.data.map(row => row[m])
+        }))
+      }];
+    }
+  }
 
   if (reply.visualizations) {
     logger.info('visualization_compensated', { type: toolResult.analysisType });

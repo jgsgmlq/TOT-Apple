@@ -1,18 +1,29 @@
 <template>
   <div class="markdown-renderer">
     <!-- 思考过程 (DeepSeek reasoning) -->
-    <div v-if="thinking" class="reasoning-box">
+    <div v-if="thinking" class="reasoning-box" :class="{ 'is-expanded': showThinking }">
       <div class="reasoning-header" @click="showThinking = !showThinking">
-        <n-icon :component="showThinking ? MenuFoldOutlined : MenuUnfoldOutlined" />
-        <span>思考过程</span>
+        <n-icon
+          class="reasoning-icon"
+          :class="{ 'is-rotating': streaming && !showThinking }"
+          :component="showThinking ? DownOutlined : RightOutlined"
+        />
+        <span class="reasoning-title">
+          已深度思考 {{ streaming ? '...' : '' }}
+        </span>
       </div>
       <n-collapse-transition :show="showThinking">
-        <div class="reasoning-content">{{ thinking }}</div>
+        <div class="reasoning-content-wrapper">
+          <div class="reasoning-content">{{ thinking }}</div>
+        </div>
       </n-collapse-transition>
     </div>
 
     <!-- 正文渲染区 -->
     <div class="markdown-body" v-html="sanitizedHtml"></div>
+
+    <!-- 流式光标 -->
+    <span v-if="streaming" class="streaming-cursor"></span>
 
     <!-- 图表渲染区 (根据占位符动态插入或在此处遍历) -->
     <div v-if="extractedCharts.length" class="exec-charts">
@@ -41,20 +52,18 @@
         </n-button>
       </div>
     </div>
-
-    <!-- 流式光标 -->
-    <span v-if="streaming" class="streaming-cursor"></span>
   </div>
 </template>
 
 <script lang="ts" setup>
-  import { ref, computed, watch } from 'vue';
-  import { MenuFoldOutlined, MenuUnfoldOutlined } from '@vicons/antd';
+  import { ref, computed } from 'vue';
+  import { DownOutlined, RightOutlined } from '@vicons/antd';
   // 注意：此处若未安装成功，可能会有编译错误，请手动运行 pnpm add markdown-it dompurify
   import MarkdownIt from 'markdown-it';
   import DOMPurify from 'dompurify';
   import AiChartRenderer from './AiChartRenderer.vue';
   import type { ChartData } from '@/types/chat';
+  import { normalizeToChartData, parseEchartsBlockContent } from '@/utils/echartsBlockParse';
 
   const props = defineProps<{
     content: string;
@@ -66,6 +75,7 @@
     (e: 'suggestion-click', text: string): void;
   }>();
 
+  // 默认折叠思考过程
   const showThinking = ref(false);
 
   watch(
@@ -90,11 +100,14 @@
     // 提取 echarts 块
     const echartsRegex = /```echarts\s*([\s\S]*?)\s*```/g;
     raw = raw.replace(echartsRegex, (_, jsonStr) => {
-      try {
-        const data = JSON.parse(jsonStr);
-        charts.push(data);
-      } catch (e) {
-        console.warn('Failed to parse echarts JSON', e);
+      const parsed = parseEchartsBlockContent(jsonStr);
+      const chart = normalizeToChartData(parsed);
+      if (chart) {
+        charts.push(chart);
+      } else if (parsed != null) {
+        console.warn('echarts 块已解析但无法映射为 ChartData，已跳过渲染', parsed);
+      } else {
+        console.warn('Failed to parse echarts block (非合法 JSON 或仍含无法剥离的 JS)');
       }
       return ''; // 移除代码块，由单独的 div 渲染
     });
@@ -131,68 +144,181 @@
 
 <style lang="less" scoped>
   .markdown-renderer {
-    line-height: 1.6;
+    line-height: 1.7;
     word-break: break-word;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: #334155; /* Modern, softer dark gray for less eye strain */
 
     .reasoning-box {
-      margin-bottom: 12px;
-      padding: 8px 12px;
-      background: #f9fafb;
+      margin-bottom: 16px;
+      background: transparent;
       border-radius: 8px;
-      border: 1px solid #e5e7eb;
+      transition: all 0.3s ease;
 
       .reasoning-header {
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: #6b7280;
+        gap: 8px;
+        padding: 6px 12px;
+        background: #f1f5f9; /* Subtle gray background */
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #64748b; /* Muted text color */
         cursor: pointer;
         user-select: none;
+        transition: background 0.2s ease, color 0.2s ease;
 
         &:hover {
-          color: #2563eb;
+          background: #e2e8f0;
+          color: #334155;
+        }
+
+        .reasoning-icon {
+          font-size: 12px;
+          transition: transform 0.2s ease;
+          
+          &.is-rotating {
+             animation: softPulse 1.5s infinite alternate;
+          }
+        }
+        
+        .reasoning-title {
+           letter-spacing: 0.3px;
         }
       }
 
-      .reasoning-content {
+      .reasoning-content-wrapper {
         margin-top: 8px;
-        font-size: 12px;
-        color: #4b5563;
+        padding-left: 4px; /* Slight indent to align with header visual weight */
+      }
+
+      .reasoning-content {
+        padding: 12px 16px;
+        font-size: 13.5px;
+        color: #64748b;
+        background: #f8fafc;
+        border-left: 3px solid #cbd5e1; /* Subtle blockquote style border */
+        border-radius: 0 8px 8px 0;
         white-space: pre-wrap;
-        font-style: italic;
+        line-height: 1.6;
+        font-style: normal; /* Removed italic for better readability of long text */
       }
     }
 
     .markdown-body {
       font-size: 15px;
-      color: #1f2937;
 
-      :deep(table) {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 12px 0;
-        display: block;
-        overflow-x: auto;
-
-        th, td {
-          border: 1px solid #e5e7eb;
-          padding: 8px 12px;
-          text-align: left;
+      :deep(p) {
+        margin-top: 0;
+        margin-bottom: 1em;
+        
+        &:last-child {
+          margin-bottom: 0;
         }
+      }
+      
+      :deep(strong) {
+        font-weight: 600;
+        color: #0f172a; /* Darker bold text for contrast */
+      }
 
-        th {
-          background: #f3f4f6;
-          font-weight: 600;
+      /* Lists */
+      :deep(ul), :deep(ol) {
+        margin-top: 0;
+        margin-bottom: 1em;
+        padding-left: 24px;
+        
+        li {
+          margin-bottom: 0.25em;
+          &::marker {
+            color: #94a3b8; /* Softer bullet points */
+          }
         }
       }
 
-      :deep(p) { margin: 8px 0; }
-      :deep(ul), :deep(ol) { padding-left: 20px; }
+      /* Blockquotes */
+      :deep(blockquote) {
+        margin: 1em 0;
+        padding: 12px 16px;
+        color: #475569;
+        background: #f8fafc;
+        border-left: 4px solid #e2e8f0;
+        border-radius: 0 8px 8px 0;
+        
+        p {
+          margin-bottom: 0;
+        }
+      }
+
+      /* Inline Code & Code Blocks */
+      :deep(code) {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.875em;
+        padding: 0.2em 0.4em;
+        background-color: #f1f5f9;
+        color: #ef4444; /* Standard subtle red for inline code */
+        border-radius: 4px;
+      }
+      
+      :deep(pre) {
+        margin: 1em 0;
+        padding: 16px;
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        overflow-x: auto;
+        
+        code {
+          background-color: transparent;
+          padding: 0;
+          color: #334155; /* Reset color inside pre */
+          font-size: 0.85em;
+        }
+      }
+
+      /* Tables */
+      :deep(table) {
+        width: 100%;
+        margin: 1.5em 0;
+        border-collapse: separate;
+        border-spacing: 0;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid #e2e8f0;
+
+        th, td {
+          padding: 10px 16px;
+          text-align: left;
+          border-bottom: 1px solid #e2e8f0;
+          border-right: 1px solid #e2e8f0;
+          
+          &:last-child {
+            border-right: none;
+          }
+        }
+
+        tr:last-child td {
+          border-bottom: none;
+        }
+
+        th {
+          background-color: #f8fafc;
+          font-weight: 600;
+          color: #1e293b;
+        }
+        
+        tbody tr {
+          background-color: #ffffff;
+          &:nth-child(even) {
+             background-color: #fcfcfd;
+          }
+        }
+      }
     }
 
     .exec-charts {
-      margin: 16px 0;
+      margin: 20px 0;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -201,20 +327,21 @@
     .exec-chart-item {
       background: #ffffff;
       border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-      border: 1px solid #f3f4f6;
+      padding: 16px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      border: 1px solid #f1f5f9;
     }
 
     .exec-follow {
-      margin-top: 16px;
-      padding-top: 12px;
-      border-top: 1px solid #f3f4f6;
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid #f1f5f9;
 
       .exec-follow-title {
         font-size: 13px;
-        color: #6b7280;
-        margin-bottom: 8px;
+        color: #64748b;
+        margin-bottom: 12px;
+        font-weight: 500;
       }
 
       .exec-follow-bubbles {
@@ -224,25 +351,40 @@
       }
 
       .exec-follow-chip {
-        background: #f3f4f6;
-        color: #2563eb;
+        background: #ffffff;
+        color: #0ea5e9;
+        border: 1px solid #e0f2fe;
         font-size: 13px;
+        transition: all 0.2s ease;
+        
+        &:hover {
+           background: #f0f9ff;
+           border-color: #bae6fd;
+        }
       }
     }
 
     .streaming-cursor {
       display: inline-block;
-      width: 2px;
-      height: 1em;
-      background: #2563eb;
-      margin-left: 2px;
-      vertical-align: middle;
-      animation: blink 1s infinite;
+      width: 6px;
+      height: 15px;
+      background: #3b82f6; /* Modern Blue */
+      border-radius: 3px;
+      margin-left: 4px;
+      vertical-align: baseline;
+      animation: smoothBlink 1s infinite;
+      position: relative;
+      top: 2px;
     }
   }
 
-  @keyframes blink {
+  @keyframes smoothBlink {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0; }
+    50% { opacity: 0.1; }
+  }
+  
+  @keyframes softPulse {
+     0% { opacity: 0.6; }
+     100% { opacity: 1; }
   }
 </style>

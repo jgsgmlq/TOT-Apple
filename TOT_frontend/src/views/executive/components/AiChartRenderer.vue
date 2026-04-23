@@ -23,7 +23,7 @@
   const { setOptions } = useECharts(chartRef as any);
 
   const options = computed(() => {
-    const { type, title, xAxis, series } = props.data;
+    const { type = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
 
     const isCartesian = ['bar', 'line', 'scatter'].includes(type);
 
@@ -31,7 +31,7 @@
       title: {
         text: title,
         left: 'center',
-        textStyle: { fontSize: 14 },
+        textStyle: { fontSize: 14, color: '#334155' },
       },
       tooltip: {
         trigger: type === 'pie' ? 'item' : 'axis',
@@ -39,16 +39,17 @@
         position: (pos: any) => [pos[0], '10%'],
       },
       grid: {
-        left: '3%',
+        left: '4%',
         right: '4%',
         bottom: '15%',
+        top: '18%',
         containLabel: true,
       },
       legend: {
         bottom: 0,
         itemWidth: 10,
         itemHeight: 10,
-        textStyle: { fontSize: 12 },
+        textStyle: { fontSize: 12, color: '#64748b' },
       },
       dataZoom: isCartesian ? [{ type: 'inside', start: 0, end: 100 }] : undefined,
     };
@@ -56,46 +57,51 @@
     if (isCartesian) {
       option.xAxis =
         type === 'scatter'
-          ? { type: 'value', splitLine: { show: true } }
-          : { type: 'category', data: xAxis || [], axisLabel: { interval: 'auto', rotate: 30 } };
+          ? { type: 'value', splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } }, axisLine: { lineStyle: { color: '#cbd5e1' } } }
+          : { type: 'category', data: xAxis, axisLabel: { interval: 'auto', rotate: 30, color: '#64748b' }, axisLine: { lineStyle: { color: '#cbd5e1' } } };
 
-      option.yAxis = { type: 'value' };
+      option.yAxis = { type: 'value', splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } }, axisLabel: { color: '#64748b' } };
     }
+
+    const highlights = (props.data as any).highlights || [];
 
     option.series = series.map((s) => {
       const item: any = {
-        name: s.name,
-        type: type,
-        data: s.data,
+        name: s.name || '',
+        type: ['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar', // fallback
+        data: s.data || [],
+        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 } // Add rounded top corners to bars
       };
 
       if (type === 'pie') {
         item.radius = ['40%', '70%'];
         item.avoidLabelOverlap = false;
-        item.itemStyle = { borderRadius: 10, borderColor: '#fff', borderWidth: 2 };
+        item.itemStyle = { borderRadius: 6, borderColor: '#fff', borderWidth: 2 };
         item.label = { show: false, position: 'center' };
         item.emphasis = { label: { show: true, fontSize: 16, fontWeight: 'bold' } };
       }
 
       if (type === 'line') {
         item.smooth = true;
+        item.symbolSize = 6;
       }
 
-      // 动态高亮逻辑
-      if (props.data.highlights?.length && type === 'bar') {
-        item.itemStyle = {
-          color: (params: any) => {
-            return props.data.highlights!.includes(params.dataIndex) ? '#f08c00' : undefined;
-          },
+      // 动态高亮逻辑 (Safely handle highlights array index)
+      if (highlights.length && type === 'bar') {
+        item.itemStyle.color = (params: any) => {
+          return highlights.includes(params.dataIndex) ? '#f59e0b' : '#3b82f6';
         };
+      } else if (type === 'bar') {
+        // default uniform color for bars if no highlights
+         item.itemStyle.color = '#3b82f6';
       }
 
       return item;
     });
 
     // 允许后端 customOptions 覆盖
-    if (props.data.customOptions) {
-      Object.assign(option, props.data.customOptions);
+    if ((props.data as any).customOptions) {
+      Object.assign(option, (props.data as any).customOptions);
     }
 
     return option;

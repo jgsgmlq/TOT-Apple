@@ -5,26 +5,56 @@ const chatIntentService = require('./chatIntentService');
 const chatToolsService  = require('./chatToolsService');
 const chatAnswerService = require('./chatAnswerService');
 const chatSessionStateService = require('./chatSessionStateService');
+const chatMemoryService = require('./chatMemoryService');
+
+const { chatWithToolsStream, simpleChat } = require('../utils/ai');
 
 // 2026-04-18 重构：FC 模式成为默认，开启流式 Markdown + 状态指示器
 const CHAT_AGENT_MODE = process.env.CHAT_AGENT_MODE || 'function_calling';
 const CHAT_SESSION_STATE_ENABLED = process.env.CHAT_SESSION_STATE_ENABLED !== '0';
 
-const OUT_OF_SCOPE_ACTION_RE = /(催办|发邮件|邮件草稿|nudge|send\s+email|auto\s*send)/i;
+// 2026-04-21 v3.0 升级：弱化正则拦截，改为语义监工
 const CHIT_CHAT_RE = /^(你好|您好|hi|hello|谢谢|thanks|你是谁|你能做什么|help)([!！,.。?？\s]|$)/i;
 const ANALYTICS_HINT_RE = /(p90|分位|分布|相关性|方差|预测|截尾均值|analytics|绘图|图表)/i;
+
+/**
+ * v3.0 语义监工：判断意图是否真正违规
+ */
+async function checkIntentSafety(message) {
+  const supervisorPrompt = `你是一个安全合规监工。判断用户意图是否属于【危险操作】。
+【危险操作定义】：
+1. 要求系统自动发送邮件、发送通知、发起催办（nudge）。
+2. 要求修改、删除、更新数据库中的数据。
+【允许的操作】：
+1. 询问数据、分析趋势、下钻查询。
+2. 询问“如何”发邮件、询问邮件“文案模板”、询问系统功能。
+
+如果是危险操作，请返回 "DENY"。如果是允许的操作，请返回 "ALLOW"。
+只需返回单词本身，不要任何解释。`;
+
+  try {
+    const res = await simpleChat([
+      { role: 'system', content: supervisorPrompt },
+      { role: 'user', content: message }
+    ]);
+    return res.trim().toUpperCase() === 'DENY' ? 'deny' : 'allow';
+  } catch (e) {
+    logger.warn('supervisor_check_failed', { error: e.message });
+    return 'allow'; // 报错时默认放行，由主 Agent 逻辑再次把关
+  }
+}
 
 function classifyExecutionMode(message) {
   if (!message || typeof message !== 'string') return 'tool_action';
   const trimmed = message.trim();
   if (!trimmed) return 'chat_only';
-  if (OUT_OF_SCOPE_ACTION_RE.test(trimmed)) return 'deny';
   if (CHIT_CHAT_RE.test(trimmed)) return 'chat_only';
   return 'tool_action';
 }
 
 function inferIntentFromMessage(message) {
   if (!message || typeof message !== 'string') return 'unknown';
+  if (/(对比|排行|名次|表现|维度|指标|汇总|业态|经销商)/.test(message)) return 'matrix_query';
   if (ANALYTICS_HINT_RE.test(message)) return 'analytics_query';
   if (/(预警|风险|关注)/.test(message)) return 'warning_query';
   if (/(门店|最差|下钻|店|区域|大区|华东|华南|华北|西南|东北|西北)/.test(message)) return 'drill_down';
@@ -34,6 +64,7 @@ function inferIntentFromMessage(message) {
 }
 
 function deriveIntentType(calledToolNames, fallbackIntent) {
+  if (calledToolNames.has('queryExecutiveMetrics')) return 'matrix_query';
   if (calledToolNames.has('runAnalytics')) return 'analytics_query';
   if (calledToolNames.has('getWarningsData')) return 'warning_query';
   if (calledToolNames.has('getRegionDetailData')) return 'drill_down';
@@ -125,20 +156,30 @@ function buildDisambiguationReply(toolResult) {
 }
 
 /**
+ * `sendMessage` / `sendMessageStream` 在调用 `run` 前已通过 `handleIncomingMessage` 把本轮 user 写入 DB，
+ * `loadFormattedHistory` 因此包含该条；下游又会单独拼 `userMessage`。仅在「尾部 user 与本轮问题一致」时去掉，
+ * 避免重复投递；同时避免误删（例如并发下 DB 里已插入另一条 user，与当前请求的 userMessage 不一致）。
+ */
+function historyExcludingPendingUserTurn(history, userMessage) {
+  if (!Array.isArray(history)) return [];
+  if (history.length === 0) return history;
+  const last = history[history.length - 1];
+  if (last && last.role === 'user') {
+    const a = String(last.content ?? '').trim();
+    const b = String(userMessage ?? '').trim();
+    if (b.length > 0 && a === b) {
+      return history.slice(0, -1);
+    }
+  }
+  return history;
+}
+
+/**
  * Main entry point for the chat agent.
  */
 async function run(userMessage, history, regionScope, options = {}) {
   const mode = classifyExecutionMode(userMessage);
-  if (mode === 'deny') {
-    return {
-      overview: '当前 Executive Chat 仅支持培训数据查询与分析，不支持催办文案或邮件生成。',
-      keyNumbers: [],
-      attentionPoints: [],
-      followUpSuggestions: ['可改问：当前有哪些风险门店？', '可改问：华东区完成率是多少？'],
-      _intentType: 'deny',
-      _intentResolvedBy: 'execution_mode',
-    };
-  }
+
   if (mode === 'chat_only') {
     return {
       overview: '你好，我可以帮你查询培训进度、项目状态、预警信息，并做分位数/分布/相关性等分析。',
@@ -150,10 +191,26 @@ async function run(userMessage, history, regionScope, options = {}) {
     };
   }
 
-  if (CHAT_AGENT_MODE === 'function_calling') {
-    return runFunctionCalling(userMessage, history, regionScope, options);
+  // Phase 1.1: 语义监工异步检查
+  if (mode === 'tool_action') {
+    const safety = await checkIntentSafety(userMessage);
+    if (safety === 'deny') {
+      return {
+        overview: '抱歉，目前的 Executive Chat 助手仅作为只读的数据分析工具，我不具备发送邮件、发起催办（Nudge）或直接修改系统数据的权限。您可以向我询问相关文案建议。',
+        keyNumbers: [],
+        attentionPoints: ['AI 发起催办/修改数据已被拦截。'],
+        followUpSuggestions: ['可改问：华东区有哪些预警门店？', '可改问：如何优化当前的催办模板？'],
+        _intentType: 'deny',
+        _intentResolvedBy: 'semantic_supervisor',
+      };
+    }
   }
-  return runIntentRouting(userMessage, history, regionScope, options);
+
+  const historyForAgent = historyExcludingPendingUserTurn(history, userMessage);
+  if (CHAT_AGENT_MODE === 'function_calling') {
+    return runFunctionCalling(userMessage, historyForAgent, regionScope, options);
+  }
+  return runIntentRouting(userMessage, historyForAgent, regionScope, options);
 }
 
 // ─── Intent Routing mode (Fallback) ───────────────────────────────────────────
@@ -217,6 +274,7 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
   if (intentType !== 'unknown' && !toolResult) {
     const toolMap = {
       progress_query: 'getOverviewData',
+      matrix_query:   'queryExecutiveMetrics',
       project_status: 'getTaskListData',
       warning_query:  'getWarningsData',
       drill_down: (entities?.region && !entities?.storeId && !entities?.storeName)
@@ -229,7 +287,27 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
       if (CHAT_SESSION_STATE_ENABLED && options.sessionId) {
         await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
       }
-      const cacheSignature = buildToolCacheSignature(toolName, entities, regionScope);
+
+      // v3.0: 针对矩阵查询做参数归一化
+      let toolArgs = entities;
+      if (intentType === 'matrix_query') {
+        toolArgs = {
+          dimensions: entities.dimensions,
+          metrics: entities.metrics,
+          taskName: entities.taskName,
+          productName: entities.productName,
+          filters: {
+            region: entities.region,
+            rtm: entities.rtm,
+            format: entities.format,
+            dealerName: entities.dealerName,
+            storeId: entities.storeId,
+          },
+          sort: entities.sort || (entities.topN ? { sortBy: entities.metrics?.[0], order: 'desc' } : null)
+        };
+      }
+
+      const cacheSignature = buildToolCacheSignature(toolName, toolArgs, regionScope);
       const expectedVersion = (CHAT_SESSION_STATE_ENABLED && options.sessionId)
         ? chatSessionStateService.getSessionVersion(options.sessionId, regionScope)
         : null;
@@ -241,7 +319,7 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
         routeToolMeta = { toolName, cacheHit: true, skipped: false };
       } else {
         try {
-          toolResult = await chatToolsService.executeByName(toolName, entities, regionScope);
+          toolResult = await chatToolsService.executeByName(toolName, toolArgs, regionScope);
           routeToolMeta = { toolName, cacheHit: false, skipped: false };
           if (!toolResult?.error && CHAT_SESSION_STATE_ENABLED && options.sessionId) {
             chatSessionStateService.addRecord(options.sessionId, {
@@ -287,29 +365,27 @@ async function runFunctionCalling(userMessage, history, regionScope, options = {
   const fallbackIntent = inferIntentFromMessage(userMessage);
   const { chatWithToolsStream } = require('../utils/ai');
 
+  const userMemories = options.userId ? chatMemoryService.getMemories(options.userId) : '';
+  const memorySection = userMemories ? `\n【个人偏好与记忆】\n${userMemories}\n` : '';
+
   const SYSTEM_PROMPT = `【角色定义】
-你是苹果零售培训系统的高管数据分析助手。服务对象是 VP 和区域总监。
-你的能力范围：培训完成率查询、项目状态、预警门店、区域/门店下钻、统计分析（分位数/分布/相关性/预测）。
-你没有能力：发送邮件、催办、修改数据。
+  你是苹果零售培训系统的高管数据分析助手。服务对象是 VP 和区域总监。
+  你的能力范围：培训完成率查询、矩阵式多维分析（对比、排行、多指标并列）、项目状态、预警门店、区域/门店下钻（支持大区、渠道RTM、业态Format等过滤）、统计分析（分位数/分布/相关性/预测）。
+  你没有能力：发送邮件、催办、修改数据。
+  ${memorySection}
+  【工具使用指导】
+  1. 优先使用 queryExecutiveMetrics：当你需要查询【完成率、预警率（P0/P1）、耗时、起步异常率】等核心指标，且涉及【大区对比、业态对比、门店排行、渠道对比】或【多度量组合】时，必须优先调用 queryExecutiveMetrics 工具。该工具支持通过 filters 参数按 rtm (如 Carrier, Monobrand) 或 format 进行过滤。
+  2. 实体继承：若用户问题中缺少区域/门店/任务信息，但历史对话中有，必须自动继承。
+  3. 主动澄清：若问题模糊且无法从历史推断，先用自然语言问一个澄清问题，不要猜测调用工具。
 
-【多轮对话规则】
-1. 实体继承：若用户问题中缺少区域/门店/任务信息，但历史对话中有，必须自动继承。
-2. 主动澄清：若问题模糊且无法从历史推断，先用自然语言问一个澄清问题，不要猜测调用工具。
-3. 直接行动：若已有足够信息，不要先征求用户同意，直接调用工具。
-
-【输出格式规则】
-1. 所有回答用流式 Markdown 输出，先给一句结论，再展开数据。
-2. 数字数据用 Markdown 表格呈现，不要用 JSON 对象。
-3. 有图表时，把图表配置放在文末的 \`\`\`echarts 代码块中。
-4. 有追问建议时，把建议列表放在文末的 \`\`\`suggestions 代码块中。
+  【输出格式规则】
+  1. 所有回答用流式 Markdown 输出，先给一句结论，再展开数据。
+  2. 数字数据用 Markdown 表格呈现，不要用 JSON 对象。
+  3. 有图表时，把图表配置放在文末的 \`\`\`echarts 代码块中。
+  4. 有追问建议时，把建议列表放在文末的 \`\`\`suggestions 代码块中。
    - \`\`\`suggestions 围栏内必须是一个合法的 JSON 字符串数组，如：["可追问：问题1", "可追问：问题2"]。
-5. 严禁向用户输出任何裸 JSON 对象。
-
-echarts 代码块格式：
-\`\`\`echarts
-{"type":"bar|line|scatter|pie","title":"标题","xAxis":["A","B"],"series":[{"name":"例","data":[1,2]}]}
-\`\`\`
-`;
+  5. 严禁向用户输出任何裸 JSON 对象。
+  `;
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -318,7 +394,7 @@ echarts 代码块格式：
   ];
 
   let iterations = 0;
-  const MAX_ITERATIONS = 3;
+  const MAX_ITERATIONS = 5;
   let finalContent = null;
   const calledToolNames = new Set();
   const sc = options.streamFormatCallbacks;
@@ -329,17 +405,27 @@ echarts 代码块格式：
       await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
     }
 
+    // 非 SSE 路径（sendMessage / regenerate）不传 streamFormatCallbacks；chatWithToolsStream 仍要求 onDelta 为函数
+    const onDelta =
+      sc && typeof sc.onDelta === 'function'
+        ? (chunk, meta) => sc.onDelta(chunk, meta)
+        : () => {};
     const response = await chatWithToolsStream({
       messages,
       tools: chatToolsService.TOOL_SCHEMAS,
       tool_choice: 'auto',
-      onDelta: sc ? createFcStreamDeltaSplitter((c, m) => sc.onDelta(c, m)) : null,
+      onDelta,
       signal: options.signal,
     });
 
     if (!response.tool_calls || response.tool_calls.length === 0) {
       finalContent = response.content;
       break;
+    }
+
+    // Capture content even if tool calls are present, especially if we are about to hit max iterations
+    if (iterations === MAX_ITERATIONS && response.content) {
+      finalContent = response.content;
     }
 
     const toolResults = [];
@@ -386,10 +472,23 @@ echarts 代码块格式：
       if (sc) sc.onDelta('', { phase: 'tool_end', text: tc.function.name });
     }
 
+    // Phase 1.2: 拦截需要澄清的结果，发送特殊信号
     const disambiguation = toolResults.find(tr => tr.result && tr.result.needDisambiguation);
     if (disambiguation) {
+      if (sc) {
+        // 通过 SSE 发送结构化澄清请求，前端可据此弹出选择框
+        sc.onDelta(JSON.stringify({
+          type: 'clarify_request',
+          toolCallId: disambiguation.id,
+          toolName: disambiguation.result.toolName || 'getStoreDetailData',
+          reason: disambiguation.result.reason,
+          candidates: disambiguation.result.candidates || [],
+          message: disambiguation.result.message
+        }), { phase: 'clarify' });
+      }
+
       const reply = buildDisambiguationReply(disambiguation.result);
-      // Legacy JSON fallback for disambiguation
+      // 同时返回一个降级回复，以防前端不支持该 SSE 事件
       return attachToolMeta({
         ...reply,
         _intentType: deriveIntentType(calledToolNames, fallbackIntent),
@@ -403,6 +502,12 @@ echarts 代码块格式：
   }
 
   // Final result returned to chatService (which stores it in DB content column)
+  if (!finalContent && calledToolNames.size > 0) {
+    finalContent = '当前查询由于步骤过多而中断，我未能为您提供完整的结论。建议您简化问题或缩小查询范围（如指定大区或门店）。';
+  } else if (!finalContent) {
+    finalContent = '抱歉，暂时无法回答您的问题，请稍后再试。';
+  }
+
   return {
     markdownContent: finalContent,
     _intentType: deriveIntentType(calledToolNames, fallbackIntent),

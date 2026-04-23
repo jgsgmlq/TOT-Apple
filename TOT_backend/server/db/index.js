@@ -29,11 +29,44 @@ function getDb() {
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
     ensureChatTables(_db);
+    migrateChatMessagesAgentSupport(_db);
+    migrateChatMessagesIdempotency(_db);
     ensureChatFeedbackTable(_db);
+    ensureUserMemoriesTable(_db);
     migrateDashboardInsightCounts(_db);
     migrateDashboardInsightModuleTypes(_db);
   }
   return _db;
+}
+
+/** 旧库补 `chat_messages.client_message_id` 列。 */
+function migrateChatMessagesIdempotency(database) {
+  const names = new Set(
+    database.prepare('PRAGMA table_info(chat_messages)').all().map((c) => c.name)
+  );
+  if (!names.has('client_message_id')) {
+    database.exec('ALTER TABLE chat_messages ADD COLUMN client_message_id TEXT');
+    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_client_msg_id ON chat_messages(client_message_id)');
+  }
+}
+
+/** 确保 `user_memories` 表存在。 */
+function ensureUserMemoriesTable(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS user_memories (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      memory_hash TEXT NOT NULL,
+      memory_type TEXT DEFAULT 'bias',
+      content TEXT NOT NULL,
+      confidence_score REAL DEFAULT 0.5,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      UNIQUE(user_id, memory_hash)
+    )
+  `);
+  database.exec('CREATE INDEX IF NOT EXISTS idx_um_user_id ON user_memories(user_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_um_hash    ON user_memories(memory_hash)');
 }
 
 /** 旧库补 `dashboard_insights.up_count` / `down_count` 列（与当前 schema 一致）。 */
@@ -61,7 +94,7 @@ function migrateDashboardInsightModuleTypes(database) {
     .get();
   const ddl = (row && row.sql) || '';
   const isNewEnum = ddl.includes(
-    "CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts'))"
+    "CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts', 'global_agent'))"
   );
   if (isNewEnum) return;
 
@@ -72,7 +105,7 @@ function migrateDashboardInsightModuleTypes(database) {
       CREATE TABLE dashboard_insights (
         id                  TEXT PRIMARY KEY,
         module_type         TEXT NOT NULL
-                              CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts')),
+                              CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts', 'global_agent')),
         task_id             TEXT REFERENCES tasks(id),
         filter_rtm          TEXT,
         filter_format       TEXT,
@@ -283,19 +316,96 @@ function ensureChatTables(database) {
     CREATE TABLE IF NOT EXISTS chat_messages (
       id          TEXT PRIMARY KEY,
       session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
-      role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
       content     TEXT NOT NULL,
       intent_type TEXT,
+      tool_calls  TEXT,
+      tool_call_id TEXT,
+      client_message_id TEXT UNIQUE,
       created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     )
   `);
   database.exec(
     'CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id)'
     );
-    }
+}
 
-    /** 创建 chat_message_feedback 表 */
-    function ensureChatFeedbackTable(database) {
+/**
+ * Executive Chat Agent：chatService 会写入 tool_calls / tool_call_id，且 role 可能为 tool。
+ * 旧库仅有 user|assistant 且无上述列时，会导致保存消息 SQL 失败 → 前端 500。
+ */
+function migrateChatMessagesAgentSupport(database) {
+  const exists = database
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'")
+    .get();
+  if (!exists) return;
+
+  const cols = database.prepare('PRAGMA table_info(chat_messages)').all();
+  const colNames = new Set(cols.map((c) => c.name));
+  const ddlRow = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_messages'")
+    .get();
+  const ddl = (ddlRow && ddlRow.sql) || '';
+
+  const hasToolInCheck = ddl.includes("'tool'");
+  const hasToolCallsCol = colNames.has('tool_calls');
+  const hasToolCallIdCol = colNames.has('tool_call_id');
+
+  if (hasToolInCheck && hasToolCallsCol && hasToolCallIdCol) return;
+
+  if (hasToolInCheck) {
+    if (!hasToolCallsCol) database.exec('ALTER TABLE chat_messages ADD COLUMN tool_calls TEXT');
+    if (!hasToolCallIdCol) database.exec('ALTER TABLE chat_messages ADD COLUMN tool_call_id TEXT');
+    return;
+  }
+
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN');
+  try {
+    database.exec(`
+      CREATE TABLE chat_messages_migrated (
+        id           TEXT PRIMARY KEY,
+        session_id   TEXT NOT NULL REFERENCES chat_sessions(id),
+        role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+        content      TEXT NOT NULL,
+        intent_type  TEXT,
+        tool_calls   TEXT,
+        tool_call_id TEXT,
+        client_message_id TEXT UNIQUE,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+      )
+    `);
+
+    const selIntent = colNames.has('intent_type') ? 'intent_type' : 'NULL';
+    const selTc = colNames.has('tool_calls') ? 'tool_calls' : 'NULL';
+    const selTid = colNames.has('tool_call_id') ? 'tool_call_id' : 'NULL';
+    const selCmid = colNames.has('client_message_id') ? 'client_message_id' : 'NULL';
+
+    database.exec(`
+      INSERT INTO chat_messages_migrated (id, session_id, role, content, intent_type, tool_calls, tool_call_id, client_message_id, created_at)
+      SELECT id, session_id, role, content, ${selIntent}, ${selTc}, ${selTid}, ${selCmid}, created_at
+      FROM chat_messages
+    `);
+
+    database.exec('DROP TABLE chat_messages');
+    database.exec('ALTER TABLE chat_messages_migrated RENAME TO chat_messages');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_cm_client_msg_id ON chat_messages(client_message_id)');
+    database.exec('COMMIT');
+  } catch (err) {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/** 创建 chat_message_feedback 表 */
+function ensureChatFeedbackTable(database) {
     database.exec(`
     CREATE TABLE IF NOT EXISTS chat_message_feedback (
       id            TEXT PRIMARY KEY,

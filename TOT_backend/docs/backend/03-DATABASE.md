@@ -311,7 +311,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 ```
 
-**迁移说明：** `server/db/index.js` 的 `ensureChatTables` 自动建表（新库由 `schema.sql` 建）。
+**迁移说明：** `server/db/index.js` 的 `ensureChatTables` 自动建表（新库由 `schema.sql` 建）；启动时还会执行 `migrateChatMessagesAgentSupport`，为旧库补齐 `tool_calls` / `tool_call_id` 并扩展 `role` 含 `tool`。
 
 **会话态缓存说明（Phase 3）：** `chatSessionStateService` 使用 `memory_then_redis` 策略缓存查询结果（TTL=30 分钟、容量=20、LRU），用于减少同会话重复查库。该能力当前为内存态，不新增数据库表结构。
 
@@ -323,17 +323,19 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 ```sql
 CREATE TABLE IF NOT EXISTS chat_messages (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
-  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-  content     TEXT NOT NULL,
-  intent_type TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL REFERENCES chat_sessions(id),
+  role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+  content      TEXT NOT NULL,
+  intent_type  TEXT,
+  tool_calls   TEXT,
+  tool_call_id TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 ```
 
-**字段说明：** `role='user'` 时 content 为原始提问文本；`role='assistant'` 时 content 为 JSON 序列化的 `ReplyContent` 对象。`intent_type` 仅 assistant 行填写。
+**字段说明：** `role='user'` 时 content 为原始提问文本；`role='assistant'` 时 content 为 Markdown 或（旧版）JSON 序列化的 `ReplyContent`；`role='tool'` 时为工具回传 JSON。`intent_type` / `tool_calls` 通常仅 assistant 行填写；`tool_call_id` 用于 tool 行与 FC 链路对齐。
 
 ---
 

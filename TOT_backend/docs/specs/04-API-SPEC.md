@@ -2,7 +2,8 @@
 
 ### v1.5.3（2026-04-21）
 
-- **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及起步异常 (startDelay) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
+- **看板智能 Agent 诊断**：新增 `GET /dashboard/agent/diagnose` 接口，支持对看板当前活跃（`dispatched`）的任务进行全局大模型自动分析。返回红/橙/绿三个紧急程度分布（全局唯一红色高优），为每个任务生成一句话诊断建议及对应的聚焦下钻模块（如漏斗、预警详情、时区等），并在返回剩余所有任务的总结文案。此分析结果自动按 `global_agent` 类型持久化至 `dashboard_insights` 表内。
+- **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及时间进度过半 (P2) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
 - **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
 - **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
@@ -340,10 +341,10 @@
 >     lifestyle: number, // 仅针对 Monobrand Lifestyle：处于门店最后 N 位（如 3）
 >     mono: number       // 仅针对 Monobrand Mono：处于门店最后 N 位（如 1）
 >   },
->   startDelay: number,    // 任务期限已度过 N%（如 50），个人进度仍为 0%
->   deadlineCrisis: {      // 临期危机预警
+>   deadlineCrisis: {      // 危机预警
 >     p0: number,          // P0级预警：距离 Deadline 不足 N 小时（默认 24）且未完成
->     p1: number           // P1级预警：距离 Deadline 不足 N 小时（默认 48）且未完成
+>     p1: number,          // P1级预警：距离 Deadline 不足 N 小时（默认 48）且未完成
+>     p2: number           // P2级预警：任务期限已度过 N%（如 50）且未完成
 >   }
 > }
 > ```
@@ -371,8 +372,7 @@
     "storeScope": "all",         // "all" 或门店 ID 数组，可选（默认 "all"）
     "autoNudgeRules": {          // 自动预警规则，可选
       "progressLag": { "lifestyle": 3, "mono": 1 },
-      "startDelay": 50,
-      "deadlineCrisis": { "p0": 24, "p1": 48 }
+      "deadlineCrisis": { "p0": 24, "p1": 48, "p2": 50 }
     },
     "subTasksConfig": {          // 任务合集各平台的独立配置，可选
       "MyPAL": "独立描述1...",
@@ -457,7 +457,7 @@
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
     "subTasksConfig": { "MyPAL": "独立描述1...", "SmartSell": "独立描述2..." },
-    "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "startDelay": 50, "deadlineCrisis": { "p0": 24, "p1": 48 } },
+    "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "deadlineCrisis": { "p0": 24, "p1": 48, "p2": 50 } },
     "ddlAt": "2026-05-01T00:00:00Z"
   }
   ```
@@ -714,7 +714,7 @@
     "success": true,
     "nudgedCount": 5,
     "queued": 5,
-    "evaluatedRules": ["progressLag", "startDelay", "deadlineCrisis"],
+    "evaluatedRules": ["progressLag", "deadlineCrisis"],
     "async": true
   },
   "requestId": "req-123..."
@@ -1256,7 +1256,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
           "severity": "string",    // notification_events.severity（yellow/orange/red），非催办事件时为 null
           "content": "string",     // notification_events.content；催办类为展示文案，异步写入完成后非 null；其它事件多为 null
-          "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, startDelay），非预警时为 null
+          "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, deadlineCrisisP2），非预警时为 null
           // isActive 计算规则（不存储于 DB）：
           //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
           //     → ta.status != 'completed'（任务未完成时为 true，完成后为 false）
@@ -1541,7 +1541,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "nudgeConversionRate": 50,    // 催办转化率：被催办后转化为在学或完成的比例
       
       // 预警数据（与 §5.5 下钻 warningRate 同规则：按 assignment 命中规则计数 ÷ totalAssignments×100）
-      "startDelayRate": 5.5,        // 时间进度≥startDelay 阈值且 progress=0 且未完成的 assignment 数 / 总人数
+      "crisisP2Rate": 5.5,          // 任务时间进度≥P2 阈值且未完成的 assignment 数 / 总人数
       "crisisP1Rate": 4.0,          // 任务处于 P1 临期带时，未完成 assignment 数 / 总人数
       "crisisP0Rate": 2.1,          // 任务处于 P0 临期带时，未完成 assignment 数 / 总人数
 
@@ -1550,8 +1550,9 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "overdueCount": 10,
       "updatedAt": "string",
       "warningCount": {
-        "p1": 5, // 与 auto_nudge_rules.deadlineCrisis 一致：p1 档（默认距 ddl 不足 48h 等）
-        "p0": 3  // 同上 p0 档（默认不足 24h）；未配置 deadlineCrisis 的任务不计入
+        "p2": 8, // 与 auto_nudge_rules.deadlineCrisis 一致：p2 档（时间进度 >= p2 阈值且未完成）
+        "p1": 5, // 与 auto_nudge_rules.deadlineCrisis 一致：p1 档（默认距 ddl 不足 48h 且未完成）
+        "p0": 3  // 同上 p0 档（默认不足 24h 且未完成）；未配置 deadlineCrisis 的任务不计入
       }
     },
     "requestId": "string"
@@ -1747,7 +1748,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
   | taskId | string | 否 | 任务ID，为空则汇总所有已下发任务 |
-  | warningLevel | string | 否 | 预警级别：`p1` / `p0`（临期，未传则两者混合）；`startDelay`（起步异常，规则与 `evaluateAndTriggerAutoNudges` 的 startDelay 一致：任务时间进度占比 ≥ `tasks.auto_nudge_rules.startDelay` 且该店存在未完成且 `progress=0` 的 assignment；**不依赖**是否已写入 `notification_events`） |
+  | warningLevel | string | 否 | 预警级别：`p2` / `p1` / `p0`。`p2` (原 startDelay)：任务时间进度占比 ≥ `p2` 阈值，且存在未完成的 assignment；`p1/p0` 临期；不传则三者混合 |
   | level | string | 否 | 聚合维度：`store`（默认，门店）、`rtm`（渠道）、`format`（业态）、`dealer`（经销商） |
   | pageNum | int | 是 | 页码，默认1 |
   | pageSize | int | 是 | 页大小，默认20 |
@@ -1771,8 +1772,8 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "targetType": "string",  // 聚合维度类型 (store/rtm/format/dealer)
           "storeId": "string",      // 兼容字段：同 targetId
           "storeName": "string",    // 兼容字段：同 targetName
-          "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
-          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0(red)/P1(orange)=未完成人数/总人数×100（且任务已落在对应临期带）
+          "warningLevel": "p1",     // p2 / p1 / p0
+          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：P2(yellow)=时间进度过半但未完成人数/总人数×100；临期 P0(red)/P1(orange)=未完成人数/总人数×100（且任务已落在对应临期带）
           "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
@@ -1792,10 +1793,10 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：**预警无独立存储表**。**临期（p0/p1）**：对 `task_assignments` 按门店+任务聚合，分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致（阈值默认 48h/24h，已过期不计入临期档）；未配置 `deadlineCrisis` 的任务不出现在临期列表。**起步异常（`warningLevel=startDelay`）**：按店+任务聚合后筛选——任务需配置 `startDelay` 阈值；当前时间相对 `created_at`～`ddl_at` 的已过时间占比 ≥ 该阈值，且该店至少有一名未完成学员 `progress=0`。**`warningRate`** 与 §5.1 概览中对应 KPI **同一计算方式**，仅分子分母缩至该门店。MVP 阶段 `aiSuggestion` 为静态模板文案。
+- **接口说明**：**预警无独立存储表**。按门店+任务聚合，分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致（P0阈值默认 24h，P1阈值默认 48h，P2时间占比默认 50%，已过期不计入任何临期/预警档）；未配置 `deadlineCrisis` 的任务不出现在预警列表。**`warningRate`** 与 §5.1 概览中对应 KPI **同一计算方式**，仅分子分母缩至该门店。MVP 阶段 `aiSuggestion` 为静态模板文案。
 - **权限要求**：仅总部角色（central）
 - **异常场景**：
-  - 400：warningLevel非法（非 p1/p0/startDelay）
+  - 400：warningLevel非法（非 p2/p1/p0）
   - 403：非总部角色
 
 ### 5.6 门店任务明细（下钻）**P0**
@@ -1954,6 +1955,52 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **权限要求**：`central` / `executive` / `admin`
 - **异常场景**：400（`vote` 非法 `INSIGHT_003`）；404（洞察不存在 `INSIGHT_404`）
 
+
+### 5.8 看板智能 Agent 诊断 **P0**
+
+- **接口名称**：获取看板 Agent 智能诊断
+- **接口路径**：`/dashboard/agent/diagnose`
+- **请求方法**：GET
+- **权限要求**：`central`, `executive`, `admin`
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | refresh | boolean/string | 否 | 传 `true` 或 `1` 强制刷新，否则返回库里最新的一条诊断结果（如无则生成） |
+- **业务规则**：
+  - 后端设有定时任务（每小时执行一次）自动在后台请求 AI 获取结果并存入数据库，并通过 WebSocket 广播 `dashboard_agent_updated` 给前端，提醒前端可以重新拉取。
+  - Agent 根据系统当前处于 `dispatched` 状态的任务进度，评判各任务的紧急程度：`red`（最多1个）、`orange`、`green`。
+  - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块)。
+  - 对总体其余任务情况提供一句业务总结 `overallSummary`。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "redCount": 1,
+      "orangeCount": 3,
+      "greenCount": 1,
+      "topTasks": [
+        {
+          "taskId": "TASK_A",
+          "title": "iPhone 17 新品培训",
+          "severity": "red",
+          "insight": "任务即将到期且进度严重滞后，需重点催办",
+          "focusModule": "warning_details",
+          "progress": 25.4
+        }
+      ],
+      "overallSummary": "其余任务推进正常，无需特别干预。",
+      "allTasks": [
+        // 包含所有活跃任务的详细诊断列表
+      ],
+      "generatedAt": "2026-04-21 16:30:00"
+    },
+    "requestId": "string"
+  }
+  ```
+
+
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
 > **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前支持 `intent_routing` 与 `function_calling` 两种模式（通过 `CHAT_AGENT_MODE` 切换）。会话态采用 `memory_then_redis` 设计：先内存缓存（TTL=30m，容量=20，LRU），再预留 Redis 扩展。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
@@ -2025,15 +2072,23 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```json
   {
     "messageId": "string", // 消息唯一ID（前端生成）
-    "content": "string", // 自然语言问题，必填
+    "content": "string",   // 自然语言问题，或在消歧场景下作为点击文本展示
     "executiveId": "string", // 发送人ID
     "contextId": "string", // 上下文ID，必填（创建会话返回）
-    "stream": false
+    "stream": false,
+    "clarificationResponse": {  // [可选] v3.0 Phase 1.2 消歧恢复响应
+      "toolCallId": "string",  // 关联的上一次工具调用 ID
+      "result": {              // 用户选择的结构化数据（如具体的 storeId）
+        "storeId": "string"
+      }
+    }
   }
   ```
   **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
-  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end" }`。
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify", "reasoningLevel": "summary" }`。
+    - `reasoningLevel`：仅当 `phase="reasoning"` 时出现，目前固定为 `"summary"` 表示已脱敏摘要。
     - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
+    - `clarify` 时 `text` 为消歧请求 JSON（含备选门店列表），前端应展示选择 UI。
   - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
   - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
 
@@ -2060,6 +2115,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
+  - 409：`CHAT_009`，重复的 messageId（幂等拦截）
   - 503：AI Agent服务未就绪（响应超时）
 
 ### 6.2.1 删除Executive Chat会话**P1**
@@ -3316,6 +3372,28 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **前端建议处理：**
 - 管理端：监听到该事件后，可以防抖（debounce）几秒钟后静默重新调用 `GET /api/v1/dashboard/overview` 或 `heatmap`、`trend` 等数据接口，从而实现看板数据的**自动刷新**。
+
+---
+
+### 15.5 看板 Agent 分析更新通知 `dashboard_agent_updated` **P0**
+
+**触发时机：** 当定时任务或人为手动强制刷新完成后，AI 生成的最新的看版分析存入数据库时触发。
+
+**接收方：**
+- 当前在线的总部 (`central`)、行政 (`executive`)、管理员 (`admin`) 角色。
+
+**Payload：**
+```json
+{
+  "event": "dashboard_agent_updated",
+  "data": {
+    "generatedAt": "2026-04-22 12:00:00"
+  }
+}
+```
+
+**前端建议处理：**
+- 管理端：监听到该事件后，说明看板智能 Agent 有新的诊断报告，可以直接拉取 `GET /api/v1/dashboard/agent/diagnose`（不要传 refresh）以更新顶部提示卡片。
 
 ---
 

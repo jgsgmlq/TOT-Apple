@@ -12,8 +12,8 @@ const systemUserId = 1; // 系统执行账号（写入 initiator_id）
 const AUTO_NUDGE_COPY = {
   progressLag:
     '叮~最近辛苦啦！你的培训进度不小心被小伙伴超车咯，抽个空隙冲刺通关，轻松追平不掉队！💪✨',
-  startDelay:
-    '任务时间悄悄过半啦，你的学习进度条还在沉睡，趁现在抽空唤醒它，轻松起步无压力哦！🌱✨',
+  deadlineCrisisP2:
+    '任务时间悄悄过半啦，你还没有完成哦，趁现在抽空唤醒它，轻松搞定无压力哦！🌱✨',
   deadlineCrisisP1:
     '距离课程截止不到48小时啦！知道你最近辛苦，快趁休息间隙一鼓作气收个尾，轻松拿下不留遗憾！☕💪',
   deadlineCrisisP0:
@@ -92,14 +92,8 @@ async function evaluateAndTriggerAutoNudges(taskId) {
     }
   }
 
-  if (rules.startDelay && passedPercent >= rules.startDelay) {
-    for (const a of assignments) {
-      if (a.progress === 0) {
-        triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'startDelay', threshold: rules.startDelay });
-      }
-    }
-  }
-const crisisBand = classifyDeadlineCrisisBand(rules, hoursLeft);
+
+const crisisBand = classifyDeadlineCrisisBand(rules, hoursLeft, passedPercent);
 if (crisisBand === 'p0') {
   const h = getDeadlineCrisisHours(rules);
   for (const a of assignments) {
@@ -109,6 +103,11 @@ if (crisisBand === 'p0') {
   const h = getDeadlineCrisisHours(rules);
   for (const a of assignments) {
     triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'orange', ruleType: 'deadlineCrisisP1', threshold: h.p1Hours });
+  }
+} else if (crisisBand === 'p2') {
+  const h = getDeadlineCrisisHours(rules);
+  for (const a of assignments) {
+    triggeredUsers.push({ userId: a.user_id, storeId: a.store_id, assignmentId: a.id, severity: 'yellow', ruleType: 'deadlineCrisisP2', threshold: h.p2Percent });
   }
 }
 

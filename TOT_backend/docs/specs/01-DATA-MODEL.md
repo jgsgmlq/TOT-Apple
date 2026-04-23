@@ -1,6 +1,6 @@
 # 数据模型规格
 
-**版本:** 2.9.1 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-13
+**版本:** 3.0.0 | **PRD §4.6, §6, §7** | **更新日期:** 2026-04-21
 
 ---
 
@@ -789,26 +789,64 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 ```sql
 CREATE TABLE IF NOT EXISTS chat_messages (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT NOT NULL REFERENCES chat_sessions(id),
-  role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-  content     TEXT NOT NULL,
-  intent_type TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL REFERENCES chat_sessions(id),
+  role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+  content      TEXT NOT NULL,
+  intent_type  TEXT,
+  tool_calls   TEXT,        -- JSON 字符串：助手发出的工具调用请求
+  tool_call_id TEXT,        -- 工具结果关联 ID（用于 tool 角色消息）
+  client_message_id TEXT UNIQUE, -- 幂等键，关联前端生成的 messageId
+  created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_cm_client_msg_id ON chat_messages(client_message_id);
 ```
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | id | Y | 消息 ID（nanoid） |
 | session_id | Y | 所属会话（`chat_sessions.id`） |
-| role | Y | 消息角色：`user / assistant` |
-| content | Y | 消息内容；`user` 为原始文本，`assistant` 为序列化回复 JSON |
+| role | Y | 消息角色：`user / assistant / tool` |
+| content | Y | 消息内容；`user` 为原始文本，`assistant` 为序列化回复 JSON，`tool` 为工具返回的 JSON 字符串 |
 | intent_type | N | 意图类型（仅 assistant 消息通常会写入） |
+| tool_calls | N | 仅 assistant 角色：存储大模型生成的 `tool_calls` 结构（JSON） |
+| tool_call_id | N | 仅 tool 角色：对应上一次调用产生的 `tool_call_id` |
+| client_message_id | N | 幂等键，防止重复提交或消歧卡片重复点击 |
 | created_at | Y | 消息创建时间 |
 
-### 10.3 `chat_message_feedback`（消息反馈表）
+### 10.3 `user_memories`（全局记忆表）
+
+**业务含义：** 存储跨会话的用户偏好与业务定义记忆。
+
+```sql
+CREATE TABLE IF NOT EXISTS user_memories (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  memory_hash TEXT NOT NULL, -- 对 user_id + content 的 hash，用于稳健 Upsert
+  memory_type TEXT DEFAULT 'bias', -- 'bias' (偏好), 'fact' (事实), 'scope' (定义)
+  content TEXT NOT NULL,
+  confidence_score REAL DEFAULT 0.5,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  UNIQUE(user_id, memory_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_um_user_id ON user_memories(user_id);
+CREATE INDEX IF NOT EXISTS idx_um_hash    ON user_memories(memory_hash);
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| id | Y | 记忆 ID（nanoid） |
+| user_id | Y | 所属用户（`users.id`） |
+| memory_hash | Y | 唯一 Hash，用于语义防重 |
+| memory_type | Y | 记忆类型：`bias / fact / scope` |
+| content | Y | 记忆内容摘要 |
+| confidence_score | Y | AI 提取置信度 (0.0~1.0) |
+| created_at | Y | 创建时间 |
+| updated_at | Y | 更新时间 |
+
+### 10.4 `chat_message_feedback`（消息反馈表）
 
 ```sql
 CREATE TABLE IF NOT EXISTS chat_message_feedback (
@@ -837,6 +875,7 @@ CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);
 
 - `migrateUsersExecutiveScope`：旧库补齐 `users.executive_regions`、`users.executive_rtm` 两列（Executive 账号辖区绑定）。
 - `ensureChatTables`：旧库兜底创建 `chat_sessions`、`chat_messages` 与 `idx_cm_session_id`。
+- `migrateChatMessagesAgentSupport`：旧库补齐 `chat_messages.tool_calls` / `tool_call_id`，并将 `role` 约束扩展为含 `tool`（与 `chatService` 落库一致；缺失时保存助手消息会 500）。
 - `ensureChatFeedbackTable`：旧库兜底创建 `chat_message_feedback` 与相关索引。
 
 ### 10.5 关系与约束

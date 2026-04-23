@@ -458,12 +458,14 @@
     formatReplyContentText,
     submitChatFeedback,
     regenerateChatMessage,
+    streamRegenerateChatMessage,
     type ChatHistoryItem,
     type SendMessageResult,
     type ReplyContent,
   } from '@/api/chat';
   import {
     runExecStyleSseChat,
+    runExecRegenerateSseChat,
     isStreamAbortError,
     speechTextForExecutiveTts,
     speechTextForSendResult,
@@ -1066,34 +1068,59 @@
 
     msg.isRegenerating = true;
     isSending.value = true;
+    
+    // Clear old content for stream replacement
+    messages.value[index] = {
+      ...msg,
+      content: '',
+      thinking: '',
+      replyContent: null,
+      userFeedback: null,
+      done: false,
+    };
+
+    abortController.value = new AbortController();
 
     try {
-      const result = await regenerateChatMessage(sessionId.value, msg.id).send();
-      const isMarkdown = !result.replyContent && !!result.markdownContent;
+      const result = await runExecRegenerateSseChat(
+        streamRegenerateChatMessage,
+        sessionId.value,
+        msg.id,
+        (payload) => {
+          const currentMsg = messages.value[index];
+          if (payload.type === 'streaming') {
+            currentMsg.content = payload.partialReply || '';
+            currentMsg.thinking = payload.thinking;
+          } else if (payload.type === 'done') {
+            const data = payload.result!;
+            const isMarkdown = !data.replyContent && !!data.markdownContent;
+            
+            currentMsg.id = data.messageId;
+            currentMsg.content = isMarkdown ? data.markdownContent! : formatReplyContentText(data.replyContent);
+            currentMsg.thinking = payload.thinking || undefined;
+            currentMsg.done = true;
+            currentMsg.replyContent = data.replyContent ?? null;
+          }
+          scrollToBottom();
+        },
+        { signal: abortController.value.signal }
+      );
 
-      // Replace the old message with the new one
-      messages.value[index] = {
-        id: result.messageId,
-        role: 'ai',
-        // FC 模式用 markdownContent；intent_routing 兜底用 formatReplyContentText
-        content: isMarkdown
-          ? result.markdownContent!
-          : formatReplyContentText(result.replyContent),
-        done: true,
-        replyContent: result.replyContent ?? null,
-        userFeedback: null,
-      };
-      scrollToBottom();
       if (voiceEnabled.value) {
         void speakReplyContent(() => userStore.getToken, result).catch(() => undefined);
       }
     } catch (error) {
-      message.error('重新生成失败，请重试');
+      if (!isStreamAbortError(error)) {
+        message.error('重新生成失败，请重试');
+        messages.value[index].content = '*(请求失败)*';
+        messages.value[index].done = true;
+      }
     } finally {
       if (messages.value[index]) {
         messages.value[index].isRegenerating = false;
       }
       isSending.value = false;
+      abortController.value = null;
     }
   };
 </script>
