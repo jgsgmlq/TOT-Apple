@@ -24,6 +24,7 @@ const notificationsRoutes = require('./routes/notifications');
 const nudgeRoutes         = require('./routes/nudge');
 const dashboardRoutes       = require('./routes/dashboard');
 const dashboardInsightRoutes = require('./routes/dashboardInsights');
+const dashboardAgentRoutes   = require('./routes/dashboardAgent');
 const mypalRoutes         = require('./routes/mypal');
 const chatRoutes          = require('./routes/chat');
 const asrRoutes           = require('./routes/asr');
@@ -74,6 +75,7 @@ app.use('/api/v1/events',      notificationsRoutes);
 app.use('/api/v1/nudges',      nudgeRoutes);
 app.use('/api/v1/dashboard',  dashboardRoutes);
 app.use('/api/v1/dashboard',  dashboardInsightRoutes);
+app.use('/api/v1/dashboard',  dashboardAgentRoutes);
 app.use('/api/v1/mypal',      mypalRoutes);
 app.use('/api/v1/chat',       chatRoutes);
 app.use('/api/v1/asr',        asrRoutes);
@@ -110,6 +112,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
+const { startDashboardAgentScheduler } = require('./jobs/dashboardAgentScheduler');
 
 function firstLanIPv4() {
   const nets = os.networkInterfaces();
@@ -141,6 +144,7 @@ const PORT = Number(process.env.PORT) || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   printStartupBanner(PORT);
   startAutoNudgeScheduler();
+  startDashboardAgentScheduler();
 });
 
 module.exports = { app, server };

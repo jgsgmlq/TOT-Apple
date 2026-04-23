@@ -2,6 +2,7 @@
 
 ### v1.5.3（2026-04-21）
 
+- **看板智能 Agent 诊断**：新增 `GET /dashboard/agent/diagnose` 接口，支持对看板当前活跃（`dispatched`）的任务进行全局大模型自动分析。返回红/橙/绿三个紧急程度分布（全局唯一红色高优），为每个任务生成一句话诊断建议及对应的聚焦下钻模块（如漏斗、预警详情、时区等），并在返回剩余所有任务的总结文案。此分析结果自动按 `global_agent` 类型持久化至 `dashboard_insights` 表内。
 - **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及起步异常 (startDelay) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
 - **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
 - **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
@@ -1954,6 +1955,52 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **权限要求**：`central` / `executive` / `admin`
 - **异常场景**：400（`vote` 非法 `INSIGHT_003`）；404（洞察不存在 `INSIGHT_404`）
 
+
+### 5.8 看板智能 Agent 诊断 **P0**
+
+- **接口名称**：获取看板 Agent 智能诊断
+- **接口路径**：`/dashboard/agent/diagnose`
+- **请求方法**：GET
+- **权限要求**：`central`, `executive`, `admin`
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | refresh | boolean/string | 否 | 传 `true` 或 `1` 强制刷新，否则返回库里最新的一条诊断结果（如无则生成） |
+- **业务规则**：
+  - 后端设有定时任务（每小时执行一次）自动在后台请求 AI 获取结果并存入数据库，并通过 WebSocket 广播 `dashboard_agent_updated` 给前端，提醒前端可以重新拉取。
+  - Agent 根据系统当前处于 `dispatched` 状态的任务进度，评判各任务的紧急程度：`red`（最多1个）、`orange`、`green`。
+  - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块)。
+  - 对总体其余任务情况提供一句业务总结 `overallSummary`。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "redCount": 1,
+      "orangeCount": 3,
+      "greenCount": 1,
+      "topTasks": [
+        {
+          "taskId": "TASK_A",
+          "title": "iPhone 17 新品培训",
+          "severity": "red",
+          "insight": "任务即将到期且进度严重滞后，需重点催办",
+          "focusModule": "warning_details",
+          "progress": 25.4
+        }
+      ],
+      "overallSummary": "其余任务推进正常，无需特别干预。",
+      "allTasks": [
+        // 包含所有活跃任务的详细诊断列表
+      ],
+      "generatedAt": "2026-04-21 16:30:00"
+    },
+    "requestId": "string"
+  }
+  ```
+
+
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
 > **与实现对齐**：`/api/v1/chat/*` 已挂载于 `server/app.js`。当前支持 `intent_routing` 与 `function_calling` 两种模式（通过 `CHAT_AGENT_MODE` 切换）。会话态采用 `memory_then_redis` 设计：先内存缓存（TTL=30m，容量=20，LRU），再预留 Redis 扩展。`/api/v1/ai/*` 与 `/api/v1/permissions/check` 仍为 P1（未挂载）。
@@ -3316,6 +3363,28 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **前端建议处理：**
 - 管理端：监听到该事件后，可以防抖（debounce）几秒钟后静默重新调用 `GET /api/v1/dashboard/overview` 或 `heatmap`、`trend` 等数据接口，从而实现看板数据的**自动刷新**。
+
+---
+
+### 15.5 看板 Agent 分析更新通知 `dashboard_agent_updated` **P0**
+
+**触发时机：** 当定时任务或人为手动强制刷新完成后，AI 生成的最新的看版分析存入数据库时触发。
+
+**接收方：**
+- 当前在线的总部 (`central`)、行政 (`executive`)、管理员 (`admin`) 角色。
+
+**Payload：**
+```json
+{
+  "event": "dashboard_agent_updated",
+  "data": {
+    "generatedAt": "2026-04-22 12:00:00"
+  }
+}
+```
+
+**前端建议处理：**
+- 管理端：监听到该事件后，说明看板智能 Agent 有新的诊断报告，可以直接拉取 `GET /api/v1/dashboard/agent/diagnose`（不要传 refresh）以更新顶部提示卡片。
 
 ---
 
