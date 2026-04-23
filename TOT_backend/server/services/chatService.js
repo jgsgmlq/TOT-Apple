@@ -10,6 +10,7 @@ const { AGENT_MODE } = chatAgentRunner;
 const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
+const { createAgentTrace, endSpan, maskPII, preview } = require('../utils/tracer');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(user) {
@@ -128,63 +129,116 @@ function createSession(userId) {
   return { sessionId, contextId: sessionId, exampleQuestions: buildExampleQuestions() };
 }
 
-async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {}) {
+async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {}, trace = null) {
   const { clarificationResponse, messageId } = reqBody;
   const now = formatNowSqliteLocal();
+  const persistSpan = trace && typeof trace.span === 'function'
+    ? trace.span({
+        name: 'Persist_User_Message',
+        input: { sessionId, hasClarification: !!clarificationResponse, hasMessageId: !!messageId },
+      })
+    : null;
+  const t0 = Date.now();
 
-  // 1. 幂等检查
-  if (messageId) {
-    const existing = db.get('SELECT id FROM chat_messages WHERE client_message_id = ?', [messageId]);
-    if (existing) {
-      const err = new Error('Duplicate messageId');
-      err.status = 409;
-      err.code = 'CHAT_009';
-      throw err;
+  try {
+    // 1. 幂等检查
+    if (messageId) {
+      const existing = db.get('SELECT id FROM chat_messages WHERE client_message_id = ?', [messageId]);
+      if (existing) {
+        const err = new Error('Duplicate messageId');
+        err.status = 409;
+        err.code = 'CHAT_009';
+        endSpan(persistSpan, {
+          output: 'duplicate',
+          level: 'WARNING',
+          metadata: { status: 'duplicate', durationMs: Date.now() - t0 },
+        });
+        throw err;
+      }
     }
-  }
 
-  if (clarificationResponse && clarificationResponse.toolCallId) {
-    // Phase 1.2: 如果是针对歧义的选择，插入一条 tool 角色消息
-    // 注意：为了保持 FC 序列连贯，我们先插入 Tool 消息，再插入用于前端展示的 User 消息
-    const toolMsgId = nanoid();
-    db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [toolMsgId, sessionId, 'tool', JSON.stringify(clarificationResponse.result), clarificationResponse.toolCallId, now]
-    );
-    
-    // 此时 userMessage 是用户的点击文本（用于展示），关联 client_message_id
+    if (clarificationResponse && clarificationResponse.toolCallId) {
+      // Phase 1.2: 先插入 tool 消息，再插入用于展示的 user 消息，保持 FC 序列连贯
+      const toolMsgId = nanoid();
+      db.run(
+        'INSERT INTO chat_messages (id, session_id, role, content, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [toolMsgId, sessionId, 'tool', JSON.stringify(clarificationResponse.result), clarificationResponse.toolCallId, now]
+      );
+
+      const userMsgId = nanoid();
+      db.run(
+        'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
+      );
+      endSpan(persistSpan, {
+        output: 'clarify_turn',
+        metadata: { status: 'ok', wroteRows: 2, kind: 'clarification', durationMs: Date.now() - t0 },
+      });
+      return true;
+    }
+
+    // 普通消息
     const userMsgId = nanoid();
     db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', 
+      'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
     );
-    return true; 
+    endSpan(persistSpan, {
+      output: 'ok',
+      metadata: { status: 'ok', wroteRows: 1, kind: 'user', durationMs: Date.now() - t0 },
+    });
+    return false;
+  } catch (err) {
+    if (err.code !== 'CHAT_009') {
+      endSpan(persistSpan, {
+        output: null,
+        level: 'ERROR',
+        statusMessage: err.message,
+        metadata: { durationMs: Date.now() - t0 },
+      });
+    }
+    throw err;
   }
-
-  // 普通消息
-  const userMsgId = nanoid();
-  db.run(
-    'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', 
-    [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
-  );
-  return false;
 }
 
 /** 辅助：从数据库加载并格式化历史记录，传给 Agent 引擎 */
-function loadFormattedHistory(sessionId) {
-  const rows = db.all(
-    `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages 
-     WHERE session_id = ? 
-     ORDER BY created_at ASC, rowid ASC LIMIT 10`,
-    [sessionId]
-  );
-  return rows.map(r => ({
-    role: r.role,
-    content: r.role === 'assistant' ? compressAssistantContent(r.content) : r.content,
-    tool_calls: r.tool_calls ? JSON.parse(r.tool_calls) : undefined,
-    tool_call_id: r.tool_call_id || undefined,
-    client_message_id: r.client_message_id || undefined
-  }));
+function loadFormattedHistory(sessionId, trace = null) {
+  const loadSpan = trace && typeof trace.span === 'function'
+    ? trace.span({ name: 'Load_History', input: { sessionId } })
+    : null;
+  const t0 = Date.now();
+  try {
+    const rows = db.all(
+      `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages 
+       WHERE session_id = ? 
+       ORDER BY created_at ASC, rowid ASC LIMIT 10`,
+      [sessionId]
+    );
+    const formatted = rows.map((r) => ({
+      role: r.role,
+      content: r.role === 'assistant' ? compressAssistantContent(r.content) : r.content,
+      tool_calls: r.tool_calls ? JSON.parse(r.tool_calls) : undefined,
+      tool_call_id: r.tool_call_id || undefined,
+      client_message_id: r.client_message_id || undefined,
+    }));
+    endSpan(loadSpan, {
+      output: `rows=${formatted.length}`,
+      metadata: {
+        rowCount: formatted.length,
+        hasAssistant: formatted.some((m) => m.role === 'assistant'),
+        durationMs: Date.now() - t0,
+      },
+    });
+    return formatted;
+  } catch (err) {
+    endSpan(loadSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - t0 },
+    });
+    throw err;
+  }
 }
 
 // ─── sendMessage (Non-stream) ──────────────────────────────────────────────────
@@ -193,17 +247,40 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
   if (Number(session.user_id) !== Number(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
 
-  await handleIncomingMessage(sessionId, userMessage, userId, reqBody);
-
   const regionScope = {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
   };
 
-  const history = loadFormattedHistory(sessionId);
+  // 先建 trace，让 Persist_User_Message / Load_History 能挂在同一棵树下
+  const trace = createAgentTrace({
+    sessionId,
+    userId: session.user_id,
+    userMessage,
+    scopeType: regionScope.type,
+    agentMode: AGENT_MODE,
+    entryKind: 'sendMessage',
+  });
+
+  await handleIncomingMessage(sessionId, userMessage, userId, reqBody, trace);
+  const history = loadFormattedHistory(sessionId, trace);
+
   const startMs = Date.now();
-  const result = await chatAgentRunner.run(userMessage, history, regionScope, { sessionId, userId: session.user_id });
+  let result;
+  try {
+    result = await chatAgentRunner.run(userMessage, history, regionScope, {
+      sessionId,
+      userId: session.user_id,
+      trace,
+    });
+  } catch (err) {
+    trace.update({
+      output: maskPII(err.message || String(err)),
+      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
+    });
+    throw err;
+  }
   const responseTime = Date.now() - startMs;
 
   const now = formatNowSqliteLocal();
@@ -211,11 +288,48 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
   const finalContent = storageContentFromAgentResult(result);
   const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
 
-  db.run(
-    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 
-    [assistMsgId, sessionId, 'assistant', finalContent, result._intentType || null, toolCallsStr, now]
-  );
-  db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+  const persistAsstSpan = trace.span({
+    name: 'Persist_Assistant_Message',
+    input: { sessionId, assistMsgId, intentType: result._intentType || null },
+  });
+  const persistT0 = Date.now();
+  try {
+    db.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [assistMsgId, sessionId, 'assistant', finalContent, result._intentType || null, toolCallsStr, now]
+    );
+    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    endSpan(persistAsstSpan, {
+      output: 'ok',
+      metadata: {
+        contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
+        hasToolCalls: !!toolCallsStr,
+        durationMs: Date.now() - persistT0,
+      },
+    });
+  } catch (err) {
+    endSpan(persistAsstSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - persistT0 },
+    });
+    throw err;
+  }
+
+  trace.update({
+    output: maskPII(preview(finalContent)),
+    metadata: {
+      status: 'ok',
+      intentType: result._intentType || null,
+      intentResolvedBy: result._intentResolvedBy || null,
+      toolName: result._toolMeta?.toolName || null,
+      toolNames: result._toolMeta?.toolNames || null,
+      iterations: result._toolMeta?.iterations || null,
+      responseTimeMs: responseTime,
+      msgId: assistMsgId,
+    },
+  });
 
   // 异步提取记忆
   setImmediate(() => {
@@ -243,24 +357,47 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     return;
   }
 
-  await handleIncomingMessage(sessionId, userMessage, userId, req.body);
-
   const regionScope = {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
   };
 
-  const history = loadFormattedHistory(sessionId);
+  const trace = createAgentTrace({
+    sessionId,
+    userId: session.user_id,
+    userMessage,
+    scopeType: regionScope.type,
+    agentMode: AGENT_MODE,
+    entryKind: 'sendMessageStream',
+  });
+
+  await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
+  const history = loadFormattedHistory(sessionId, trace);
 
   writeSseHeaders(res);
   const send = createSseSender(res);
   const abortController = new AbortController();
-  
+
+  // §4 SSE_Stream span：覆盖整条 SSE 流存活期，metadata 聚合 delta / phase 统计。
+  const sseSpan = trace.span({
+    name: 'SSE_Stream',
+    input: { sessionId },
+  });
+  const sseT0 = Date.now();
+  let sseDeltaCount = 0;
+  let sseDeltaBytes = 0;
+  let sseReasoningCount = 0;
+  let sseToolStartCount = 0;
+  let sseClientAborted = false;
+
   // 联动客户端断开
   req.on('close', () => {
+    sseClientAborted = true;
     abortController.abort();
   });
+
+  const wrappedSend = (event, payload) => send(event, payload);
 
   const startMs = Date.now();
   let result;
@@ -269,12 +406,20 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
       sessionId,
       userId: session.user_id,
       signal: abortController.signal,
+      trace,
       streamFormatCallbacks: {
         onDelta: (text, meta) => {
-          send('delta', { 
-            text, 
-            phase: meta?.phase || 'content',
-            reasoningLevel: meta?.reasoningLevel || undefined 
+          const phase = meta?.phase || 'content';
+          if (phase === 'reasoning') sseReasoningCount += 1;
+          else if (phase === 'tool_start') sseToolStartCount += 1;
+          if (typeof text === 'string' && text) {
+            sseDeltaCount += 1;
+            sseDeltaBytes += text.length;
+          }
+          wrappedSend('delta', {
+            text,
+            phase,
+            reasoningLevel: meta?.reasoningLevel || undefined,
           });
         },
       },
@@ -282,8 +427,40 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.info('chat_stream_aborted', { sessionId });
+      endSpan(sseSpan, {
+        output: null,
+        level: 'WARNING',
+        metadata: {
+          status: 'aborted',
+          clientAborted: sseClientAborted,
+          deltaCount: sseDeltaCount,
+          deltaBytes: sseDeltaBytes,
+          reasoningCount: sseReasoningCount,
+          toolStartCount: sseToolStartCount,
+          durationMs: Date.now() - sseT0,
+        },
+      });
+      trace.update({
+        output: null,
+        metadata: { status: 'aborted', reason: 'client_abort' },
+      });
       return;
     }
+    endSpan(sseSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: {
+        status: 'error',
+        deltaCount: sseDeltaCount,
+        deltaBytes: sseDeltaBytes,
+        durationMs: Date.now() - sseT0,
+      },
+    });
+    trace.update({
+      output: maskPII(err.message || String(err)),
+      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
+    });
     send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
     res.end();
     return;
@@ -300,15 +477,66 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     toolName: result._toolMeta?.toolName, msgId: assistMsgId, stream: true,
   });
 
-  db.run(
-    'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', 
-    [assistMsgId, sessionId, 'assistant', finalContent, result._intentType, toolCallsStr, now]
-  );
-  db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+  const persistAsstSpan = trace.span({
+    name: 'Persist_Assistant_Message',
+    input: { sessionId, assistMsgId, intentType: result._intentType || null },
+  });
+  const persistT0 = Date.now();
+  try {
+    db.run(
+      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [assistMsgId, sessionId, 'assistant', finalContent, result._intentType, toolCallsStr, now]
+    );
+    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    endSpan(persistAsstSpan, {
+      output: 'ok',
+      metadata: {
+        contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
+        hasToolCalls: !!toolCallsStr,
+        durationMs: Date.now() - persistT0,
+      },
+    });
+  } catch (err) {
+    endSpan(persistAsstSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - persistT0 },
+    });
+    throw err;
+  }
+
+  trace.update({
+    output: maskPII(preview(finalContent)),
+    metadata: {
+      status: 'ok',
+      intentType: result._intentType || null,
+      intentResolvedBy: result._intentResolvedBy || null,
+      toolName: result._toolMeta?.toolName || null,
+      toolNames: result._toolMeta?.toolNames || null,
+      iterations: result._toolMeta?.iterations || null,
+      responseTimeMs: responseTime,
+      msgId: assistMsgId,
+      stream: true,
+    },
+  });
 
   // 异步提取记忆
   setImmediate(() => {
     chatMemoryService.extract(sessionId).catch(e => logger.warn('memory_extract_error', { sessionId, error: e.message }));
+  });
+
+  endSpan(sseSpan, {
+    output: 'done',
+    metadata: {
+      status: 'ok',
+      deltaCount: sseDeltaCount,
+      deltaBytes: sseDeltaBytes,
+      reasoningCount: sseReasoningCount,
+      toolStartCount: sseToolStartCount,
+      durationMs: Date.now() - sseT0,
+      msgId: assistMsgId,
+    },
   });
 
   send('done', {
@@ -409,24 +637,50 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
     return;
   }
 
-  const chronological = loadFormattedHistory(sessionId);
+  // §5.9：先建 trace，让 Load_History / SSE_Stream / Persist_Assistant_Message 都挂在同一棵树。
+  const trace = createAgentTrace({
+    sessionId,
+    userId,
+    userMessage: '<regenerate placeholder>',
+    scopeType: session.role_scope,
+    agentMode: AGENT_MODE,
+    entryKind: 'regenerateStream',
+    tags: ['regenerate'],
+  });
+
+  const chronological = loadFormattedHistory(sessionId, trace);
   if (chronological.length < 2) {
+    trace.update({
+      output: null,
+      metadata: { status: 'bad_request', reason: 'not_enough_history' },
+    });
     res.status(400).json({ code: 400, message: 'Not enough history to regenerate', errorCode: 'CHAT_008' });
     return;
   }
-  
+
   const lastTurn = chronological[chronological.length - 1];
   const prevTurn = chronological[chronological.length - 2];
   if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
+    trace.update({
+      output: null,
+      metadata: { status: 'bad_request', reason: 'unexpected_history_shape' },
+    });
     res.status(400).json({ code: 400, message: 'Expected user message before assistant message', errorCode: 'CHAT_008' });
     return;
   }
-  
+
   const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
   if (!userPrompt.trim()) {
+    trace.update({
+      output: null,
+      metadata: { status: 'bad_request', reason: 'empty_user_prompt' },
+    });
     res.status(400).json({ code: 400, message: 'User message is empty', errorCode: 'CHAT_008' });
     return;
   }
+
+  // 实际 userMessage 已可知，回填给 trace（保留原 entryKind/tags）
+  trace.update({ input: maskPII(preview(userPrompt)) });
 
   const prior = chronological.slice(0, -2);
   const history = prior
@@ -442,18 +696,19 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
   const send = createSseSender(res);
   const abortController = new AbortController();
 
+  const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, kind: 'regenerate' } });
+  const sseT0 = Date.now();
+  let sseDeltaCount = 0;
+  let sseDeltaBytes = 0;
+  let sseReasoningCount = 0;
+  let sseToolStartCount = 0;
+  let sseClientAborted = false;
+
   req.on('close', () => {
     logger.info('client_aborted_stream_regenerate', { sessionId });
+    sseClientAborted = true;
     abortController.abort();
   });
-
-  const onDelta = (chunk, meta) => {
-    send('message', {
-      type: meta?.phase === 'reasoning' ? 'reasoning' : 'content',
-      content: chunk,
-      reasoningLevel: meta?.reasoningLevel,
-    });
-  };
 
   const startMs = Date.now();
   let result;
@@ -462,12 +717,20 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       sessionId,
       userId,
       signal: abortController.signal,
+      trace,
       streamFormatCallbacks: {
         onDelta: (text, meta) => {
-          send('delta', { 
-            text, 
-            phase: meta?.phase || 'content',
-            reasoningLevel: meta?.reasoningLevel || undefined 
+          const phase = meta?.phase || 'content';
+          if (phase === 'reasoning') sseReasoningCount += 1;
+          else if (phase === 'tool_start') sseToolStartCount += 1;
+          if (typeof text === 'string' && text) {
+            sseDeltaCount += 1;
+            sseDeltaBytes += text.length;
+          }
+          send('delta', {
+            text,
+            phase,
+            reasoningLevel: meta?.reasoningLevel || undefined,
           });
         },
       },
@@ -478,18 +741,67 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
     const newAssistMsgId = nanoid();
     const finalContent = storageContentFromAgentResult(result);
 
-    db.transaction(() => {
-      db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
-      db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-      db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-      );
-      db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    const persistSpan = trace.span({
+      name: 'Persist_Assistant_Message',
+      input: { sessionId, newAssistMsgId, replacedMessageId: messageId, intentType: result._intentType ?? null },
     });
+    const persistT0 = Date.now();
+    try {
+      db.transaction(() => {
+        db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
+        db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+        db.run(
+          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+        );
+        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+      });
+      endSpan(persistSpan, {
+        output: 'ok',
+        metadata: {
+          replaced: true,
+          contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
+          durationMs: Date.now() - persistT0,
+        },
+      });
+    } catch (err) {
+      endSpan(persistSpan, {
+        output: null,
+        level: 'ERROR',
+        statusMessage: err.message,
+        metadata: { durationMs: Date.now() - persistT0 },
+      });
+      throw err;
+    }
 
     logger.info('chat_turn_regenerate_stream', {
       sessionId, userId, intentType: result._intentType, responseTimeMs: responseTime, msgId: newAssistMsgId,
+    });
+
+    endSpan(sseSpan, {
+      output: 'done',
+      metadata: {
+        status: 'ok',
+        deltaCount: sseDeltaCount,
+        deltaBytes: sseDeltaBytes,
+        reasoningCount: sseReasoningCount,
+        toolStartCount: sseToolStartCount,
+        durationMs: Date.now() - sseT0,
+        msgId: newAssistMsgId,
+      },
+    });
+    trace.update({
+      output: maskPII(preview(finalContent)),
+      metadata: {
+        status: 'ok',
+        intentType: result._intentType || null,
+        intentResolvedBy: result._intentResolvedBy || null,
+        toolName: result._toolMeta?.toolName || null,
+        iterations: result._toolMeta?.iterations || null,
+        responseTimeMs: responseTime,
+        msgId: newAssistMsgId,
+        stream: true,
+      },
     });
 
     const payload = buildExecutiveMessageApiData(result);
@@ -507,8 +819,33 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.info('chat_stream_regenerate_aborted', { sessionId });
+      endSpan(sseSpan, {
+        output: null,
+        level: 'WARNING',
+        metadata: {
+          status: 'aborted',
+          clientAborted: sseClientAborted,
+          deltaCount: sseDeltaCount,
+          deltaBytes: sseDeltaBytes,
+          durationMs: Date.now() - sseT0,
+        },
+      });
+      trace.update({
+        output: null,
+        metadata: { status: 'aborted', reason: 'client_abort' },
+      });
       return;
     }
+    endSpan(sseSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { status: 'error', durationMs: Date.now() - sseT0 },
+    });
+    trace.update({
+      output: maskPII(err.message || String(err)),
+      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
+    });
     logger.error('regenerate_agent_stream_failed', { sessionId, error: err.message, stack: err.stack });
     send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
     res.end();
@@ -528,20 +865,36 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
     throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
   }
 
+  // 先建 trace 让 Load_History / Persist 挂上去
+  const trace = createAgentTrace({
+    sessionId,
+    userId,
+    userMessage: '<regenerate placeholder>',
+    scopeType: session.role_scope,
+    agentMode: AGENT_MODE,
+    entryKind: 'regenerate',
+    tags: ['regenerate'],
+  });
+
   // 与 sendMessageStream 一致：全量 ASC 历史（含 tool 行），再截取待重算的一轮 user+assistant
-  const chronological = loadFormattedHistory(sessionId);
+  const chronological = loadFormattedHistory(sessionId, trace);
   if (chronological.length < 2) {
+    trace.update({ metadata: { status: 'bad_request', reason: 'not_enough_history' } });
     throw Object.assign(new Error('Not enough history to regenerate'), { status: 400, code: 'CHAT_008' });
   }
   const lastTurn = chronological[chronological.length - 1];
   const prevTurn = chronological[chronological.length - 2];
   if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
+    trace.update({ metadata: { status: 'bad_request', reason: 'unexpected_history_shape' } });
     throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
   }
   const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
   if (!userPrompt.trim()) {
+    trace.update({ metadata: { status: 'bad_request', reason: 'empty_user_prompt' } });
     throw Object.assign(new Error('User message is empty'), { status: 400, code: 'CHAT_008' });
   }
+
+  trace.update({ input: maskPII(preview(userPrompt)) });
 
   const prior = chronological.slice(0, -2);
   // DeepSeek/OpenAI 要求 tool 角色消息携带 tool_call_id；runFunctionCalling 仅转发 content，会触发 400。
@@ -559,8 +912,16 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   const startMs = Date.now();
   let result;
   try {
-    result = await chatAgentRunner.run(userPrompt, history, regionScope, { sessionId });
+    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
+      sessionId,
+      userId,
+      trace,
+    });
   } catch (err) {
+    trace.update({
+      output: maskPII(err.message || String(err)),
+      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
+    });
     logger.error('regenerate_agent_failed', {
       sessionId,
       messageId,
@@ -580,17 +941,53 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   });
 
   // 替换最后一条 assistant：先删旧消息（及反馈），再插入新行，避免多次「重新生成」堆叠多条 assistant 导致 pop 错位与 500
-  db.transaction(() => {
-    db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
-    const del = db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-    if (!del.changes) {
-      throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
-    }
-    db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-    );
-    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+  const persistSpan = trace.span({
+    name: 'Persist_Assistant_Message',
+    input: { sessionId, newAssistMsgId, replacedMessageId: messageId, intentType: result._intentType ?? null },
+  });
+  const persistT0 = Date.now();
+  try {
+    db.transaction(() => {
+      db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
+      const del = db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+      if (!del.changes) {
+        throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
+      }
+      db.run(
+        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+      );
+      db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    });
+    endSpan(persistSpan, {
+      output: 'ok',
+      metadata: {
+        replaced: true,
+        contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
+        durationMs: Date.now() - persistT0,
+      },
+    });
+  } catch (err) {
+    endSpan(persistSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - persistT0 },
+    });
+    throw err;
+  }
+
+  trace.update({
+    output: maskPII(preview(finalContent)),
+    metadata: {
+      status: 'ok',
+      intentType: result._intentType || null,
+      intentResolvedBy: result._intentResolvedBy || null,
+      toolName: result._toolMeta?.toolName || null,
+      iterations: result._toolMeta?.iterations || null,
+      responseTimeMs: responseTime,
+      msgId: newAssistMsgId,
+    },
   });
 
   const payload = buildExecutiveMessageApiData(result);

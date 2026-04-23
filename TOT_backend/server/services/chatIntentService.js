@@ -2,6 +2,10 @@
 
 const logger = require('../utils/logger');
 const { generateTextDeepSeek } = require('../utils/ai');
+const { endGeneration, maskPII, preview, promptHash, NOOP_TRACE } = require('../utils/tracer');
+
+// §5.10：升级 System Prompt 时同步 bump 版本号。
+const INTENT_PROMPT_VERSION = 'executive-chat-intent/v4.0';
 
 const VALID_INTENTS = new Set([
   'progress_query',
@@ -55,10 +59,18 @@ const SYSTEM_PROMPT = `你是一个培训管理系统的意图分类助手。
 用户: "华东区完成率？" → { "intentType": "progress_query", "entities": { "region": "华东" } }
 用户: "你好！" → { "intentType": "unknown", "entities": {} }`;
 
+const INTENT_PROMPT_HASH = promptHash(SYSTEM_PROMPT);
+
 /**
  * Classify a user message into an intent + entities.
+ * @param {string} userMessage
+ * @param {Array<{role:string, content:string}>} history
+ * @param {{ trace?: object }} [options] options.trace 用于建 Intent_Classify generation（Langfuse），
+ *   缺省时使用 NOOP_TRACE 降级，对业务逻辑透明。
  */
-async function classify(userMessage, history) {
+async function classify(userMessage, history, options = {}) {
+  const trace = options.trace || NOOP_TRACE;
+
   const historyText = history
     .slice(-6)
     .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
@@ -69,29 +81,79 @@ async function classify(userMessage, history) {
     ? `历史对话:\n${historyText}\n\n当前提问:\n${wrapped}`
     : wrapped;
 
-  let raw;
+  const gen = trace.generation({
+    name: 'Intent_Classify',
+    model: 'deepseek-chat',
+    input: maskPII(preview(userMessage)),
+    metadata: {
+      promptVersion: INTENT_PROMPT_VERSION,
+      promptHash: INTENT_PROMPT_HASH,
+      historyLen: history.length,
+    },
+  });
+
+  const t0 = Date.now();
+  let resp;
   try {
-    raw = await generateTextDeepSeek(prompt, {
+    resp = await generateTextDeepSeek(prompt, {
       system: SYSTEM_PROMPT,
       temperature: 0,
       maxTokens: 256,
+      returnUsage: true,
     });
   } catch (err) {
     logger.error('intent_classify_failed', { error: err.message });
+    endGeneration(gen, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: { durationMs: Date.now() - t0 },
+    });
     return { intentType: 'unknown', entities: {} };
   }
 
+  const raw = resp.content;
+  const usage = resp.usage;
+  const model = resp.model;
+
   try {
-    if (typeof raw !== 'string') return { intentType: 'unknown', entities: {} };
+    if (typeof raw !== 'string') {
+      endGeneration(gen, {
+        output: null,
+        usage: usage || undefined,
+        model: model || undefined,
+        level: 'WARNING',
+        metadata: { status: 'empty_response', durationMs: Date.now() - t0 },
+      });
+      return { intentType: 'unknown', entities: {} };
+    }
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned);
     const intentType = VALID_INTENTS.has(parsed.intentType) ? parsed.intentType : 'unknown';
     const entities = (parsed.entities && typeof parsed.entities === 'object' && !Array.isArray(parsed.entities)) ? parsed.entities : {};
+    endGeneration(gen, {
+      output: { intentType, entitiesSummary: Object.keys(entities).filter((k) => entities[k] != null) },
+      usage: usage || undefined,
+      model: model || undefined,
+      metadata: {
+        intentType,
+        rawIntentType: parsed.intentType || null,
+        durationMs: Date.now() - t0,
+      },
+    });
     return { intentType, entities };
   } catch (e) {
     logger.warn('intent_classify_parse_error', { error: e.message, raw: String(raw).slice(0, 200) });
+    endGeneration(gen, {
+      output: preview(String(raw)),
+      usage: usage || undefined,
+      model: model || undefined,
+      level: 'WARNING',
+      statusMessage: 'parse_error',
+      metadata: { durationMs: Date.now() - t0 },
+    });
     return { intentType: 'unknown', entities: {} };
   }
 }
 
-module.exports = { classify };
+module.exports = { classify, INTENT_PROMPT_VERSION };
