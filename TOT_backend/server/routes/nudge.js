@@ -77,7 +77,9 @@ function resolveTargetAssignments(taskId, targetType, targetId, callerStoreId) {
 }
 
 async function enrichManualNudgeContent({ taskId, eventEntries, severity, nudgeRecordId }) {
-  const eventType = severity === 'red' ? 'nudge_red' : 'nudge_yellow';
+  let eventType = 'nudge_yellow';
+  if (severity === 'red') eventType = 'nudge_red';
+  if (severity === 'orange') eventType = 'nudge_orange';
   for (const entry of eventEntries) {
     let content = '你有未完成的培训任务，请抓紧时间！';
     try {
@@ -120,8 +122,8 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
     if (!['employee', 'store', 'region'].includes(targetType)) {
       throw createError(400, 'targetType 非法（employee/store/region）', 'NUDGE_003');
     }
-    if (!['yellow', 'red'].includes(severity)) {
-      throw createError(400, 'severity 非法（yellow/red）', 'NUDGE_003');
+    if (!['yellow', 'orange', 'red'].includes(severity)) {
+      throw createError(400, 'severity 非法（yellow/orange/red）', 'NUDGE_003');
     }
 
     const task = db.get('SELECT id FROM tasks WHERE id = ?', [taskId]);
@@ -148,7 +150,9 @@ router.post('/', authenticate, requireRole(['central']), (req, res, next) => {
 
     const now = formatNowSqliteLocal();
     const nudgeRecordId = nanoid();
-    const eventType = severity === 'red' ? 'nudge_red' : 'nudge_yellow';
+    let eventType = 'nudge_yellow';
+    if (severity === 'red') eventType = 'nudge_red';
+    if (severity === 'orange') eventType = 'nudge_orange';
 
     const eventEntries = pendingAssignments.map(a => ({
       assignmentId: a.id,

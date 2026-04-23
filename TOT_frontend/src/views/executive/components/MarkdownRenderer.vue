@@ -78,6 +78,13 @@
   // 默认折叠思考过程
   const showThinking = ref(false);
 
+  watch(
+    () => [props.streaming, props.thinking] as const,
+    ([s, t]) => {
+      if (s && t) showThinking.value = true;
+    }
+  );
+
   const md = new MarkdownIt({
     html: true,
     linkify: true,

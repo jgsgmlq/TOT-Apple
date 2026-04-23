@@ -114,6 +114,7 @@ function formatTask(row) {
     passScore:        row.pass_score,
     mypalTaskWeek:    row.mypal_task_week ?? null,
     mypalProductName: row.mypal_product_name ?? null,
+    subTasksConfig:   row.sub_tasks_config ? JSON.parse(row.sub_tasks_config) : null,
     ddlAt:            row.ddl_at,
     createdBy:        row.created_by,
     createdAt:        row.created_at,
@@ -160,8 +161,13 @@ router.get('/', authenticate, (req, res, next) => {
       const p = [employeeId];
 
       if (status) {
-        q += ` AND ta.status = ?`;
-        p.push(status);
+        if (status === 'overdue') {
+          q += ` AND ta.status != 'completed' AND t.ddl_at < ?`;
+          p.push(formatNowSqliteLocal());
+        } else {
+          q += ` AND ta.status = ?`;
+          p.push(status);
+        }
       }
 
       q += ` ORDER BY t.created_at DESC`;
@@ -224,7 +230,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
       rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,  // 保留 autoNudgeRules
-      mypalTaskWeek, mypalProductName,
+      mypalTaskWeek, mypalProductName, subTasksConfig,
     } = req.body;
 
     if (!title)      throw createError(400, 'title 不能为空', 'TASK_005');
@@ -253,6 +259,7 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
     const rtmFilterStr = rtmFilter ? JSON.stringify(rtmFilter) : null;
     const storeScopeStr = (!storeScope || storeScope === 'all') ? 'all' : JSON.stringify(storeScope);
     const autoNudgeRulesStr = autoNudgeRules ? JSON.stringify(autoNudgeRules) : null; // 保留
+    const subTasksConfigStr = subTasksConfig ? JSON.stringify(subTasksConfig) : null;
     const ddlAtNorm = parseDdlAtToSqliteUtc(ddlAt);
     const startAtNorm = parseDdlAtToSqliteUtc(startAt);
 
@@ -260,11 +267,11 @@ router.post('/', authenticate, requireRole('central'), (req, res, next) => {
       `INSERT INTO tasks
         (id, title, description, has_mypal, has_smartsell, has_ai_demo, has_live_broadcast,
          status, rtm_filter, store_scope, auto_nudge_rules, start_at, pass_score,
-         mypal_task_week, mypal_product_name, ddl_at, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         mypal_task_week, mypal_product_name, sub_tasks_config, ddl_at, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, title, description ?? null, platforms[0], platforms[1], platforms[2], platforms[3],
        rtmFilterStr, storeScopeStr, autoNudgeRulesStr, startAtNorm, passScore,
-       mypalWeekStr, mypalProductStr, ddlAtNorm, req.user.username, now, now]
+       mypalWeekStr, mypalProductStr, subTasksConfigStr, ddlAtNorm, req.user.username, now, now]
     );
 
     const row = db.get('SELECT * FROM tasks WHERE id = ?', [id]);
@@ -315,7 +322,9 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
         (mypalTaskWeek !== undefined &&
           ((mypalTaskWeek != null && String(mypalTaskWeek).trim()) ? String(mypalTaskWeek).trim() : null) !== task.mypal_task_week) ||
         (mypalProductName !== undefined &&
-          ((mypalProductName != null && String(mypalProductName).trim()) ? String(mypalProductName).trim() : null) !== task.mypal_product_name);
+          ((mypalProductName != null && String(mypalProductName).trim()) ? String(mypalProductName).trim() : null) !== task.mypal_product_name) ||
+        (subTasksConfig !== undefined &&
+          (subTasksConfig ? JSON.stringify(subTasksConfig) : null) !== task.sub_tasks_config);
 
       if (forbiddenChanged) {
         throw createError(400, '已下发任务只允许修改截止时间和预警规则', 'TASK_004');
@@ -375,11 +384,16 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
       const startAtResolved =
         startAt !== undefined ? parseDdlAtToSqliteUtc(startAt) : task.start_at;
 
+      const subTasksConfigResolved =
+        subTasksConfig !== undefined
+          ? (subTasksConfig ? JSON.stringify(subTasksConfig) : null)
+          : task.sub_tasks_config;
+
       db.run(
         `UPDATE tasks
          SET title = ?, description = ?,
              has_mypal = ?, has_smartsell = ?, has_ai_demo = ?, has_live_broadcast = ?,
-             rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?,
+             rtm_filter = ?, store_scope = ?, auto_nudge_rules = ?, sub_tasks_config = ?,
              start_at = ?, pass_score = ?, mypal_task_week = ?, mypal_product_name = ?,
              ddl_at = ?, updated_at = ?
          WHERE id = ?`,
@@ -390,6 +404,7 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
           rtmFilterStr,
           storeScopeStr,
           autoNudgeRulesStr,  // 保留
+          subTasksConfigResolved,
           startAtResolved,
           passScore  !== undefined ? passScore : task.pass_score,
           platforms[0] === 1 ? mypalWeekResolved : null,
@@ -590,6 +605,66 @@ router.post('/:id/dispatch', authenticate, requireRole(['central', 'admin']), (r
         assignmentCreated: assignmentCount,
         notificationCreated: notificationCount,
       },
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api/v1/tasks/:id/revoke ──────────────────────────────────────────
+router.post('/:id/revoke', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
+  try {
+    const taskId = req.params.id;
+    const task = db.get('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    
+    if (!task) {
+      throw createError(404, '任务不存在', 'TASK_002');
+    }
+    
+    if (task.status !== 'dispatched') {
+      throw createError(400, '任务未下发，无需撤销', 'TASK_008');
+    }
+
+    // 获取需要通知的已分配员工
+    const targets = db.all(
+      'SELECT DISTINCT user_id FROM task_assignments WHERE task_id = ?',
+      [taskId]
+    );
+
+    db.transaction(() => {
+      // 必须先删除被通知引用的已读回执
+      db.run('DELETE FROM read_receipts WHERE event_id IN (SELECT id FROM notification_events WHERE task_id = ?)', [taskId]);
+      // 删除关联的通知事件
+      db.run('DELETE FROM notification_events WHERE task_id = ?', [taskId]);
+      // 删除关联的催办记录
+      db.run('DELETE FROM nudge_records WHERE task_id = ?', [taskId]);
+      // 删除所有下发的员工任务分配记录
+      db.run('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
+      // 删除关联的 AI 洞察
+      db.run('DELETE FROM dashboard_insights WHERE task_id = ?', [taskId]);
+      // 彻底删除任务本身
+      db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+
+    // 通知所有看板刷新
+    broadcastToDashboard({
+      event: 'dashboard_updated',
+      data: { taskId, operationType: 'task_deleted' }
+    });
+
+    // 通知受影响的店员，使任务卡片直接从店员 UI 上移除
+    if (targets && targets.length > 0) {
+      broadcastToUsers(targets.map(t => t.user_id), {
+        event: 'task_deleted',
+        data: { taskId, message: '任务已被总部撤销并删除' }
+      });
+    }
+
+    res.json({
+      code: 200,
+      message: '任务撤销并删除成功',
+      data: { id: taskId, deleted: true },
       requestId: req.requestId,
     });
   } catch (err) {

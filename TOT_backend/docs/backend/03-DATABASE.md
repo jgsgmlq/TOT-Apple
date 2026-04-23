@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   pass_score         INTEGER NOT NULL DEFAULT 100,
   mypal_task_week    TEXT,                          -- MyPal queryDate，如 FY26Q2W1（has_mypal 时建议必填）
   mypal_product_name TEXT,                          -- 与 MyPal 响应 productName 精确匹配（可空）
+  sub_tasks_config   TEXT,                          -- 子任务独立配置 (JSON)
   ddl_at             TEXT NOT NULL,
   created_by         TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),

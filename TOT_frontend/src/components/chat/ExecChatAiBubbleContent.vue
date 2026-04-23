@@ -34,20 +34,34 @@
       </div>
     </div>
     <pre v-else-if="jsonStream" class="exec-json-fallback">{{ jsonStream }}</pre>
-    <div v-else-if="content" class="exec-plain">{{ content }}</div>
+    <div v-else-if="content" class="exec-plain markdown-body" v-html="sanitizedHtml"></div>
   </div>
 </template>
 
 <script lang="ts" setup>
+  import { computed } from 'vue';
+  import MarkdownIt from 'markdown-it';
+  import DOMPurify from 'dompurify';
   import type { ReplyContent } from '@/api/chat';
 
-  defineProps<{
+  const props = defineProps<{
     thinking?: string;
     partialReply?: ReplyContent | null;
     replyContent?: ReplyContent | null;
     jsonStream?: string;
     content?: string;
   }>();
+
+  const md = new MarkdownIt({
+    html: true,
+    linkify: true,
+    typographer: true,
+  });
+
+  const sanitizedHtml = computed(() => {
+    const rawHtml = md.render(props.content || '');
+    return DOMPurify.sanitize(rawHtml);
+  });
 </script>
 
 <style lang="less" scoped>
@@ -132,5 +146,22 @@
 
   .exec-plain {
     white-space: pre-wrap;
+
+    :deep(table) {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      display: block;
+      overflow-x: auto;
+
+      th, td {
+        border: 1px solid #e5e7eb;
+        padding: 8px 10px;
+        text-align: left;
+      }
+    }
+
+    :deep(p) { margin: 8px 0; }
+    :deep(ul), :deep(ol) { padding-left: 20px; }
   }
 </style>

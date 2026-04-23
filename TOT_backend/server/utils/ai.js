@@ -170,6 +170,10 @@ async function generateTextDeepSeek(prompt, options = {}) {
       stream: false
     };
 
+    if (options.responseFormat) {
+      body.response_format = options.responseFormat;
+    }
+
     const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
     const startTime = isDebugEnabled ? Date.now() : 0;
 

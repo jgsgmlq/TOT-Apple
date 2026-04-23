@@ -14,8 +14,8 @@ async function buildNudgePromptAndMeta(context) {
 
   if (!taskId) throw createError(400, 'taskId 不能为空', 'NUDGE_AI_001');
   if (!userId) throw createError(400, 'userId 不能为空', 'NUDGE_AI_001');
-  if (!severity || !['yellow', 'red'].includes(severity)) {
-    throw createError(400, 'severity 必填且只能是 yellow/red', 'NUDGE_AI_001');
+  if (!severity || !['yellow', 'orange', 'red'].includes(severity)) {
+    throw createError(400, 'severity 必填且只能是 yellow/orange/red', 'NUDGE_AI_001');
   }
 
   const task = db.get('SELECT * FROM tasks WHERE id = ?', [taskId]);
@@ -44,10 +44,12 @@ async function buildNudgePromptAndMeta(context) {
   const now = new Date();
   const hoursLeft = Math.round((ddl - now) / (1000 * 60 * 60));
   const timeLeftStr = hoursLeft > 0 ? `不足 ${hoursLeft} 小时` : '已逾期';
-  const isRed = severity === 'red';
+  let severityText = '轻松、提醒';
+  if (severity === 'orange') severityText = '适度紧迫、提醒';
+  if (severity === 'red') severityText = '紧急、严肃';
 
   const prompt = `
-你是一个总部培训督导。请为以下店员生成一条${isRed ? '紧急、严肃' : '轻松、提醒'}的催办消息。
+你是一个总部培训督导。请为以下店员生成一条${severityText}的催办消息。
 - 任务名称: ${task.title}
 - 剩余时间: ${timeLeftStr}
 - 员工进度: 已完成 ${progress}%

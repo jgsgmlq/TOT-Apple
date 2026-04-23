@@ -1,5 +1,13 @@
 # ToT API 接口定义文档
 
+### v1.5.3（2026-04-21）
+
+- **看板智能 Agent 诊断**：新增 `GET /dashboard/agent/diagnose` 接口，支持对看板当前活跃（`dispatched`）的任务进行全局大模型自动分析。返回红/橙/绿三个紧急程度分布（全局唯一红色高优），为每个任务生成一句话诊断建议及对应的聚焦下钻模块（如漏斗、预警详情、时区等），并在返回剩余所有任务的总结文案。此分析结果自动按 `global_agent` 类型持久化至 `dashboard_insights` 表内。
+- **预警级别扩充 (Orange)**：在原有的 `red` (p0) 和 `yellow` (p1/p2) 基础上，新增了 `orange` 级别。当前的自动预警映射关系变更为：距离截止时间不足 24h 的 P0 危机预警为 `red`；距离不足 48h 的 P1 危机预警为 `orange`；进度掉队 (progressLag) 及起步异常 (startDelay) 统归为 `yellow`。`notification_events` 及 `nudge_records` 表的约束均已同步更新，接口均已支持传入和返回 `orange`。
+- **任务撤销**：新增 `POST /tasks/{id}/revoke` 接口。允许将已下发（`dispatched`）的任务进行撤销并直接删除。调用后，服务端会自动级联物理删除关联的 `task_assignments`、`notification_events`、`nudge_records`、被引用的 `read_receipts` 以及看板洞察记录 `dashboard_insights`，最后彻底删除 `tasks` 表中的主记录，并下发 `task_deleted` WebSocket 事件通知受影响店员，确保任务卡片从店员 UI 上直接移除。
+- **过期任务查询**：在 `GET /tasks` 和 `GET /assignments` 接口中，支持了 `status=overdue` 的查询参数过滤，用于筛选已过期（`ddl_at` < 当前时间）且未完成的员工任务。
+- **任务类型与子任务配置**：在任务管理 (`Task`) 对象中新增 `subTasksConfig`（JSON）字段，支持为同一任务下不同学习平台（如 MyPAL、SmartSell 等）配置独立描述。创建与修改任务接口（`POST /tasks`、`PATCH /tasks/{id}`）同步支持该字段。
+
 ### v1.5.2（2026-04-17）
 
 - **实时语音合成 TTS（百炼 Qwen-TTS Realtime）**：`server/app.js` 挂载 **`setupTtsRealtimeWebSocket`**，浏览器通过 **`WebSocket`** **`/ws/tts?token=<JWT>`** 连接（角色 **`executive`** / **`central`** / **`admin`**）；服务端用同一套 **`ASR_API_KEY` / `DASHSCOPE_API_KEY`** 转发至 **`wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime`**（见 **`server/ws/ttsRealtime.js`**）。客户端事件：`session.update` 由代理在连接成功后自动下发；客户端发送 **`input_text_buffer.append`**（`type: append`）与 **`session.finish`**（`type: finish`）；服务端透传上游 JSON（含 **`response.audio.delta`**）。详见 §6.7。Executive Chat 前端可开关「语音」与 SSE 并行。
@@ -142,8 +150,8 @@
 
 | 项目 | 内容 |
 |------|------|
-| 文档版本 | 1.4.13 |
-| 更新时间 | 2026-04-13 |
+| 文档版本 | 1.5.3 |
+| 更新时间 | 2026-04-21 |
 | 适用版本 | API v1（与 `TOT_backend/server` 当前路由一致） |
 | 基础路径 | `/api/v1` |
 | 认证方式 | Bearer Token（请求头：`Authorization: Bearer {token}`） |
@@ -311,6 +319,7 @@
 >   passScore: number,         // 达标分数，整数，必填
 >   mypalTaskWeek: string | null,  // MyPal 任务周 / queryDate；hasMypal 时必填（创建/草稿 PATCH）
 >   mypalProductName: string | null, // 与 MyPal productName 精确匹配，可选
+>   subTasksConfig: Record<string, string> | null, // 子任务独立配置 (针对合集任务)
 >   ddlAt: string,             // 截止时间，必填；请求体为任意可解析时间串；**存储与响应**为 **本地墙钟** `YYYY-MM-DD HH:MM:SS`（与 `datetime('now', 'localtime')` / `parseDateToSqliteLocal` 一致）
 >   createdBy: string,         // 创建者 username（如 "central"）
 >   createdAt: string,         // ISO 8601
@@ -365,6 +374,10 @@
       "progressLag": { "lifestyle": 3, "mono": 1 },
       "startDelay": 50,
       "deadlineCrisis": { "p0": 24, "p1": 48 }
+    },
+    "subTasksConfig": {          // 任务合集各平台的独立配置，可选
+      "MyPAL": "独立描述1...",
+      "SmartSell": "独立描述2..."
     },
     "mypalTaskWeek": "FY26Q2W1",  // hasMypal=true 时必填，否则 400（TASK_007）
     "mypalProductName": "string" // 可选；与 MyPal 产品名匹配
@@ -444,6 +457,7 @@
     "passScore": 100,
     "mypalTaskWeek": "FY26Q2W1",
     "mypalProductName": "string",
+    "subTasksConfig": { "MyPAL": "独立描述1...", "SmartSell": "独立描述2..." },
     "autoNudgeRules": { "progressLag": { "lifestyle": 3, "mono": 1 }, "startDelay": 50, "deadlineCrisis": { "p0": 24, "p1": 48 } },
     "ddlAt": "2026-05-01T00:00:00Z"
   }
@@ -502,6 +516,34 @@
 
 > **WS 推送：** 下发成功后，向所有目标用户（`targetUsers`）推送 `{ event: "task_assigned", data: { taskId, taskTitle, ddlAt } }`（见 §15.1）。
 
+### 2.4.1 撤销任务 **P0**
+
+- **接口名称**：撤销已下发任务（Revoke Task）
+- **接口路径**：`/tasks/{id}/revoke`
+- **请求方法**：POST
+- **权限要求**：`central` / `admin`
+- **路径参数**：`id`（必填）
+- **请求体**：无
+- **业务规则**：
+  - 任务必须是已下发（`status === 'dispatched'`）状态。
+  - 服务端会在**数据库事务中级联物理删除**关联该任务的所有子记录，包括 `read_receipts`（已读回执）、`notification_events`（通知事件）、`nudge_records`（催办记录）、`task_assignments`（员工任务分配记录）和 `dashboard_insights`（AI 洞察），最后**彻底删除任务主记录**。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "任务撤销并删除成功",
+    "data": { "id": "string", "deleted": true },
+    "requestId": "string"
+  }
+  ```
+- **异常场景**：
+  - 404：任务不存在（`TASK_002`）
+  - 400：任务未下发，当前不在 `dispatched` 状态（`TASK_008`）
+
+> **WS 推送：**
+> 1. 向受影响的店员下发 `{ event: "task_deleted", data: { taskId, message: "任务已被总部撤销并删除" } }`，前端监听此事件可直接从 UI 移除该任务卡片。
+> 2. 向管理端看板推送 `{ event: "dashboard_updated", data: { taskId, operationType: "task_deleted" } }` 刷新数据。
+
 ### 2.5 获取任务列表 **P0**
 
 - **接口名称**：获取任务列表
@@ -511,7 +553,7 @@
 - **查询参数**：
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
-  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress` |
+  | status | string | 否 | 店员端过滤任务状态使用，可选值：`completed`, `pending`, `in_progress`, `overdue` |
 - **角色过滤规则**：
   - `central` / `admin`：返回全部任务，按 `created_at DESC` 排序
   - `employee`：仅返回本人有 `task_assignments` 记录的任务
@@ -713,7 +755,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 否 | 任务ID，筛选指定任务的分配记录 |
   | employeeId | string | 否 | 员工ID；`central`/`admin` 可筛任意；`employee` 仅允许本人（与 JWT 不一致则 403） |
   | storeId | string | 否 | 门店ID；`central`/`admin` 可筛 |
-  | status | string | 否 | 分配状态：pending/in_progress/completed |
+  | status | string | 否 | 分配状态：pending/in_progress/completed/overdue |
   | pageNum | int | 否 | 页码，**默认 1**；未传或非法返回 400（`ASSIGN_018`） |
   | pageSize | int | 否 | 页大小，**默认 20**，**最大 200**；非法返回 400（`ASSIGN_019`）；`status` 非法返回 `ASSIGN_020` |
 - **响应体（成功）**：
@@ -1140,7 +1182,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```json
   {
     // event_type 仅允许：task_assigned / task_updated
-    // ❌ nudge_yellow / nudge_red 禁止通过本接口创建，必须走 POST /nudges（§4.5）
+    // ❌ nudge_yellow / nudge_orange / nudge_red 禁止通过本接口创建，必须走 POST /nudges（§4.5）
     "eventType": "task_assigned/task_updated", // 必填
     "taskId": "string",       // 必填，notification_events.task_id
     "assignmentId": "string", // task_assigned 必填；task_updated 可空（notification_events.assignment_id）
@@ -1168,12 +1210,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：系统内部写入 `notification_events` 表。`dedupeKey` + DB 层 PARTIAL UNIQUE INDEX 保证 `task_assigned` 事件幂等（重复调用不报错，返回已有 eventId）。**催办事件（nudge_yellow / nudge_red）禁止通过本接口创建，必须通过 §4.5 发起催办，以保证 `nudge_records` 审计链完整。预警数据无独立存储表，从 `task_assignments` 实时聚合计算**（见 §5.5）。
+- **接口说明**：系统内部写入 `notification_events` 表。`dedupeKey` + DB 层 PARTIAL UNIQUE INDEX 保证 `task_assigned` 事件幂等（重复调用不报错，返回已有 eventId）。**催办事件（nudge_yellow / nudge_orange / nudge_red）禁止通过本接口创建，必须通过 §4.5 发起催办，以保证 `nudge_records` 审计链完整。预警数据无独立存储表，从 `task_assignments` 实时聚合计算**（见 §5.5）。
 - **权限要求**：
   - central：仅可触发本人有权限的任务事件
   - employee：无创建权限
 - **异常场景**：
-  - 400：必填参数缺失 / eventType非法（含nudge_yellow/nudge_red）/ task_assigned类assignmentId为空
+  - 400：必填参数缺失 / eventType非法（含nudge_yellow/nudge_orange/nudge_red）/ task_assigned类assignmentId为空
   - 403：越权创建
   - 409：dedupeKey已存在（幂等，返回已有eventId，不重复写入）
 
@@ -1186,12 +1228,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **查询参数**：
   | 参数名 | 类型 | 必选 | 说明 |
   |--------|------|------|------|
-  | eventType | string | 否 | 事件类型：task_assigned/nudge_yellow/nudge_red/task_updated |
+  | eventType | string | 否 | 事件类型：task_assigned/nudge_yellow/nudge_orange/nudge_red/task_updated |
   | taskId | string | 否 | 关联任务ID（notification_events.task_id） |
   | targetUserId | string | 否 | 目标用户ID（employees.id），不传则默认当前 Employee-Id |
   | assignmentId | string | 否 | 关联分配记录ID（notification_events.assignment_id） |
   | storeId | string | 否 | 门店ID过滤（notification_events.store_id，直接命中索引） |
-  | severity | string | 否 | 催办级别：yellow/red |
+  | severity | string | 否 | 催办级别：yellow/orange/red |
   | isActive | boolean | 否 | 活跃状态过滤（计算值：关联 assignment 未 completed 则为 true），默认 true |
   | readStatus | boolean | 否 | 是否已读（JOIN read_receipts 计算） |
   | pageNum | int | 是 | 页码，默认1 |
@@ -1208,16 +1250,16 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "list": [
         {
           "eventId": "string",     // notification_events.id（nanoid）
-          "eventType": "string",   // task_assigned/nudge_yellow/nudge_red/task_updated
+          "eventType": "string",   // task_assigned/nudge_yellow/nudge_orange/nudge_red/task_updated
           "taskId": "string",      // notification_events.task_id
           "assignmentId": "string", // notification_events.assignment_id，可为 null
           "targetUserId": "string", // notification_events.target_user_id（= employees.id）
           "storeId": "string",     // notification_events.store_id（冗余，= employees.store_id）
-          "severity": "string",    // notification_events.severity（yellow/red），非催办事件时为 null
+          "severity": "string",    // notification_events.severity（yellow/orange/red），非催办事件时为 null
           "content": "string",     // notification_events.content；催办类为展示文案，异步写入完成后非 null；其它事件多为 null
           "ruleType": "string",    // string|null，预警规则类型（如 deadlineCrisisP0, startDelay），非预警时为 null
           // isActive 计算规则（不存储于 DB）：
-          //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+          //   event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
           //     → ta.status != 'completed'（任务未完成时为 true，完成后为 false）
           //   event_type = 'task_updated'
           //     → 始终为 true（不绑定 assignment 完成状态）
@@ -1313,7 +1355,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     AND rr.id IS NULL   -- 未读
     AND (
       -- task_assigned / nudge_* 事件：关联 assignment 未完成才计入铃铛
-      (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_red')
+      (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
         AND ta.status != 'completed')
       OR
       -- task_updated 事件：不绑定 assignment 状态，只要未读就计入
@@ -1340,7 +1382,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
                                   //   targetType=employee → employees.id（如 E001）
                                   //   targetType=store    → stores.id（如 S001）
                                   //   targetType=region   → 区域名称（如"华东"，仅 central 可用）
-    "severity": "yellow/red"      // 必填，nudge_records.severity（DB CHECK 约束）
+    "severity": "yellow/orange/red"      // 必填，nudge_records.severity（DB CHECK 约束）
     // initiator_id 来自 JWT `req.user.id`（写入 nudge_records.initiator_id）
     // notification 内容由服务端根据 event_type+task 信息模板生成，不需前端传入
     // auto 模式属于 P2 AI Agent 能力，本接口仅支持人工触发
@@ -1393,7 +1435,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 是 | 任务ID（nudge_records.task_id），必传 |
   | targetType | string | 否 | 催办范围过滤：employee/store/region |
   | targetId | string | 否 | 催办对象ID过滤（与 targetType 联用） |
-  | severity | string | 否 | 催办级别：yellow/red |
+  | severity | string | 否 | 催办级别：yellow/orange/red |
   | pageNum | int | 否 | 页码，默认1 |
   | pageSize | int | 否 | 页大小，默认20 |
 - **响应体（成功）**：
@@ -1408,7 +1450,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "taskId": "string",         // nudge_records.task_id
           "targetType": "string",     // employee / store / region
           "targetId": "string",       // employees.id / stores.id / 区域名称
-          "severity": "string",       // yellow / red
+          "severity": "string",       // yellow / orange / red
           "initiatorId": "string",    // nudge_records.initiator_id（users.id 串化）
           // nudgedCount：本次催办生成的 notification_events 数量（JSON 数组长度）
           "nudgedCount": 3,
@@ -1731,7 +1773,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "storeId": "string",      // 兼容字段：同 targetId
           "storeName": "string",    // 兼容字段：同 targetName
           "warningLevel": "p1",     // p1 / p0（临期）或 startDelay（起步异常）
-          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0/P1=未完成人数/总人数×100（且任务已落在对应临期带）
+          "warningRate": 20.0,      // 与 §5.1 同公式在单实体范围：起步异常=（进度仍为0且未完成人数）/总人数×100；临期 P0(red)/P1(orange)=未完成人数/总人数×100（且任务已落在对应临期带）
           "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
@@ -1912,6 +1954,52 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **接口说明**：在 **`dashboard_insights`** 行上更新 **`up_count` / `down_count`**。
 - **权限要求**：`central` / `executive` / `admin`
 - **异常场景**：400（`vote` 非法 `INSIGHT_003`）；404（洞察不存在 `INSIGHT_404`）
+
+
+### 5.8 看板智能 Agent 诊断 **P0**
+
+- **接口名称**：获取看板 Agent 智能诊断
+- **接口路径**：`/dashboard/agent/diagnose`
+- **请求方法**：GET
+- **权限要求**：`central`, `executive`, `admin`
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | refresh | boolean/string | 否 | 传 `true` 或 `1` 强制刷新，否则返回库里最新的一条诊断结果（如无则生成） |
+- **业务规则**：
+  - 后端设有定时任务（每小时执行一次）自动在后台请求 AI 获取结果并存入数据库，并通过 WebSocket 广播 `dashboard_agent_updated` 给前端，提醒前端可以重新拉取。
+  - Agent 根据系统当前处于 `dispatched` 状态的任务进度，评判各任务的紧急程度：`red`（最多1个）、`orange`、`green`。
+  - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块)。
+  - 对总体其余任务情况提供一句业务总结 `overallSummary`。
+- **响应体（成功）**：
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "redCount": 1,
+      "orangeCount": 3,
+      "greenCount": 1,
+      "topTasks": [
+        {
+          "taskId": "TASK_A",
+          "title": "iPhone 17 新品培训",
+          "severity": "red",
+          "insight": "任务即将到期且进度严重滞后，需重点催办",
+          "focusModule": "warning_details",
+          "progress": 25.4
+        }
+      ],
+      "overallSummary": "其余任务推进正常，无需特别干预。",
+      "allTasks": [
+        // 包含所有活跃任务的详细诊断列表
+      ],
+      "generatedAt": "2026-04-21 16:30:00"
+    },
+    "requestId": "string"
+  }
+  ```
+
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 
@@ -3284,6 +3372,28 @@ ws://[host]/ws?token=<JWT Bearer Token>
 
 **前端建议处理：**
 - 管理端：监听到该事件后，可以防抖（debounce）几秒钟后静默重新调用 `GET /api/v1/dashboard/overview` 或 `heatmap`、`trend` 等数据接口，从而实现看板数据的**自动刷新**。
+
+---
+
+### 15.5 看板 Agent 分析更新通知 `dashboard_agent_updated` **P0**
+
+**触发时机：** 当定时任务或人为手动强制刷新完成后，AI 生成的最新的看版分析存入数据库时触发。
+
+**接收方：**
+- 当前在线的总部 (`central`)、行政 (`executive`)、管理员 (`admin`) 角色。
+
+**Payload：**
+```json
+{
+  "event": "dashboard_agent_updated",
+  "data": {
+    "generatedAt": "2026-04-22 12:00:00"
+  }
+}
+```
+
+**前端建议处理：**
+- 管理端：监听到该事件后，说明看板智能 Agent 有新的诊断报告，可以直接拉取 `GET /api/v1/dashboard/agent/diagnose`（不要传 refresh）以更新顶部提示卡片。
 
 ---
 

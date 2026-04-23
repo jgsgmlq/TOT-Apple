@@ -123,6 +123,8 @@ function buildToolCacheSignature(toolName, args = {}, regionScope = null) {
   return `${toolName || 'unknown'}|${taskId || '-'}|${region || '-'}|${storeId || '-'}|${analysisType || '-'}|${scopeFp}`;
 }
 
+const { createFcStreamDeltaSplitter } = require('../utils/fcStreamDeltaSplit');
+
 function buildDisambiguationReply(toolResult) {
   if (!toolResult || !toolResult.needDisambiguation) return null;
   const baseOverview = typeof toolResult.message === 'string' && toolResult.message.trim()
