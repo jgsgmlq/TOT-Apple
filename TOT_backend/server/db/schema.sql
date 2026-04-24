@@ -238,3 +238,12 @@ CREATE TABLE IF NOT EXISTS chat_message_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_cmf_message_id ON chat_message_feedback(message_id);
 CREATE INDEX IF NOT EXISTS idx_cmf_user_id    ON chat_message_feedback(user_id);
+
+-- 12. 全局智能 Agent 经验库 (供各类 Agent 自主读写与自我进化)
+CREATE TABLE IF NOT EXISTS agent_guidelines (
+  id          TEXT PRIMARY KEY,
+  agent_type  TEXT NOT NULL,
+  rule_text   TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ag_type ON agent_guidelines(agent_type);
