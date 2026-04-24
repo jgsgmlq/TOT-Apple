@@ -40,6 +40,7 @@ function getDb() {
     migrateTasksSubTasksConfig(_db);
     migrateNudgeRecordsConstraints(_db);
     migrateNotificationEventsConstraints(_db);
+    repairReadReceiptsNotificationForeignKey(_db);
     migrateNotificationEventsContent(_db);
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
@@ -231,10 +232,13 @@ function migrateNotificationEventsConstraints(database) {
   if (hasEventOrange && hasSeverityOrange) return;
 
   // sqlite要求禁用外键检查才能使用 DROP TABLE 并替换有外键引用的表
+  // 注意：不要使用 *_old 命名，避免历史 SQLite 外键文本被错误固化到旧表名
+  const tmpTable = 'notification_events_migration_tmp';
   database.pragma('foreign_keys = OFF');
   database.exec('BEGIN');
   try {
-    database.exec('ALTER TABLE notification_events RENAME TO notification_events_old');
+    database.exec(`DROP TABLE IF EXISTS ${tmpTable}`);
+    database.exec(`ALTER TABLE notification_events RENAME TO ${tmpTable}`);
     database.exec(`
       CREATE TABLE notification_events (
         id             TEXT PRIMARY KEY,
@@ -257,7 +261,7 @@ function migrateNotificationEventsConstraints(database) {
     `);
     
     // Check if content column existed in the old table
-    const cols = database.prepare('PRAGMA table_info(notification_events_old)').all();
+    const cols = database.prepare(`PRAGMA table_info(${tmpTable})`).all();
     const hasContent = cols.some((c) => c.name === 'content');
     
     if (hasContent) {
@@ -267,7 +271,7 @@ function migrateNotificationEventsConstraints(database) {
         )
         SELECT
           id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, content, initiator_id, created_at
-        FROM notification_events_old
+        FROM ${tmpTable}
       `);
     } else {
       database.exec(`
@@ -276,11 +280,11 @@ function migrateNotificationEventsConstraints(database) {
         )
         SELECT
           id, task_id, assignment_id, target_user_id, store_id, event_type, severity, dedupe_key, initiator_id, created_at
-        FROM notification_events_old
+        FROM ${tmpTable}
       `);
     }
     
-    database.exec('DROP TABLE notification_events_old');
+    database.exec(`DROP TABLE ${tmpTable}`);
     database.exec('CREATE INDEX IF NOT EXISTS idx_ne_target_user_id ON notification_events(target_user_id)');
     database.exec('CREATE INDEX IF NOT EXISTS idx_ne_store_id       ON notification_events(store_id)');
     database.exec('CREATE INDEX IF NOT EXISTS idx_ne_task_id        ON notification_events(task_id)');
@@ -291,6 +295,45 @@ function migrateNotificationEventsConstraints(database) {
   } catch (err) {
     database.exec('ROLLBACK');
     console.error('Migration NotificationEventsConstraints failed:', err);
+  } finally {
+    database.pragma('foreign_keys = ON');
+  }
+}
+
+/**
+ * 修复历史迁移遗留：`read_receipts.event_id` 可能未正确指向 `notification_events`。
+ * 通过外键元数据检测并重建 `read_receipts`，不依赖旧表命名字符串。
+ */
+function repairReadReceiptsNotificationForeignKey(database) {
+  const fkRows = database.prepare('PRAGMA foreign_key_list(read_receipts)').all();
+  const eventFk = fkRows.find((r) => r.from === 'event_id');
+  if (eventFk && eventFk.table === 'notification_events') return;
+
+  database.pragma('foreign_keys = OFF');
+  database.exec('BEGIN');
+  try {
+    database.exec('ALTER TABLE read_receipts RENAME TO read_receipts_old');
+    database.exec(`
+      CREATE TABLE read_receipts (
+        id       TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES notification_events(id),
+        user_id  TEXT NOT NULL REFERENCES employees(id),
+        read_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
+      )
+    `);
+    database.exec(`
+      INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
+      SELECT id, event_id, user_id, read_at, source
+      FROM read_receipts_old
+    `);
+    database.exec('DROP TABLE read_receipts_old');
+    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user ON read_receipts(event_id, user_id)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_rr_user_id ON read_receipts(user_id)');
+    database.exec('COMMIT');
+  } catch (err) {
+    database.exec('ROLLBACK');
+    throw err;
   } finally {
     database.pragma('foreign_keys = ON');
   }
