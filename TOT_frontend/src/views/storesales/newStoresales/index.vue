@@ -36,7 +36,9 @@
       <div class="px-6 pt-12 pb-6">
         <div class="flex items-center justify-between mb-3 relative">
           <div class="flex items-center gap-3">
-            <h1 class="text-[32px] font-bold text-slate-900 tracking-tight">Hi, {{ profile.name }}</h1>
+            <h1 class="text-[32px] font-bold text-slate-900 tracking-tight"
+              >Hi, {{ profile.name }}</h1
+            >
             <div
               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#E8F3EC] border border-[#349658]/20 text-[#2A7A46] rounded-full shadow-sm"
             >
@@ -51,10 +53,14 @@
             >
               {{ profile.name.charAt(0).toUpperCase() }}
             </div>
-            
+
             <!-- 增加全屏透明遮罩，点击外部收起下拉菜单 -->
-            <div v-if="logoutMenuOpen" class="fixed inset-0 z-[60]" @click="logoutMenuOpen = false"></div>
-            
+            <div
+              v-if="logoutMenuOpen"
+              class="fixed inset-0 z-[60]"
+              @click="logoutMenuOpen = false"
+            ></div>
+
             <div
               v-show="logoutMenuOpen"
               class="absolute top-full right-0 mt-2 w-36 bg-white border border-slate-200 rounded-[1rem] shadow-[0_8px_30px_rgb(0,0,0,0.12)] p-1.5 z-[70] animate-in fade-in zoom-in-95 duration-200"
@@ -85,7 +91,9 @@
                 >最近截止：{{ formatShortDeadline(closestUrgentDeadline) }}</p
               >
             </div>
-            <div class="w-8 h-8 rounded-full bg-white/60 flex items-center justify-center shrink-0">
+            <div
+              class="relative w-8 h-8 rounded-full bg-white/60 flex items-center justify-center shrink-0 cursor-pointer"
+            >
               <i data-lucide="bell-ring" class="w-4 h-4 text-[#E25438] stroke-[2.5]"></i>
             </div>
           </div>
@@ -99,7 +107,12 @@
               task.status !== 'overdue' ? 'hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)]' : '',
             ]"
             @click="
-              task.type === 'single' ? handleDetail(task) : (task._expanded = !task._expanded)
+              task.type === 'single'
+                ? handleDetail(task)
+                : (() => {
+                    task._expanded = !task._expanded;
+                    if (task._expanded) startTaskIfPending(task);
+                  })()
             "
           >
             <template v-if="task.type === 'single'">
@@ -112,7 +125,7 @@
                     class="relative flex h-2.5 w-2.5"
                   >
                     <span
-                      class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 scale-150"
+                      class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
                       :style="{ backgroundColor: getStatusColor(task.status) }"
                     ></span>
                     <span
@@ -162,7 +175,7 @@
                 >
                 <button
                   class="flex items-center justify-center gap-1.5 px-6 min-h-[40px] rounded-full text-[14px] font-bold text-white bg-[#349658] shadow-[0_4px_12px_rgba(52,150,88,0.2)] hover:bg-[#2A7A46] hover:-translate-y-[1px] smooth-transition"
-                  @click.stop="handleLearn"
+                  @click.stop="handleLearn(task)"
                   >立即学习 <i data-lucide="arrow-right" class="w-4 h-4 stroke-[2.5]"></i
                 ></button>
               </div>
@@ -178,7 +191,7 @@
                     class="relative flex h-2.5 w-2.5"
                   >
                     <span
-                      class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 scale-150"
+                      class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
                       :style="{ backgroundColor: getStatusColor(task.status) }"
                     ></span>
                     <span
@@ -241,7 +254,7 @@
                   v-for="sub in task.subTasks"
                   :key="sub.id"
                   class="p-5 relative overflow-hidden rounded-[1rem] border smooth-transition bg-white/60 hover:bg-white hover:shadow-[0_4px_16px_rgba(0,0,0,0.03)]"
-                  @click.stop="handleDetail(sub, task.title)"
+                  @click.stop="handleDetail(sub, task.title, task.assignmentId)"
                 >
                   <div class="flex items-start gap-3">
                     <div class="mt-0.5">
@@ -300,7 +313,7 @@
                         class="flex justify-end mt-2 pt-3 border-t border-slate-100/60"
                       >
                         <button
-                          @click.stop="handleLearn"
+                          @click.stop="handleLearn(task, sub)"
                           class="flex items-center justify-center gap-1.5 px-5 min-h-[40px] rounded-full text-[13px] font-bold text-white bg-[#349658] shadow-[0_4px_12px_rgba(52,150,88,0.2)] hover:bg-[#2A7A46] hover:-translate-y-[1px] smooth-transition"
                           >立即学习
                           <i data-lucide="arrow-right" class="w-3.5 h-3.5 stroke-[2.5]"></i
@@ -562,7 +575,7 @@
   </div>
 </template>
 <script setup lang="ts">
-  import { ref, computed, onMounted, onUpdated } from 'vue';
+  import { ref, computed, onMounted, onUpdated, onUnmounted } from 'vue';
   import { useRouter } from 'vue-router';
   import { useUserStore } from '@/store/modules/user';
   import { PageEnum } from '@/enums/pageEnum';
@@ -599,151 +612,199 @@
     profile.value.storeName = '未分配门店';
   }
 
+  const showToastAlert = ref(false);
+  const toastMsg = ref('');
+  const pullDistance = ref(0);
+  const isRefreshing = ref(false);
+  let startY = 0;
+
+  const showToast = (msg) => {
+    toastMsg.value = msg;
+    showToastAlert.value = true;
+    setTimeout(() => {
+      showToastAlert.value = false;
+    }, 2000);
+  };
+
   // Here we can toggle empty vs non-empty by clearing `tasks`
-  const tasks = ref([
-    {
-      id: 't1',
-      type: 'single',
-      parentName: 'MacBook 培训',
-      title: 'MacBook 销售技巧起步异常',
-      deadline: addTime(20, 57),
-      status: 'urgent',
-      platformName: 'SmartSales',
-      passingScore: 80,
-      description: '针对近期反馈的 MacBook 销售初期引导阶段出现的共性问题进行专项强化培训。',
-    },
-    {
-      id: 't2',
-      type: 'single',
-      parentName: 'AirPods 培训',
-      title: '降噪模式对比讲解话术',
-      deadline: addTime(54, 0),
-      status: 'nudging',
-      platformName: 'MyPAL',
-      passingScore: 90,
-      description: 'AirPods Pro 2 与 AirPods Max 的主动降噪（ANC）及通透模式的对比演示标准流程。',
-    },
-    {
-      id: 'b1',
-      type: 'bundle',
-      parentName: 'NPI 专项认证',
-      title: 'Apple Vision Pro NPI 认证',
-      status: 'urgent',
-      subTasks: [
-        {
-          id: 's1',
-          title: 'Apple Vision Pro NPI 认证',
-          completed: true,
-          platformName: 'MyPAL',
-          description: '空间计算设备的入门级认证课程。',
-          passingScore: 85,
-          status: 'normal',
-        },
-        {
-          id: 's2',
-          title: 'Apple Vision Pro NPI 认证',
-          completed: false,
-          platformName: '直播培训',
-          description: '由区域资深专家主持的实操直播演示课。',
-          passingScore: 80,
-          status: 'urgent',
-          deadline: addTime(2, 30),
-        },
-        {
-          id: 's3',
-          title: 'Apple Vision Pro NPI 认证',
-          completed: false,
-          platformName: 'AI Coach',
-          description: '利用 AI 驱动的对话系统进行实战化的销售模拟训练。',
-          passingScore: 90,
-          status: 'nudging',
-          deadline: addTime(26, 15),
-        },
-      ],
-      _expanded: false,
-    },
-    {
-      id: 't3',
-      type: 'single',
-      parentName: 'Vision Pro 介绍',
-      title: '空间计算场景与客户沟通指南',
-      deadline: addTime(168, 0),
-      status: 'normal',
-      platformName: '直播培训',
-      passingScore: 80,
-      description: '如何将空间计算这一超前概念转化为客户可理解的生活场景。',
-    },
-    {
-      id: 't4',
-      type: 'single',
-      parentName: 'iPad Pro 培训',
-      title: 'iPad Pro (M4) 核心优势与话术对练',
-      deadline: addTime(48, 0),
-      publishedAt: '04-20 10:30',
-      status: 'new',
-      platformName: 'AI Coach',
-      passingScore: 80,
-      description: '全新的 iPad Pro (M4) 系列核心优势与对比话术对练。',
-    },
-  ]);
+  const tasks = ref<any[]>([]);
+  const overdueTasks = ref<any[]>([]);
+  const completedTasks = ref<any[]>([]);
 
-  const overdueTasks = ref([
-    {
-      id: 'o1',
-      parentName: 'AirPods 培训',
-      title: 'AirPods Pro 2 产品培训',
-      deadline: addTime(-2, 0),
-      status: 'overdue',
-      platformName: 'MyPAL',
-      description: '已过期的基础培训。',
-    },
-    {
-      id: 'o2',
-      parentName: '合规培训',
-      title: '客户隐私保护政策学习',
-      deadline: addTime(-26, 0),
-      status: 'overdue',
-      platformName: 'SmartSales',
-      description: '极度重要的合规课程。',
-    },
-    {
-      id: 'o3',
-      parentName: 'Watch 培训',
-      title: 'Apple Watch Ultra 2 功能介绍',
-      deadline: addTime(-50, 0),
-      status: 'overdue',
-      platformName: 'MyPAL',
-      description: '介绍了 S9 SiP 芯片、3000 尼特峰值亮度以及潜水探测等极限运动功能。',
-    },
-  ]);
+  let ws: WebSocket | null = null;
+  const setupWebSocket = () => {
+    const token = userStore.token;
+    if (!token) return;
 
-  const completedTasks = ref([
-    {
-      id: 'c1',
-      title: 'MacBook 销售技巧起步异常',
-      platformName: 'SmartSales',
-      completedAt: '今天 10:30',
-    },
-    { id: 'c2', title: '降噪模式对比讲解话术', platformName: 'MyPAL', completedAt: '今天 09:15' },
-    {
-      id: 'c3',
-      title: 'Apple Vision Pro NPI 认证',
-      platformName: 'MyPAL',
-      completedAt: '昨天 16:45',
-    },
-    {
-      id: 'c4',
-      title: '空间计算场景与客户沟通指南',
-      platformName: '直播培训',
-      completedAt: '昨天 14:20',
-    },
-    {
-      id: 'c5',
-      title: '你有一项新的学习任务',
-      platformName: 'AI Coach',
-      completedAt: '昨天 09:00',
-    },
-  ]);
+    const wsUrl = import.meta.env.VITE_GLOB_API_URL
+      ? `${import.meta.env.VITE_GLOB_API_URL.replace(/^http/, 'ws')}/ws?token=${token}`
+      : `${window.location.origin.replace(/^http/, 'ws')}/ws?token=${token}`;
+
+    ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        if (parsed.event === 'task_assigned') {
+          showToast('📬 你有新的培训任务');
+          fetchTasks();
+        } else if (parsed.event === 'task_updated') {
+          showToast('🔄 你的培训任务有更新');
+          fetchTasks();
+        } else if (parsed.event === 'task_deleted') {
+          showToast('🗑 你的某项培训任务已被撤销');
+          fetchTasks();
+        } else if (parsed.event === 'nudge_sent') {
+          showToast('🔔 收到来自总部的催办通知！');
+          fetchTasks();
+        }
+      } catch (e) {
+        console.error('Failed to parse WebSocket message', e);
+      }
+    };
+  };
+
+  const fetchTasks = async () => {
+    isRefreshing.value = true;
+    try {
+      const [tasksRes, assignRes]: [any, any] = await Promise.all([
+        Alova.Get('/tasks', { localCache: 0 }).send(),
+        Alova.Get('/assignments', { localCache: 0 }).send(),
+      ]);
+
+      const rawTasks = Array.isArray(tasksRes) ? tasksRes : tasksRes.data || [];
+      const assignData = assignRes.list || assignRes.data?.list || [];
+
+      const assignMap = new Map();
+      assignData.forEach((a: any) => assignMap.set(a.assignmentId || a.id, a));
+
+      const pendingArr: any[] = [];
+      const overdueArr: any[] = [];
+      const completedArr: any[] = [];
+
+      const nowTime = new Date().getTime();
+
+      rawTasks.forEach((t: any) => {
+        // Find assignment by searching assignment map using t.assignment.id or t.id
+        const assign =
+          assignMap.get(t.assignment?.id) ||
+          t.assignment ||
+          assignData.find((a: any) => a.taskId === t.id) ||
+          {};
+
+        // normalize date string for Safari compat
+        const safeDdlAt = (t.ddlAt || '').replace(/-/g, '/');
+        const ddlTime = new Date(safeDdlAt).getTime();
+
+        let status = 'normal';
+        let isOverdue = false;
+        let isCompleted = false;
+
+        if (assign.status === 'completed') {
+          status = 'completed';
+          isCompleted = true;
+        } else if (ddlTime < nowTime) {
+          status = 'overdue';
+          isOverdue = true;
+        } else if (ddlTime - nowTime < 24 * 60 * 60 * 1000) {
+          status = 'urgent';
+        } else if (assign.nudgeCount > 0) {
+          status = 'nudging';
+        } else if (!assign.startedAt) {
+          status = 'new';
+        }
+
+        const activePlatforms: string[] = [];
+        if (t.hasMypal) activePlatforms.push('MyPAL');
+        if (t.hasSmartSell) activePlatforms.push('SmartSell');
+        if (t.hasAiDemo) activePlatforms.push('AI Demo');
+        if (t.hasLiveBroadcast) activePlatforms.push('Live Broadcast');
+
+        const isBundle = activePlatforms.length > 1 || !!t.subTasksConfig;
+        const type = isBundle ? 'bundle' : 'single';
+
+        let platformName = activePlatforms.length === 1 ? activePlatforms[0] : '未知';
+        if (platformName === 'SmartSell') platformName = 'SmartSales';
+        if (platformName === 'AI Demo') platformName = 'AI Coach';
+        if (platformName === 'Live Broadcast') platformName = '直播培训';
+
+        let subTasks: any[] = [];
+        if (isBundle) {
+          subTasks = activePlatforms.map((plat: string, index: number) => {
+            let completed = false;
+            let sPlatformName = plat;
+            if (plat === 'MyPAL') completed = !!assign.mypalCompleted;
+            else if (plat === 'SmartSell') {
+              sPlatformName = 'SmartSales';
+              completed = !!assign.smartsellCompleted;
+            } else if (plat === 'AI Demo') {
+              sPlatformName = 'AI Coach';
+              completed = !!assign.aiDemoCompleted;
+            } else if (plat === 'Live Broadcast') {
+              sPlatformName = '直播培训';
+              completed = !!assign.liveBroadcastCompleted;
+            }
+
+            const desc =
+              t.subTasksConfig && t.subTasksConfig[plat] ? t.subTasksConfig[plat] : t.description;
+
+            return {
+              id: `s${index}`,
+              rawPlatform: plat,
+              title: t.title,
+              completed,
+              platformName: sPlatformName,
+              description: desc,
+              passingScore: t.passScore,
+              status: completed ? 'normal' : status,
+              deadline: t.ddlAt,
+            };
+          });
+        }
+
+        const taskItem = {
+          id: t.id,
+          assignmentId: assign.id || assign.assignmentId,
+          type,
+          parentName: isBundle ? '专项认证' : platformName + ' 培训',
+          title: t.title,
+          deadline: t.ddlAt,
+          publishedAt: t.createdAt,
+          status,
+          platformName,
+          passingScore: t.passScore,
+          description: t.description,
+          subTasks,
+          completedAt: assign.completedAt,
+        };
+
+        if (isCompleted) {
+          if (taskItem.completedAt) {
+            const d = new Date(taskItem.completedAt);
+            const m = d.getMonth() + 1;
+            const day = d.getDate();
+            const h = String(d.getHours()).padStart(2, '0');
+            const min = String(d.getMinutes()).padStart(2, '0');
+            taskItem.completedAt = `${m}月${day}日 ${h}:${min}`;
+          }
+          completedArr.push(taskItem);
+        } else if (isOverdue) {
+          overdueArr.push(taskItem);
+        } else {
+          pendingArr.push(taskItem);
+        }
+      });
+
+      tasks.value = pendingArr;
+      overdueTasks.value = overdueArr;
+      completedTasks.value = completedArr;
+    } catch (e) {
+      console.error('Failed to load tasks', e);
+      showToast('获取任务列表失败');
+    } finally {
+      isRefreshing.value = false;
+    }
+  };
 
   const showAllOverdue = ref(false);
   const sortedOverdueTasks = computed(() =>
@@ -761,20 +822,6 @@
   const selectedTask = ref(null);
   const scrollY = ref(0);
   const logoutMenuOpen = ref(false);
-
-  const showToastAlert = ref(false);
-  const toastMsg = ref('');
-  const pullDistance = ref(0);
-  const isRefreshing = ref(false);
-  let startY = 0;
-
-  const showToast = (msg) => {
-    toastMsg.value = msg;
-    showToastAlert.value = true;
-    setTimeout(() => {
-      showToastAlert.value = false;
-    }, 2000);
-  };
 
   const handleLogout = async () => {
     try {
@@ -812,6 +859,8 @@
   };
 
   onMounted(() => {
+    fetchTasks();
+    setupWebSocket();
     loadLucide();
     loadConfetti();
     timerId = setInterval(() => {
@@ -820,6 +869,12 @@
     window.addEventListener('scroll', () => {
       scrollY.value = window.scrollY;
     });
+  });
+
+  onUnmounted(() => {
+    if (ws) {
+      ws.close();
+    }
   });
 
   onUpdated(() => {
@@ -949,25 +1004,76 @@
     fire(0.2, { spread: 60, colors: ['#E25438', '#DF9D2A'] });
   };
 
-  const handleLearn = () => {
-    celebrate();
-    showToast('正在跳转到学习平台...');
+  const handleLearn = async (task: any, subTask?: any) => {
+    if (!task || !task.assignmentId) return;
 
-    // For demo, finish all tasks to show the other screen after 3 seconds
-    setTimeout(() => {
-      tasks.value = [];
-    }, 3000);
+    try {
+      let opType = 'start_task';
+      let platform = '';
+
+      if (task.status === 'new') {
+        // Just start the task
+        opType = 'start_task';
+      } else {
+        if (task.type === 'bundle' && subTask) {
+          opType = 'complete_platform';
+          platform = subTask.rawPlatform;
+        } else {
+          opType = 'complete_task';
+        }
+      }
+
+      await Alova.Put(`/assignments/${task.assignmentId}/status`, {
+        operationType: opType,
+        platform: platform,
+      }).send();
+
+      celebrate();
+      showToast('状态更新成功！');
+      fetchTasks();
+    } catch (e: any) {
+      console.error('Failed to update task status', e);
+      if (e?.response?.data?.message) {
+        showToast(e.response.data.message);
+      } else {
+        showToast('操作失败，请重试');
+      }
+    }
   };
 
-  const handleDetail = (task) => {
+  const startTaskIfPending = async (task: any) => {
+    if (task && task.status === 'new' && task.assignmentId) {
+      try {
+        await Alova.Put(`/assignments/${task.assignmentId}/status`, {
+          operationType: 'start_task',
+        }).send();
+        task.status = 'normal'; // Optimistically update local status so it doesn't fire again
+        fetchTasks();
+      } catch (e) {
+        // Ignore error
+      }
+    }
+  };
+
+  const handleDetail = (task: any, parentTitle?: string, parentAssignmentId?: string) => {
+    if (parentAssignmentId) {
+      // It's a subtask, we need the parent task object to check status
+      const parentTask =
+        tasks.value.find((t) => t.assignmentId === parentAssignmentId) ||
+        overdueTasks.value.find((t) => t.assignmentId === parentAssignmentId);
+      if (parentTask) startTaskIfPending(parentTask);
+    } else {
+      startTaskIfPending(task);
+    }
     selectedTask.value = task;
     detailModalOpen.value = true;
   };
 
   const finishTask = () => {
+    if (selectedTask.value) {
+      handleLearn(selectedTask.value);
+    }
     detailModalOpen.value = false;
-    celebrate();
-    showToast('即将跳转到学习平台');
   };
 
   const scrollToTop = () => {
@@ -992,41 +1098,10 @@
     if (pullDistance.value > 60 && !isRefreshing.value) {
       isRefreshing.value = true;
       pullDistance.value = 80;
-      setTimeout(() => {
-        isRefreshing.value = false;
+      fetchTasks().then(() => {
         pullDistance.value = 0;
         showToast('数据已更新');
-
-        // If tasks are empty, refill them to demo again
-        if (tasks.value.length === 0) {
-          tasks.value = [
-            {
-              id: 't1',
-              type: 'single',
-              parentName: 'MacBook 培训',
-              title: 'MacBook 销售技巧起步异常',
-              deadline: addTime(20, 57),
-              status: 'urgent',
-              platformName: 'SmartSales',
-              passingScore: 80,
-              description:
-                '针对近期反馈的 MacBook 销售初期引导阶段出现的共性问题进行专项强化培训。',
-            },
-            {
-              id: 't2',
-              type: 'single',
-              parentName: 'AirPods 培训',
-              title: '降噪模式对比讲解话术',
-              deadline: addTime(54, 0),
-              status: 'nudging',
-              platformName: 'MyPAL',
-              passingScore: 90,
-              description:
-                'AirPods Pro 2 与 AirPods Max 的主动降噪（ANC）及通透模式的对比演示标准流程。',
-            },
-          ];
-        }
-      }, 1500);
+      });
     } else {
       pullDistance.value = 0;
     }
@@ -1057,5 +1132,15 @@
   }
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+  @keyframes ping {
+    75%,
+    100% {
+      transform: scale(2.5);
+      opacity: 0;
+    }
+  }
+  .animate-ping {
+    animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
 </style>
