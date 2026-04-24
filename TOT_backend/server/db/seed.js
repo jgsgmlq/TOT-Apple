@@ -472,7 +472,7 @@ async function seed() {
     // 与 API 示例一致：下发任务默认带 auto_nudge_rules（含 deadlineCrisis），便于看板 / 自动预警联调
     const defaultAutoNudgeRules = JSON.stringify({
       progressLag: { lifestyle: 3, mono: 1 },
-      deadlineCrisis: { p0: 24, p1: 48, p2: 50 }: 50,
+      deadlineCrisis: { p0: 24, p1: 48, p2: 50 },
       deadlineCrisis: { p0: 24, p1: 48 },
     });
     for (const t of TASKS) {

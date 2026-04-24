@@ -154,14 +154,20 @@
       display: block;
       overflow-x: auto;
 
-      th, td {
+      th,
+      td {
         border: 1px solid #e5e7eb;
         padding: 8px 10px;
         text-align: left;
       }
     }
 
-    :deep(p) { margin: 8px 0; }
-    :deep(ul), :deep(ol) { padding-left: 20px; }
+    :deep(p) {
+      margin: 8px 0;
+    }
+    :deep(ul),
+    :deep(ol) {
+      padding-left: 20px;
+    }
   }
 </style>

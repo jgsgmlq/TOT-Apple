@@ -450,7 +450,7 @@
           >
             {{ currentWarnings[0].readStatus ? '去完成' : '查看任务详情' }}
           </n-button>
-          
+
           <n-button
             v-else
             type="primary"
@@ -775,9 +775,7 @@
         const prefix = ev.severity === 'red' ? '紧急预警' : '催办提醒';
         // 将任务名称与后端的具体预警原因拼接起来
         let rawContent = ev.content || nudgeCopyCache[ev.eventId];
-        let nudgeContent = rawContent
-          ? `${rawContent}`
-          : `【${taskTitle}】您有任务需要尽快处理。`;
+        let nudgeContent = rawContent ? `${rawContent}` : `【${taskTitle}】您有任务需要尽快处理。`;
 
         const severity = ev.severity === 'red' ? 'red' : 'yellow';
         return {
@@ -987,8 +985,8 @@
   };
 
   const handleWarningAction = () => {
-    const allRead = currentWarnings.value.every(w => w.readStatus);
-    
+    const allRead = currentWarnings.value.every((w) => w.readStatus);
+
     if (allRead) {
       handleGoToMiniProgram();
     } else {
@@ -996,9 +994,11 @@
       if (currentWarnings.value.length > 0) {
         const warning = currentWarnings.value[0];
         showWarningModal.value = false; // 关闭预警弹窗
-        
+
         // 从现有消息流中找出对应的真实任务卡片数据，获取 assignmentId
-        const realTaskMsg = waterfallMessages.value.find(m => m.type === 'task' && m.id === warning.taskId);
+        const realTaskMsg = waterfallMessages.value.find(
+          (m) => m.type === 'task' && m.id === warning.taskId
+        );
 
         // 构造一个临时的 msg 对象传给 handleViewTask (模拟点击真实任务卡片)
         const mockTaskMsg = {
@@ -1006,7 +1006,7 @@
           type: 'task', // 伪装成任务卡片点击
           isRead: realTaskMsg ? realTaskMsg.isRead : false,
           isCompleted: realTaskMsg ? realTaskMsg.isCompleted : false,
-          assignmentId: realTaskMsg ? realTaskMsg.assignmentId : undefined
+          assignmentId: realTaskMsg ? realTaskMsg.assignmentId : undefined,
         };
         handleViewTask(mockTaskMsg);
       }
@@ -1060,7 +1060,7 @@
     if (el && el.clientHeight > 0) {
       // 关键：判断是否有垂直滚动条
       const hasScrollbar = el.scrollHeight > el.clientHeight + 5;
-      
+
       if (!hasScrollbar) {
         // 如果没有滚动条（说明内容很短），不马上标记已读
         // 而是至少等待 7 秒（7000ms）后自动判定为已读

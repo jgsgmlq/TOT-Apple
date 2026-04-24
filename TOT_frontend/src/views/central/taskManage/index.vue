@@ -486,11 +486,11 @@
       message: '请至少选择一个学习平台',
       trigger: 'change',
     },
-    coverage: { 
-      required: true, 
-      type: 'array', 
-      message: '请选择覆盖范围', 
-      trigger: ['blur', 'change'] 
+    coverage: {
+      required: true,
+      type: 'array',
+      message: '请选择覆盖范围',
+      trigger: ['blur', 'change'],
     },
   };
 
@@ -614,7 +614,7 @@ ${userDesc}`;
     }
 
     const isAll = formValue.coverage.includes('全员') || formValue.coverage.length === 0;
-    
+
     // 过滤掉非 RTM 的特殊选项
     const rtmList = formValue.coverage.filter((c: string) => c !== '全员' && c !== '店长');
     const isGlobal = isAll || (formValue.coverage.includes('店长') && rtmList.length === 0);
@@ -751,19 +751,19 @@ ${userDesc}`;
   /* 自定义 n-select 多选标签样式 (极致简约 Apple 风格) */
   :deep(.n-base-selection-tag-wrapper) {
     .n-tag {
-      background-color:rgb(255, 255, 255) !important;
+      background-color: rgb(255, 255, 255) !important;
       border: none !important;
       border-radius: 6px !important;
       padding: 2px 10px !important;
       height: 28px !important;
-      color:rgb(8, 8, 8) !important;
+      color: rgb(8, 8, 8) !important;
       font-weight: 450 !important;
       font-size: 13px !important;
       transition: background-color 0.2s ease !important;
 
       .n-tag__close {
         font-size: 12px !important;
-        color:rgb(255, 255, 255) !important;
+        color: rgb(255, 255, 255) !important;
         margin-left: 4px !important;
         &:hover {
           color: #0071e3 !important; /* 悬停关闭按钮时变为红色反馈 */
@@ -772,7 +772,7 @@ ${userDesc}`;
       }
 
       &:hover {
-        background-color:rgb(247, 247, 247) !important;
+        background-color: rgb(247, 247, 247) !important;
       }
     }
   }

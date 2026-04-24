@@ -1,6 +1,6 @@
 export enum PageEnum {
   // 登录
-  BASE_LOGIN = '/employee/login',
+  BASE_LOGIN = '/storesales/login',
   BASE_LOGIN_NAME = 'Login',
   //重定向
   REDIRECT = '/redirect',

@@ -68,7 +68,11 @@
           </div>
         </div>
         <!-- 全屏主内容区时，Naive 弹层默认挂 body 会落在全屏层外；统一挂此节点 -->
-        <div id="layout-fullscreen-teleport" class="layout-fullscreen-teleport" aria-hidden="true" />
+        <div
+          id="layout-fullscreen-teleport"
+          class="layout-fullscreen-teleport"
+          aria-hidden="true"
+        ></div>
         <!--1.15废弃，没啥用，占用操作空间-->
         <!--        <NLayoutFooter v-if="getShowFooter">-->
         <!--          <PageFooter />-->

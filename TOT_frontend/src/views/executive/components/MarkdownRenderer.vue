@@ -8,9 +8,7 @@
           :class="{ 'is-rotating': streaming && !showThinking }"
           :component="showThinking ? DownOutlined : RightOutlined"
         />
-        <span class="reasoning-title">
-          已深度思考 {{ streaming ? '...' : '' }}
-        </span>
+        <span class="reasoning-title"> 已深度思考 {{ streaming ? '...' : '' }} </span>
       </div>
       <n-collapse-transition :show="showThinking">
         <div class="reasoning-content-wrapper">
@@ -56,7 +54,7 @@
 </template>
 
 <script lang="ts" setup>
-  import { ref, computed } from 'vue';
+  import { ref, computed, watch } from 'vue';
   import { DownOutlined, RightOutlined } from '@vicons/antd';
   // 注意：此处若未安装成功，可能会有编译错误，请手动运行 pnpm add markdown-it dompurify
   import MarkdownIt from 'markdown-it';
@@ -146,7 +144,8 @@
   .markdown-renderer {
     line-height: 1.7;
     word-break: break-word;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
+      Arial, sans-serif;
     color: #334155; /* Modern, softer dark gray for less eye strain */
 
     .reasoning-box {
@@ -177,14 +176,14 @@
         .reasoning-icon {
           font-size: 12px;
           transition: transform 0.2s ease;
-          
+
           &.is-rotating {
-             animation: softPulse 1.5s infinite alternate;
+            animation: softPulse 1.5s infinite alternate;
           }
         }
-        
+
         .reasoning-title {
-           letter-spacing: 0.3px;
+          letter-spacing: 0.3px;
         }
       }
 
@@ -212,23 +211,24 @@
       :deep(p) {
         margin-top: 0;
         margin-bottom: 1em;
-        
+
         &:last-child {
           margin-bottom: 0;
         }
       }
-      
+
       :deep(strong) {
         font-weight: 600;
         color: #0f172a; /* Darker bold text for contrast */
       }
 
       /* Lists */
-      :deep(ul), :deep(ol) {
+      :deep(ul),
+      :deep(ol) {
         margin-top: 0;
         margin-bottom: 1em;
         padding-left: 24px;
-        
+
         li {
           margin-bottom: 0.25em;
           &::marker {
@@ -245,7 +245,7 @@
         background: #f8fafc;
         border-left: 4px solid #e2e8f0;
         border-radius: 0 8px 8px 0;
-        
+
         p {
           margin-bottom: 0;
         }
@@ -253,14 +253,15 @@
 
       /* Inline Code & Code Blocks */
       :deep(code) {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+          'Courier New', monospace;
         font-size: 0.875em;
         padding: 0.2em 0.4em;
         background-color: #f1f5f9;
         color: #ef4444; /* Standard subtle red for inline code */
         border-radius: 4px;
       }
-      
+
       :deep(pre) {
         margin: 1em 0;
         padding: 16px;
@@ -268,7 +269,7 @@
         border: 1px solid #e2e8f0;
         border-radius: 8px;
         overflow-x: auto;
-        
+
         code {
           background-color: transparent;
           padding: 0;
@@ -287,12 +288,13 @@
         overflow: hidden;
         border: 1px solid #e2e8f0;
 
-        th, td {
+        th,
+        td {
           padding: 10px 16px;
           text-align: left;
           border-bottom: 1px solid #e2e8f0;
           border-right: 1px solid #e2e8f0;
-          
+
           &:last-child {
             border-right: none;
           }
@@ -307,11 +309,11 @@
           font-weight: 600;
           color: #1e293b;
         }
-        
+
         tbody tr {
           background-color: #ffffff;
           &:nth-child(even) {
-             background-color: #fcfcfd;
+            background-color: #fcfcfd;
           }
         }
       }
@@ -356,10 +358,10 @@
         border: 1px solid #e0f2fe;
         font-size: 13px;
         transition: all 0.2s ease;
-        
+
         &:hover {
-           background: #f0f9ff;
-           border-color: #bae6fd;
+          background: #f0f9ff;
+          border-color: #bae6fd;
         }
       }
     }
@@ -379,12 +381,21 @@
   }
 
   @keyframes smoothBlink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.1; }
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.1;
+    }
   }
-  
+
   @keyframes softPulse {
-     0% { opacity: 0.6; }
-     100% { opacity: 1; }
+    0% {
+      opacity: 0.6;
+    }
+    100% {
+      opacity: 1;
+    }
   }
 </style>

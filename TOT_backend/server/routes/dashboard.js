@@ -186,6 +186,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     );
     let warnP1 = 0;
     let warnP0 = 0;
+    let warnP2 = 0;
     for (const row of storeTaskRows) {
       if (!row.uncompleted_count) continue;
       const rules = parseAutoNudgeRules(row.auto_nudge_rules);
@@ -439,8 +440,8 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const { taskId, warningLevel, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
     const drill = parseStoreDrill(req.query);
 
-    if (warningLevel && !['p2', 'p1', 'p0'].includes(warningLevel)) {
-      throw createError(400, 'warningLevel 非法（p2/p1/p0）', 'DASH_003');
+    if (warningLevel && !['p2', 'p1', 'p0', 'startDelay'].includes(warningLevel)) {
+      throw createError(400, 'warningLevel 非法（p2/p1/p0/startDelay）', 'DASH_003');
     }
 
     const page  = Math.max(1, parseInt(pageNum,  10) || 1);

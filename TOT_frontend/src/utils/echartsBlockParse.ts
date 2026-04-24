@@ -158,7 +158,11 @@ export function normalizeToChartData(parsed: unknown): ChartData | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const o = parsed as Record<string, unknown>;
 
-  if (typeof o.type === 'string' && ALLOWED_TYPES.has(o.type as ChartData['type']) && Array.isArray(o.series)) {
+  if (
+    typeof o.type === 'string' &&
+    ALLOWED_TYPES.has(o.type as ChartData['type']) &&
+    Array.isArray(o.series)
+  ) {
     return o as ChartData;
   }
 
@@ -166,7 +170,8 @@ export function normalizeToChartData(parsed: unknown): ChartData | null {
 
   const first = o.series[0] as Record<string, unknown>;
   const seriesType = first?.type;
-  if (typeof seriesType !== 'string' || !ALLOWED_TYPES.has(seriesType as ChartData['type'])) return null;
+  if (typeof seriesType !== 'string' || !ALLOWED_TYPES.has(seriesType as ChartData['type']))
+    return null;
 
   const titleRaw = o.title;
   let title: string | undefined;

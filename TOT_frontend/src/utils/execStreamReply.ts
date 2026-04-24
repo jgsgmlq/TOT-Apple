@@ -22,10 +22,10 @@ export function normalizeStreamDelta(raw: unknown): { text?: string; phase?: str
     typeof o.text === 'string'
       ? o.text
       : typeof o.delta === 'string'
-        ? o.delta
-        : typeof o.content === 'string'
-          ? o.content
-          : '';
+      ? o.delta
+      : typeof o.content === 'string'
+      ? o.content
+      : '';
   const phase = typeof o.phase === 'string' ? o.phase : undefined;
   return { text, phase };
 }

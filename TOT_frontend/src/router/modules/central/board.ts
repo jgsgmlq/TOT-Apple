@@ -22,7 +22,7 @@ const routes: Array<RouteRecordRaw> = [
           title: '实时看板',
           keepAlive: true,
         },
-        component: () => import('@/views/central/board/index.vue'),
+        component: () => import('@/views/central/newBoard/index.vue'),
       },
     ],
   },
