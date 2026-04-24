@@ -197,7 +197,10 @@ export const streamRegenerateChatMessage = async (
  */
 export const regenerateChatMessage = (sessionId: string, messageId: string, stream?: boolean) => {
   if (stream) {
-    return Alova.Post<SendMessageResult>(`/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`, { stream });
+    return Alova.Post<SendMessageResult>(
+      `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`,
+      { stream }
+    );
   }
   return Alova.Post<SendMessageResult>(
     `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`

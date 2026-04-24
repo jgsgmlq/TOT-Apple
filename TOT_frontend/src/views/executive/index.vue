@@ -247,146 +247,128 @@
                       </n-collapse>
                     </div>
                     <div class="exec-structured">
-                    <p class="exec-overview">
-                      {{ msg.replyContent.overview }}
-                    </p>
+                      <p class="exec-overview">
+                        {{ msg.replyContent.overview }}
+                      </p>
 
-                    <div
-                      v-if="msg.replyContent.visualizations?.length"
-                      class="exec-charts"
-                      :class="{
-                        'exec-charts--multiple': msg.replyContent.visualizations.length > 1,
-                      }"
-                    >
-                      <AiChartRenderer
-                        v-for="(chart, ci) in msg.replyContent.visualizations"
-                        :key="ci"
-                        :data="chart"
-                        class="exec-chart-item"
-                      />
-                    </div>
-
-                    <div
-                      v-if="msg.replyContent.forecastDisclaimer"
-                      class="exec-disclaimer"
-                    >
-                      {{ msg.replyContent.forecastDisclaimer }}
-                    </div>
-
-                    <div
-                      v-if="msg.replyContent.statisticsProvenance"
-                      class="exec-provenance"
-                    >
-                      <n-collapse :default-expanded-names="[]">
-                        <n-collapse-item title="数据溯源与统计口径" name="prov">
-                          <div class="exec-prov-content">
-                            <div
-                              v-for="(val, key) in msg.replyContent.statisticsProvenance"
-                              :key="key"
-                              class="exec-prov-item"
-                            >
-                              <span class="prov-k">{{ key }}:</span>
-                              <span class="prov-v">{{ val }}</span>
-                            </div>
-                          </div>
-                        </n-collapse-item>
-                      </n-collapse>
-                    </div>
-
-                    <div
-                      v-if="msg.replyContent.keyNumbers?.length"
-                      class="exec-keynums"
-                    >
                       <div
-                        v-for="(kn, ki) in msg.replyContent.keyNumbers"
-                        :key="ki"
-                        class="exec-keynum-row"
+                        v-if="msg.replyContent.visualizations?.length"
+                        class="exec-charts"
+                        :class="{
+                          'exec-charts--multiple': msg.replyContent.visualizations.length > 1,
+                        }"
                       >
-                        <span class="exec-k-label">{{ kn.label }}</span>
-                        <span class="exec-k-value">{{ kn.value }}{{ kn.unit || '' }}</span>
+                        <AiChartRenderer
+                          v-for="(chart, ci) in msg.replyContent.visualizations"
+                          :key="ci"
+                          :data="chart"
+                          class="exec-chart-item"
+                        />
                       </div>
-                    </div>
-                    <ul
-                      v-if="msg.replyContent.attentionPoints?.length"
-                      class="exec-attn"
-                    >
-                      <li
-                        v-for="(ap, ai) in msg.replyContent.attentionPoints"
-                        :key="ai"
-                      >
-                        {{ ap }}
-                      </li>
-                    </ul>
-                    <div
-                      v-if="msg.replyContent.followUpSuggestions?.length"
-                      class="exec-follow"
-                    >
-                      <div class="exec-follow-title">💡 建议追问：</div>
-                      <div class="exec-follow-bubbles">
-                        <n-button
-                          v-for="(sug, si) in msg.replyContent.followUpSuggestions"
-                          :key="si"
-                          size="small"
-                          quaternary
-                          round
-                          class="exec-follow-chip"
-                          @click="fillComposerWithSuggestion(sug)"
+
+                      <div v-if="msg.replyContent.forecastDisclaimer" class="exec-disclaimer">
+                        {{ msg.replyContent.forecastDisclaimer }}
+                      </div>
+
+                      <div v-if="msg.replyContent.statisticsProvenance" class="exec-provenance">
+                        <n-collapse :default-expanded-names="[]">
+                          <n-collapse-item title="数据溯源与统计口径" name="prov">
+                            <div class="exec-prov-content">
+                              <div
+                                v-for="(val, key) in msg.replyContent.statisticsProvenance"
+                                :key="key"
+                                class="exec-prov-item"
+                              >
+                                <span class="prov-k">{{ key }}:</span>
+                                <span class="prov-v">{{ val }}</span>
+                              </div>
+                            </div>
+                          </n-collapse-item>
+                        </n-collapse>
+                      </div>
+
+                      <div v-if="msg.replyContent.keyNumbers?.length" class="exec-keynums">
+                        <div
+                          v-for="(kn, ki) in msg.replyContent.keyNumbers"
+                          :key="ki"
+                          class="exec-keynum-row"
                         >
-                          {{ sug }}
-                        </n-button>
+                          <span class="exec-k-label">{{ kn.label }}</span>
+                          <span class="exec-k-value">{{ kn.value }}{{ kn.unit || '' }}</span>
+                        </div>
                       </div>
-                    </div>
+                      <ul v-if="msg.replyContent.attentionPoints?.length" class="exec-attn">
+                        <li v-for="(ap, ai) in msg.replyContent.attentionPoints" :key="ai">
+                          {{ ap }}
+                        </li>
+                      </ul>
+                      <div v-if="msg.replyContent.followUpSuggestions?.length" class="exec-follow">
+                        <div class="exec-follow-title">💡 建议追问：</div>
+                        <div class="exec-follow-bubbles">
+                          <n-button
+                            v-for="(sug, si) in msg.replyContent.followUpSuggestions"
+                            :key="si"
+                            size="small"
+                            quaternary
+                            round
+                            class="exec-follow-chip"
+                            @click="fillComposerWithSuggestion(sug)"
+                          >
+                            {{ sug }}
+                          </n-button>
+                        </div>
+                      </div>
                     </div>
                   </template>
 
-                <!-- AI Feedback Actions -->
-                <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
-                  <n-space size="small" align="center">
-                    <n-button
-                      v-if="index === messages.length - 1"
-                      quaternary
-                      size="small"
-                      @click="handleRegenerate(msg, index)"
-                      :loading="msg.isRegenerating"
-                      :disabled="isSending"
-                      class="action-btn"
-                    >
-                      <template #icon>
-                        <SyncOutlined />
-                      </template>
-                      重新生成
-                    </n-button>
+                  <!-- AI Feedback Actions -->
+                  <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
+                    <n-space size="small" align="center">
+                      <n-button
+                        v-if="index === messages.length - 1"
+                        quaternary
+                        size="small"
+                        @click="handleRegenerate(msg, index)"
+                        :loading="msg.isRegenerating"
+                        :disabled="isSending"
+                        class="action-btn"
+                      >
+                        <template #icon>
+                          <SyncOutlined />
+                        </template>
+                        重新生成
+                      </n-button>
 
-                    <n-button
-                      quaternary
-                      size="small"
-                      @click="handleFeedback(msg, 'like')"
-                      :loading="msg.isFeedbackLoading"
-                      class="action-btn"
-                    >
-                      <template #icon>
-                        <LikeFilled v-if="msg.userFeedback === 'like'" style="color: #18a058" />
-                        <LikeOutlined v-else />
-                      </template>
-                    </n-button>
+                      <n-button
+                        quaternary
+                        size="small"
+                        @click="handleFeedback(msg, 'like')"
+                        :loading="msg.isFeedbackLoading"
+                        class="action-btn"
+                      >
+                        <template #icon>
+                          <LikeFilled v-if="msg.userFeedback === 'like'" style="color: #18a058" />
+                          <LikeOutlined v-else />
+                        </template>
+                      </n-button>
 
-                    <n-button
-                      quaternary
-                      size="small"
-                      @click="handleFeedback(msg, 'dislike')"
-                      :loading="msg.isFeedbackLoading"
-                      class="action-btn"
-                    >
-                      <template #icon>
-                        <DislikeFilled
-                          v-if="msg.userFeedback === 'dislike'"
-                          style="color: #d03050"
-                        />
-                        <DislikeOutlined v-else />
-                      </template>
-                    </n-button>
-                  </n-space>
-                </div>
+                      <n-button
+                        quaternary
+                        size="small"
+                        @click="handleFeedback(msg, 'dislike')"
+                        :loading="msg.isFeedbackLoading"
+                        class="action-btn"
+                      >
+                        <template #icon>
+                          <DislikeFilled
+                            v-if="msg.userFeedback === 'dislike'"
+                            style="color: #d03050"
+                          />
+                          <DislikeOutlined v-else />
+                        </template>
+                      </n-button>
+                    </n-space>
+                  </div>
                 </template>
               </div>
             </div>
@@ -411,12 +393,7 @@
             >
               发送
             </n-button>
-            <n-button
-              v-else
-              type="default"
-              @click="handleStop"
-              class="send-btn send-btn--stop"
-            >
+            <n-button v-else type="default" @click="handleStop" class="send-btn send-btn--stop">
               <template #icon>
                 <n-icon><StopOutlined /></n-icon>
               </template>
@@ -1068,7 +1045,7 @@
 
     msg.isRegenerating = true;
     isSending.value = true;
-    
+
     // Clear old content for stream replacement
     messages.value[index] = {
       ...msg,
@@ -1094,9 +1071,11 @@
           } else if (payload.type === 'done') {
             const data = payload.result!;
             const isMarkdown = !data.replyContent && !!data.markdownContent;
-            
+
             currentMsg.id = data.messageId;
-            currentMsg.content = isMarkdown ? data.markdownContent! : formatReplyContentText(data.replyContent);
+            currentMsg.content = isMarkdown
+              ? data.markdownContent!
+              : formatReplyContentText(data.replyContent);
             currentMsg.thinking = payload.thinking || undefined;
             currentMsg.done = true;
             currentMsg.replyContent = data.replyContent ?? null;

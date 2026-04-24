@@ -76,7 +76,9 @@ export function tryParseReplyContent(jsonRaw: string): ReplyContent | null {
     keyNumbers,
     attentionPoints,
     followUpSuggestions,
-    visualizationSummary: parsed.visualizationSummary ? String(parsed.visualizationSummary) : undefined,
+    visualizationSummary: parsed.visualizationSummary
+      ? String(parsed.visualizationSummary)
+      : undefined,
     visualizations: Array.isArray(parsed.visualizations) ? parsed.visualizations : undefined,
     statisticsProvenance: parsed.statisticsProvenance,
     forecastDisclaimer: parsed.forecastDisclaimer ? String(parsed.forecastDisclaimer) : undefined,
@@ -195,9 +197,7 @@ export function parseReplyContentProgressive(jsonRaw: string): ReplyContent | nu
 
   const overview = extractStringFieldLoose(t, 'overview');
   const keyNumObjs = extractCompleteObjectsInArray(t, 'keyNumbers');
-  const keyNumbers = keyNumObjs
-    .map(normalizeKeyNumber)
-    .filter((k) => k.label || k.value);
+  const keyNumbers = keyNumObjs.map(normalizeKeyNumber).filter((k) => k.label || k.value);
 
   const attentionPoints = extractStringArrayLoose(t, 'attentionPoints');
   const followUpSuggestions = extractStringArrayLoose(t, 'followUpSuggestions');

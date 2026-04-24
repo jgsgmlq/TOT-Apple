@@ -12,10 +12,7 @@
   import { onMounted, onBeforeUnmount, watch } from 'vue';
   import { useRoute } from 'vue-router';
   import { NDialogProvider, NNotificationProvider, NMessageProvider } from 'naive-ui';
-  import {
-    overlayTeleportTarget,
-    resolveOverlayTeleportTarget,
-  } from '@/utils/overlayTeleport';
+  import { overlayTeleportTarget, resolveOverlayTeleportTarget } from '@/utils/overlayTeleport';
 
   const route = useRoute();
 

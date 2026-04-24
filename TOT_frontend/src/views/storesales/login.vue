@@ -100,7 +100,7 @@
         }
         const role = userStore.getUserInfo?.role;
         if (role === 'employee') {
-          const redirect = (route.query.redirect as string) || '/employee';
+          const redirect = (route.query.redirect as string) || '/storesales';
           router.replace(decodeURIComponent(redirect));
           return;
         }

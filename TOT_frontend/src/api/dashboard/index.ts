@@ -55,8 +55,8 @@ export interface HeatmapRow {
 }
 
 /** GET /api/v1/dashboard/heatmap — 区域热力，含 avgCompletionTimeHours */
-export const getDashboardHeatmap = (params: { 
-  taskId: string; 
+export const getDashboardHeatmap = (params: {
+  taskId: string;
   rtmLevel?: string;
   rtm?: string;
   format?: string;

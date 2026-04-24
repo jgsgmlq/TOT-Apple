@@ -72,7 +72,7 @@ export function createRouterGuards(router: Router) {
   const asyncRouteStore = useAsyncRoute();
   router.beforeEach(async (to, from, next) => {
     storage.setPrefixFromPath(to.path);
-    // 跨应用导航时（例如从 /hq 切到 /employee），确保存储前缀切换后，Pinia 状态能同步最新缓存的数据
+    // 跨应用导航时（例如从 /hq 切到 /storesales），确保存储前缀切换后，Pinia 状态能同步最新缓存的数据
     userStore.setToken(storage.get(ACCESS_TOKEN) || '');
     userStore.setUserInfo(storage.get(CURRENT_USER) || {});
 
@@ -108,7 +108,7 @@ export function createRouterGuards(router: Router) {
 
     // 如果是通过特权入口进入：先静默登录成功再进中央面板，失败则留在 /hq?hqError=login
     if (
-      (isHqQuery && !to.path.startsWith('/employee') && !to.path.startsWith('/executive')) ||
+      (isHqQuery && !to.path.startsWith('/storesales') && !to.path.startsWith('/executive')) ||
       to.path === '/hq' ||
       to.path === '/hq/'
     ) {
@@ -142,7 +142,7 @@ export function createRouterGuards(router: Router) {
     }
 
     // 如果用户主动访问店员端，清除总部标记，避免冲突
-    if (to.path.startsWith('/employee') || to.path.startsWith('/executive')) {
+    if (to.path.startsWith('/storesales') || to.path.startsWith('/executive')) {
       sessionStorage.removeItem(HQ_ENTRY_KEY);
     }
 
@@ -152,7 +152,7 @@ export function createRouterGuards(router: Router) {
     // ------------------------------------------
     if (
       sessionStorage.getItem(HQ_ENTRY_KEY) === '1' &&
-      !to.path.startsWith('/employee') &&
+      !to.path.startsWith('/storesales') &&
       !to.path.startsWith('/executive')
     ) {
       if (!asyncRouteStore.getIsDynamicRouteAdded) {
@@ -172,7 +172,7 @@ export function createRouterGuards(router: Router) {
     // ------------------------------------------
     // 核心拦截区 2: 店员端逻辑
     // ------------------------------------------
-    if (to.path === '/employee/login') {
+    if (to.path === '/storesales/login') {
       if (token) {
         if (!userStore.info.role) {
           try {
@@ -184,7 +184,7 @@ export function createRouterGuards(router: Router) {
           }
         }
         if (userStore.info.role === 'employee') {
-          next('/employee');
+          next('/storesales');
           return;
         }
         // 如果带了非店员的token来访问店员登录页，清空并留在店员登录页
@@ -197,9 +197,9 @@ export function createRouterGuards(router: Router) {
       return;
     }
 
-    if (to.path.startsWith('/employee') && to.path !== '/employee/login') {
+    if (to.path.startsWith('/storesales') && to.path !== '/storesales/login') {
       if (!token) {
-        next({ path: '/employee/login', query: { redirect: to.fullPath } });
+        next({ path: '/storesales/login', query: { redirect: to.fullPath } });
         return;
       }
       if (!userStore.info.role) {
@@ -207,15 +207,15 @@ export function createRouterGuards(router: Router) {
           await userStore.getInfo();
         } catch {
           storage.clear();
-          next({ path: '/employee/login', query: { redirect: to.fullPath } });
+          next({ path: '/storesales/login', query: { redirect: to.fullPath } });
           return;
         }
       }
       if (userStore.info.role !== 'employee') {
-        // 如果总部的人强行访问 /employee，清除他的总部 token，让他重新登录店员账号
+        // 如果总部的人强行访问 /storesales，清除他的总部 token，让他重新登录店员账号
         storage.clear();
         userStore.setToken('');
-        next({ path: '/employee/login', replace: true });
+        next({ path: '/storesales/login', replace: true });
         return;
       }
       next();
@@ -301,7 +301,7 @@ export function createRouterGuards(router: Router) {
       }
 
       next({
-        path: '/employee/login',
+        path: '/storesales/login',
         replace: true,
         query: to.fullPath && to.fullPath !== '/' ? { redirect: to.fullPath } : undefined,
       });
@@ -311,9 +311,9 @@ export function createRouterGuards(router: Router) {
     // ------------------------------------------
     // 全局兜底
     // ------------------------------------------
-    if (userStore.info.role === 'employee' && !to.path.startsWith('/employee')) {
+    if (userStore.info.role === 'employee' && !to.path.startsWith('/storesales')) {
       // 员工试图越权访问非员工页面
-      next('/employee');
+      next('/storesales');
       return;
     }
 
@@ -332,7 +332,7 @@ export function createRouterGuards(router: Router) {
       userInfo = await userStore.getInfo();
     } catch {
       storage.clear();
-      let targetPath = '/employee/login';
+      let targetPath = '/storesales/login';
       if (to.path.startsWith('/central')) targetPath = '/hq';
       else if (to.path.startsWith('/executive')) targetPath = '/executive/login';
 

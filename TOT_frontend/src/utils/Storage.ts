@@ -17,7 +17,7 @@ export default class Storage {
   }
 
   private calculatePrefixFromPath(path: string) {
-    if (path.startsWith('/employee')) return 'EMP_';
+    if (path.startsWith('/storesales')) return 'EMP_';
     if (path.startsWith('/executive')) return 'EXEC_';
     return 'HQ_';
   }

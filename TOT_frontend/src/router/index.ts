@@ -17,7 +17,7 @@ function rootRedirect(to: RouteLocationNormalized) {
     return { path: '/hq', replace: true };
   }
   // 默认根路径跳去店员登录端
-  return { path: '/employee/login', replace: true };
+  return { path: '/storesales/login', replace: true };
 }
 
 const modules = import.meta.glob<IModuleType>('./modules/**/*.ts', { eager: true });
@@ -60,9 +60,9 @@ export const HqEntrySlashRedirect: RouteRecordRaw = {
 };
 
 export const EmployeeLoginRoute: RouteRecordRaw = {
-  path: '/employee/login',
+  path: '/storesales/login',
   name: 'EmployeeLogin',
-  component: () => import('@/views/employee/login.vue'),
+  component: () => import('@/views/storesales/newStoresales/login.vue'),
   meta: {
     title: '店员登录',
     ignoreAuth: true,
@@ -99,9 +99,9 @@ export const ExecutiveLoginRoute: RouteRecordRaw = {
 };
 
 export const EmployeeHomeRoute: RouteRecordRaw = {
-  path: '/employee',
+  path: '/storesales',
   name: 'EmployeeHome',
-  component: () => import('@/views/employee/index.vue'),
+  component: () => import('@/views/storesales/newStoresales/index.vue'),
   meta: {
     title: '店员工作台',
   },
@@ -110,7 +110,7 @@ export const EmployeeHomeRoute: RouteRecordRaw = {
 /** 旧书签 /login 跳转到店员登录 */
 export const LoginRedirectRoute: RouteRecordRaw = {
   path: '/login',
-  redirect: '/employee/login',
+  redirect: '/storesales/login',
 };
 
 //需要验证权限

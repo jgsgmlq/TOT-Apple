@@ -57,10 +57,23 @@
     if (isCartesian) {
       option.xAxis =
         type === 'scatter'
-          ? { type: 'value', splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } }, axisLine: { lineStyle: { color: '#cbd5e1' } } }
-          : { type: 'category', data: xAxis, axisLabel: { interval: 'auto', rotate: 30, color: '#64748b' }, axisLine: { lineStyle: { color: '#cbd5e1' } } };
+          ? {
+              type: 'value',
+              splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+              axisLine: { lineStyle: { color: '#cbd5e1' } },
+            }
+          : {
+              type: 'category',
+              data: xAxis,
+              axisLabel: { interval: 'auto', rotate: 30, color: '#64748b' },
+              axisLine: { lineStyle: { color: '#cbd5e1' } },
+            };
 
-      option.yAxis = { type: 'value', splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } }, axisLabel: { color: '#64748b' } };
+      option.yAxis = {
+        type: 'value',
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+        axisLabel: { color: '#64748b' },
+      };
     }
 
     const highlights = (props.data as any).highlights || [];
@@ -70,7 +83,7 @@
         name: s.name || '',
         type: ['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar', // fallback
         data: s.data || [],
-        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 } // Add rounded top corners to bars
+        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 }, // Add rounded top corners to bars
       };
 
       if (type === 'pie') {
@@ -93,7 +106,7 @@
         };
       } else if (type === 'bar') {
         // default uniform color for bars if no highlights
-         item.itemStyle.color = '#3b82f6';
+        item.itemStyle.color = '#3b82f6';
       }
 
       return item;
