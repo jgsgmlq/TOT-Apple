@@ -13,6 +13,33 @@
 
 
 
+
+    <script>
+      window.addEventListener('error', function(e) {
+        const div = document.createElement('div');
+        div.style.position = 'fixed';
+        div.style.top = '0';
+        div.style.left = '0';
+        div.style.zIndex = '99999';
+        div.style.background = 'red';
+        div.style.color = 'white';
+        div.style.padding = '20px';
+        div.innerHTML = e.message + '<br/>' + e.filename + ':' + e.lineno;
+        document.body.appendChild(div);
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        const div = document.createElement('div');
+        div.style.position = 'fixed';
+        div.style.top = '0';
+        div.style.left = '0';
+        div.style.zIndex = '99999';
+        div.style.background = 'orange';
+        div.style.color = 'white';
+        div.style.padding = '20px';
+        div.innerHTML = 'Unhandled Promise Rejection: ' + e.reason;
+        document.body.appendChild(div);
+      });
+    </script>
 </head>
 <body>
 <div id="appProvider" style="display: none"></div>

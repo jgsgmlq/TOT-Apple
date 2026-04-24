@@ -2,27 +2,19 @@
   import { ref, computed, watch, onMounted, nextTick, onUnmounted, defineComponent, h } from 'vue';
   import * as echarts from 'echarts';
   import { getTaskList } from '@/api/task';
-  import { getDashboardOverview, getDashboardWarnings } from '@/api/dashboard';
+  import {
+    getDashboardOverview,
+    getDashboardWarnings,
+    getDashboardTrend,
+    getDashboardHeatmap,
+    getDashboardAgentInsight,
+  } from '@/api/dashboard';
   import { marked } from 'marked';
   import { createDashboardChatSession, streamDashboardChatMessage } from '@/api/chat';
 
   // ================= Mock Data =================
-  const diagnosisData = ref<any[]>([
-    {
-      diagnosis_id: 'diag-004',
-      priority_rank: 4,
-      severity: 'green',
-      summary_text: '其余任务按计划推进中，无需关注',
-      related_task_id: null,
-      task_title: null,
-      related_region_id: null,
-      related_store_id: null,
-      suggested_action: null,
-      action_type: 'none',
-      action_status: 'pending',
-      generated_at: '2026-04-20T08:00:00Z',
-    },
-  ]);
+  const diagnosisData = ref<any[]>([]);
+  const isAgentLoading = ref(false);
 
   const allTasks = ref<any[]>([]);
 
@@ -47,1093 +39,90 @@
         if (!currentTaskId.value) {
           currentTaskId.value = allTasks.value[0].task_id;
         }
+      }
 
-        // 随机选取 3 个任务或现有所有任务作为异常卡片
-        const issueTasks = allTasks.value.slice(0, 3);
+      await loadAgentInsights();
 
-        const newDiag = issueTasks.map((t, index) => {
-          const isRed = index === 0;
-          const sev = isRed ? 'red' : 'yellow';
-          return {
-            diagnosis_id: `diag-auto-${t.task_id}`,
-            priority_rank: index + 1,
-            severity: sev,
-            summary_text: isRed
-              ? `${t.task_title} 进度严重滞后，大量区域触达后未学习`
-              : `${t.task_title} 存在转化异常，请重点跟进`,
-            related_task_id: t.task_id,
-            task_title: t.task_title,
-            related_region_id: null,
-            related_store_id: null,
-            suggested_action: isRed ? '建议对未读门店发起批量催办' : '建议检查门店人员配置',
-            action_type: isRed ? 'escalate' : 'remind',
-            action_status: 'pending',
-            generated_at: new Date().toISOString(),
-          };
-        });
-
-        const restCount = Math.max(0, allTasks.value.length - issueTasks.length);
-        newDiag.push({
-          diagnosis_id: 'diag-ok',
-          priority_rank: 99,
-          severity: 'green',
-          summary_text: `其余 ${restCount} 个任务按计划推进中，无需关注`,
-          related_task_id: null,
-          task_title: null,
-          related_region_id: null,
-          related_store_id: null,
-          suggested_action: null,
-          action_type: 'none',
-          action_status: 'pending',
-          generated_at: new Date().toISOString(),
-        });
-
-        diagnosisData.value = newDiag;
+      if (allTasks.value.length > 0 && !currentTaskId.value) {
+        const topTask = diagnosisData.value?.find(
+          (d) => d.severity === 'red' || d.severity === 'yellow'
+        );
+        if (topTask && topTask.related_task_id) {
+          currentTaskId.value = topTask.related_task_id;
+          isAutoCollapsed.value = true;
+        } else {
+          currentTaskId.value = allTasks.value[0].task_id;
+          isAutoCollapsed.value = true;
+        }
       }
     } catch (err) {
       console.error('获取任务列表失败', err);
     }
   };
 
-  const funnelDataByTask = {
-    'task-macbook': {
-      task_id: 'task-macbook',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 19847 },
-        { stage: 'delivered', label: '送达', count: 18458 },
-        { stage: 'read', label: '已读', count: 16200 },
-        { stage: 'in_progress', label: '学习中', count: 12890 },
-        { stage: 'completed', label: '已完成', count: 10520 },
-      ],
-      worst_drop: { from_stage: 'read', to_stage: 'in_progress' },
-      completion_rate: 0.06,
-      completion_rate_delta: 0.023,
-      confirmation_rate: 0.878,
-      hours_remaining: 48,
-    },
-    'task-mano': {
-      task_id: 'task-mano',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 15200 },
-        { stage: 'delivered', label: '送达', count: 14500 },
-        { stage: 'read', label: '已读', count: 13800 },
-        { stage: 'in_progress', label: '学习中', count: 8900 },
-        { stage: 'completed', label: '已完成', count: 6200 },
-      ],
-      worst_drop: { from_stage: 'read', to_stage: 'in_progress' },
-      completion_rate: 0.34,
-      completion_rate_delta: -0.01,
-      confirmation_rate: 0.951,
-      hours_remaining: 504,
-    },
-    'task-iphone17': {
-      task_id: 'task-iphone17',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 22000 },
-        { stage: 'delivered', label: '送达', count: 20900 },
-        { stage: 'read', label: '已读', count: 12749 },
-        { stage: 'in_progress', label: '学习中', count: 10500 },
-        { stage: 'completed', label: '已完成', count: 9200 },
-      ],
-      worst_drop: { from_stage: 'delivered', to_stage: 'read' },
-      completion_rate: 0.4,
-      completion_rate_delta: 0.05,
-      confirmation_rate: 0.61,
-      hours_remaining: 744,
-    },
-    'task-ipad': {
-      task_id: 'task-ipad',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 12000 },
-        { stage: 'delivered', label: '送达', count: 11800 },
-        { stage: 'read', label: '已读', count: 11000 },
-        { stage: 'in_progress', label: '学习中', count: 9500 },
-        { stage: 'completed', label: '已完成', count: 8640 },
-      ],
-      worst_drop: { from_stage: 'read', to_stage: 'in_progress' },
-      completion_rate: 0.72,
-      completion_rate_delta: 0.05,
-      confirmation_rate: 0.93,
-      hours_remaining: 120,
-    },
-    'task-watch': {
-      task_id: 'task-watch',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 8000 },
-        { stage: 'delivered', label: '送达', count: 7900 },
-        { stage: 'read', label: '已读', count: 7800 },
-        { stage: 'in_progress', label: '学习中', count: 7000 },
-        { stage: 'completed', label: '已完成', count: 6800 },
-      ],
-      worst_drop: { from_stage: 'pushed', to_stage: 'delivered' },
-      completion_rate: 0.85,
-      completion_rate_delta: 0.08,
-      confirmation_rate: 0.98,
-      hours_remaining: 96,
-    },
-    'task-airpods': {
-      task_id: 'task-airpods',
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 15000 },
-        { stage: 'delivered', label: '送达', count: 14800 },
-        { stage: 'read', label: '已读', count: 13000 },
-        { stage: 'in_progress', label: '学习中', count: 10000 },
-        { stage: 'completed', label: '已完成', count: 9150 },
-      ],
-      worst_drop: { from_stage: 'read', to_stage: 'in_progress' },
-      completion_rate: 0.61,
-      completion_rate_delta: 0.04,
-      confirmation_rate: 0.87,
-      hours_remaining: 120,
-    },
-  };
+  const loadAgentInsights = async () => {
+    isAgentLoading.value = true;
+    try {
+      const agentRes = await getDashboardAgentInsight().send();
+      if (agentRes && agentRes.topTasks) {
+        const newDiag = agentRes.topTasks.map((t: any, index: number) => {
+          let sev = 'green';
+          if (t.severity === 'red') sev = 'red';
+          if (t.severity === 'orange') sev = 'yellow';
 
-  const regionRankingByTask = {
-    'task-macbook': {
-      regions: [
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 5000,
-          completed_count: 4200,
-          completion_rate: 0.84,
-          avg_time: '1.2h',
-          children: [
-            {
-              region_id: 'rtm4-mono',
-              region_name: 'MONO',
-              employee_count: 5000,
-              completed_count: 4200,
-              completion_rate: 0.84,
-              avg_time: '1.2h',
-              children: [
-                {
-                  region_id: 'dlr-ds',
-                  region_name: '鼎盛科技',
-                  employee_count: 3000,
-                  completed_count: 2700,
-                  completion_rate: 0.9,
-                  avg_time: '1.0h',
-                  children: [
-                    {
-                      region_id: 'st-bj',
-                      region_name: '北京国贸店',
-                      employee_count: 15,
-                      completed_count: 15,
-                      completion_rate: 1.0,
-                      avg_time: '0.8h',
-                    },
-                    {
-                      region_id: 'st-sh',
-                      region_name: '上海七宝店',
-                      employee_count: 20,
-                      completed_count: 18,
-                      completion_rate: 0.9,
-                      avg_time: '1.1h',
-                    },
-                  ],
-                },
-                {
-                  region_id: 'dlr-xs',
-                  region_name: '新时代电子',
-                  employee_count: 2000,
-                  completed_count: 1500,
-                  completion_rate: 0.75,
-                  avg_time: '1.5h',
-                  children: [
-                    {
-                      region_id: 'st-gz',
-                      region_name: '广州天环广场店',
-                      employee_count: 25,
-                      completed_count: 18,
-                      completion_rate: 0.72,
-                      avg_time: '1.6h',
-                    },
-                    {
-                      region_id: 'st-sz',
-                      region_name: '深圳万象城店',
-                      employee_count: 18,
-                      completed_count: 14,
-                      completion_rate: 0.77,
-                      avg_time: '1.4h',
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 8000,
-          completed_count: 5200,
-          completion_rate: 0.65,
-          avg_time: '1.8h',
-          children: [
-            {
-              region_id: 'rtm4-ls',
-              region_name: 'Lifestyle',
-              employee_count: 4000,
-              completed_count: 3200,
-              completion_rate: 0.8,
-              avg_time: '1.5h',
-            },
-            {
-              region_id: 'rtm4-mm',
-              region_name: 'Mass Merchant',
-              employee_count: 4000,
-              completed_count: 2000,
-              completion_rate: 0.5,
-              avg_time: '2.1h',
-            },
-          ],
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 1500,
-          completed_count: 600,
-          completion_rate: 0.4,
-          avg_time: '2.5h',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 20,
-          completed_count: 0,
-          completion_rate: 0.0,
-          avg_time: '-',
-          children: [
-            {
-              region_id: 'rtm4-cmm',
-              region_name: 'Mass Merchant',
-              employee_count: 20,
-              completed_count: 0,
-              completion_rate: 0.0,
-              avg_time: '-',
-            },
-          ],
-        },
-      ],
-    },
-    'task-mano': {
-      regions: [
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 6000,
-          completed_count: 4800,
-          completion_rate: 0.8,
-          avg_time: '45m',
-        },
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 4500,
-          completed_count: 3150,
-          completion_rate: 0.7,
-          avg_time: '50m',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 3000,
-          completed_count: 1200,
-          completion_rate: 0.4,
-          avg_time: '1.5h',
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 1500,
-          completed_count: 150,
-          completion_rate: 0.1,
-          avg_time: '3.2h',
-        },
-      ],
-    },
-    'task-iphone17': {
-      regions: [
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 7000,
-          completed_count: 5950,
-          completion_rate: 0.85,
-          avg_time: '30m',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 4000,
-          completed_count: 3080,
-          completion_rate: 0.77,
-          avg_time: '35m',
-        },
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 9000,
-          completed_count: 4500,
-          completion_rate: 0.5,
-          avg_time: '1.2h',
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 2000,
-          completed_count: 200,
-          completion_rate: 0.1,
-          avg_time: '4.5h',
-        },
-      ],
-    },
-    'task-ipad': {
-      regions: [
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 4000,
-          completed_count: 3200,
-          completion_rate: 0.8,
-          avg_time: '40m',
-        },
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 5000,
-          completed_count: 3600,
-          completion_rate: 0.72,
-          avg_time: '45m',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 2000,
-          completed_count: 1300,
-          completion_rate: 0.65,
-          avg_time: '50m',
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 1000,
-          completed_count: 540,
-          completion_rate: 0.54,
-          avg_time: '1.1h',
-        },
-      ],
-    },
-    'task-watch': {
-      regions: [
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 3000,
-          completed_count: 2700,
-          completion_rate: 0.9,
-          avg_time: '25m',
-        },
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 3000,
-          completed_count: 2550,
-          completion_rate: 0.85,
-          avg_time: '30m',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 1500,
-          completed_count: 1200,
-          completion_rate: 0.8,
-          avg_time: '35m',
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 500,
-          completed_count: 350,
-          completion_rate: 0.7,
-          avg_time: '40m',
-        },
-      ],
-    },
-    'task-airpods': {
-      regions: [
-        {
-          region_id: 'rtm-multibrand',
-          region_name: 'Multibrand',
-          employee_count: 6000,
-          completed_count: 4200,
-          completion_rate: 0.7,
-          avg_time: '35m',
-        },
-        {
-          region_id: 'rtm-monobrand',
-          region_name: 'Monobrand',
-          employee_count: 4000,
-          completed_count: 2600,
-          completion_rate: 0.65,
-          avg_time: '30m',
-        },
-        {
-          region_id: 'rtm-carrier',
-          region_name: 'Carrier',
-          employee_count: 3000,
-          completed_count: 1650,
-          completion_rate: 0.55,
-          avg_time: '40m',
-        },
-        {
-          region_id: 'rtm-education',
-          region_name: 'Education',
-          employee_count: 2000,
-          completed_count: 700,
-          completion_rate: 0.35,
-          avg_time: '55m',
-        },
-      ],
-    },
-  };
+          let actionText = '查看明细';
+          if (sev === 'red') {
+            if (t.focusModule === 'funnel_alerts') actionText = '紧急干预流失';
+            else if (t.focusModule === 'completion_daily') actionText = '追赶执行进度';
+            else actionText = '立即介入风险';
+          } else if (sev === 'yellow') {
+            if (t.focusModule === 'funnel_alerts') actionText = '分析流失卡点';
+            else if (t.focusModule === 'north_star') actionText = '洞察核心瓶颈';
+            else actionText = '洞察数据异动';
+          }
 
-  const alertSummaryByTask = {
-    'task-macbook': {
-      p0_count: 5,
-      p1_count: 5,
-      p2_count: 4,
-      p0_breakdown: [{ category: '临期严重滞后', count: 5 }],
-      p1_breakdown: [{ category: '进度落后区域均值', count: 5 }],
-      p2_breakdown: [{ category: '起步转化异常', count: 4 }],
-    },
-    'task-mano': {
-      p0_count: 2,
-      p1_count: 2,
-      p2_count: 2,
-      p0_breakdown: [{ category: '距离截止 < 24h', count: 2 }],
-      p1_breakdown: [{ category: '进度落后计划', count: 2 }],
-      p2_breakdown: [{ category: '起步阶段低迷', count: 2 }],
-    },
-    'task-iphone17': {
-      p0_count: 2,
-      p1_count: 1,
-      p2_count: 1,
-      p0_breakdown: [{ category: '新品培训滞后', count: 2 }],
-      p1_breakdown: [{ category: '进度大幅落后', count: 1 }],
-      p2_breakdown: [{ category: '确认后未转化', count: 1 }],
-    },
-    'task-ipad': {
-      p0_count: 0,
-      p1_count: 1,
-      p2_count: 1,
-      p0_breakdown: [],
-      p1_breakdown: [{ category: '周推进度滞后', count: 1 }],
-      p2_breakdown: [{ category: '转化率异常', count: 1 }],
-    },
-    'task-watch': {
-      p0_count: 0,
-      p1_count: 0,
-      p2_count: 1,
-      p0_breakdown: [],
-      p1_breakdown: [],
-      p2_breakdown: [{ category: '旗舰店活跃度低', count: 1 }],
-    },
-    'task-airpods': {
-      p0_count: 1,
-      p1_count: 1,
-      p2_count: 0,
-      p0_breakdown: [{ category: '临期未读危机', count: 1 }],
-      p1_breakdown: [{ category: '进度明显落后', count: 1 }],
-      p2_breakdown: [],
-    },
-  };
+          return {
+            diagnosis_id: `diag-auto-${t.taskId}`,
+            priority_rank: index + 1,
+            severity: sev,
+            summary_text: t.insight || `${t.title} 存在异常，请关注`,
+            related_task_id: t.taskId,
+            task_title: t.title,
+            related_region_id: null,
+            related_store_id: null,
+            suggested_action: actionText,
+            action_type: sev === 'red' ? 'escalate' : 'remind',
+            action_status: 'pending',
+            generated_at: agentRes.generatedAt || new Date().toISOString(),
+          };
+        });
 
-  const generateTrendData = () => {
-    const tasks = [
-      'task-macbook',
-      'task-mano',
-      'task-iphone17',
-      'task-ipad',
-      'task-watch',
-      'task-airpods',
-    ];
-    const baseCounts = [8931, 5168, 8800, 8640, 6800, 9150];
-    const data: any = {};
-
-    tasks.forEach((t, i) => {
-      let base = baseCounts[i];
-      data[t] = {
-        daily: {
-          '04.14 - 04.20': [
-            {
-              time: '04-14',
-              increment: Math.round(base * 0.05),
-              cumulative: Math.round(base * 0.05),
-            },
-            {
-              time: '04-15',
-              increment: Math.round(base * 0.1),
-              cumulative: Math.round(base * 0.15),
-            },
-            {
-              time: '04-16',
-              increment: Math.round(base * 0.2),
-              cumulative: Math.round(base * 0.35),
-            },
-            {
-              time: '04-17',
-              increment: Math.round(base * 0.3),
-              cumulative: Math.round(base * 0.65),
-            },
-            {
-              time: '04-18',
-              increment: Math.round(base * 0.2),
-              cumulative: Math.round(base * 0.85),
-            },
-            {
-              time: '04-19',
-              increment: Math.round(base * 0.1),
-              cumulative: Math.round(base * 0.95),
-            },
-            { time: '04-20', increment: Math.round(base * 0.05), cumulative: base },
-          ],
-          '04.07 - 04.13': [
-            {
-              time: '04-07',
-              increment: Math.round(base * 0.01),
-              cumulative: Math.round(base * 0.01),
-            },
-            {
-              time: '04-08',
-              increment: Math.round(base * 0.02),
-              cumulative: Math.round(base * 0.03),
-            },
-            {
-              time: '04-09',
-              increment: Math.round(base * 0.04),
-              cumulative: Math.round(base * 0.07),
-            },
-            {
-              time: '04-10',
-              increment: Math.round(base * 0.05),
-              cumulative: Math.round(base * 0.12),
-            },
-            {
-              time: '04-11',
-              increment: Math.round(base * 0.06),
-              cumulative: Math.round(base * 0.18),
-            },
-            {
-              time: '04-12',
-              increment: Math.round(base * 0.03),
-              cumulative: Math.round(base * 0.21),
-            },
-            {
-              time: '04-13',
-              increment: Math.round(base * 0.02),
-              cumulative: Math.round(base * 0.23),
-            },
-          ],
-        },
-        hourly: {
-          '2026-04-20': [
-            { time: '09:00', increment: 120, cumulative: base - 1000 },
-            { time: '10:00', increment: 250, cumulative: base - 750 },
-            { time: '11:00', increment: 400, cumulative: base - 350 },
-            { time: '12:00', increment: 100, cumulative: base - 250 },
-            { time: '14:00', increment: 150, cumulative: base - 100 },
-            { time: '15:00', increment: 100, cumulative: base },
-          ],
-          '2026-04-19': [
-            { time: '09:00', increment: 50, cumulative: base - 1200 },
-            { time: '10:00', increment: 120, cumulative: base - 1080 },
-            { time: '11:00', increment: 80, cumulative: base - 1000 },
-          ],
-        },
-      };
-    });
-    return data;
-  };
-  const trendDataByTask = generateTrendData();
-
-  const alertFunnelByTask = {
-    'task-macbook': [
-      { stage: 'P2', label: 'P2', count: 850 },
-      { stage: 'P1', label: 'P1', count: 480 },
-      { stage: 'P0', label: 'P0', count: 210 },
-      { stage: 'Unfinished', label: '未完成', count: 120 },
-    ],
-    'task-mano': [
-      { stage: 'P2', label: 'P2', count: 600 },
-      { stage: 'P1', label: 'P1', count: 240 },
-      { stage: 'P0', label: 'P0', count: 95 },
-      { stage: 'Unfinished', label: '未完成', count: 45 },
-    ],
-    'task-iphone17': [
-      { stage: 'P2', label: 'P2', count: 1200 },
-      { stage: 'P1', label: 'P1', count: 650 },
-      { stage: 'P0', label: 'P0', count: 280 },
-      { stage: 'Unfinished', label: '未完成', count: 150 },
-    ],
-    'task-ipad': [
-      { stage: 'P2', label: 'P2', count: 400 },
-      { stage: 'P1', label: 'P1', count: 120 },
-      { stage: 'P0', label: 'P0', count: 35 },
-      { stage: 'Unfinished', label: '未完成', count: 12 },
-    ],
-    'task-watch': [
-      { stage: 'P2', label: 'P2', count: 200 },
-      { stage: 'P1', label: 'P1', count: 45 },
-      { stage: 'P0', label: 'P0', count: 15 },
-      { stage: 'Unfinished', label: '未完成', count: 4 },
-    ],
-    'task-airpods': [
-      { stage: 'P2', label: 'P2', count: 550 },
-      { stage: 'P1', label: 'P1', count: 180 },
-      { stage: 'P0', label: 'P0', count: 65 },
-      { stage: 'Unfinished', label: '未完成', count: 28 },
-    ],
-  };
-
-  const alertsByTask = {
-    'task-macbook': {
-      total: 47,
-      alerts: [
-        {
-          alert_id: 'alert-001',
-          level: 'P0',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '鼎盛科技',
-          store: '北京国贸店',
-          description: '距截止 < 24h，完成进度严重滞后',
-          related_entity: '北京国贸店',
-          triggered_at: '2026-04-20T10:30:00Z',
-          total_employees: 25,
-          completed_count: 3,
-          risk_rate: 0.88,
-        },
-        {
-          alert_id: 'alert-005',
-          level: 'P0',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '华联商贸',
-          store: '上海南京东路店',
-          description: '完成率为 4.5%，面临交付风险',
-          related_entity: '上海南京东路店',
-          triggered_at: '2026-04-20T08:00:00Z',
-          total_employees: 22,
-          completed_count: 1,
-          risk_rate: 0.955,
-        },
-        {
-          alert_id: 'alert-006',
-          level: 'P0',
-          rtm3: 'Multibrand',
-          rtm4: 'Lifestyle',
-          dealer: '盛达通讯',
-          store: '深圳万象天地店',
-          description: '完成率 15.8%，进度远低于区域均值',
-          related_entity: '深圳万象天地店',
-          triggered_at: '2026-04-20T09:15:00Z',
-          total_employees: 38,
-          completed_count: 6,
-          risk_rate: 0.842,
-        },
-        {
-          alert_id: 'alert-007',
-          level: 'P0',
-          rtm3: 'Multibrand',
-          rtm4: 'Lifestyle',
-          dealer: '新时代电子',
-          store: '广州天环广场店',
-          description: '关键岗位员工尚未开始学习',
-          related_entity: '广州天环广场店',
-          triggered_at: '2026-04-20T11:45:00Z',
-          total_employees: 15,
-          completed_count: 1,
-          risk_rate: 0.933,
-        },
-        {
-          alert_id: 'alert-008',
-          level: 'P0',
-          rtm3: 'Multibrand',
-          rtm4: 'Mass Merchant',
-          dealer: '鼎盛科技',
-          store: '杭州万象城店',
-          description: '最后 24 小时冲刺力度不足',
-          related_entity: '杭州万象城店',
-          triggered_at: '2026-04-20T14:20:00Z',
-          total_employees: 30,
-          completed_count: 2,
-          risk_rate: 0.933,
-        },
-        {
-          alert_id: 'alert-002',
-          level: 'P1',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '华联商贸',
-          store: '重庆时代广场店',
-          description: '距截止 < 48h，起步较晚',
-          related_entity: '重庆时代广场店',
-          triggered_at: '2026-04-19T09:15:00Z',
-          total_employees: 45,
-          completed_count: 12,
-          risk_rate: 0.733,
-        },
-        {
-          alert_id: 'alert-009',
-          level: 'P1',
-          rtm3: 'Multibrand',
-          rtm4: 'Lifestyle',
-          dealer: '盛达通讯',
-          store: '武汉恒隆广场店',
-          description: '完成率 28.5%，需加速推进',
-          related_entity: '武汉恒隆广场店',
-          triggered_at: '2026-04-19T10:30:00Z',
-          total_employees: 28,
-          completed_count: 8,
-          risk_rate: 0.714,
-        },
-        {
-          alert_id: 'alert-010',
-          level: 'P1',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '鼎盛科技',
-          store: '成都太古里店',
-          description: '进度落后大盘均值 15pp',
-          related_entity: '成都太古里店',
-          triggered_at: '2026-04-19T11:25:00Z',
-          total_employees: 40,
-          completed_count: 15,
-          risk_rate: 0.625,
-        },
-        {
-          alert_id: 'alert-011',
-          level: 'P1',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '新时代电子',
-          store: '重庆万象城店',
-          description: '周末活跃度低，进度停滞',
-          related_entity: '重庆万象城店',
-          triggered_at: '2026-04-19T13:10:00Z',
-          total_employees: 18,
-          completed_count: 6,
-          risk_rate: 0.667,
-        },
-        {
-          alert_id: 'alert-012',
-          level: 'P1',
-          rtm3: 'Multibrand',
-          rtm4: 'Mass Merchant',
-          dealer: '华联商贸',
-          store: '南京景枫中心店',
-          description: '触达确认率高但学习转化慢',
-          related_entity: '南京景枫中心店',
-          triggered_at: '2026-04-19T15:40:00Z',
-          total_employees: 25,
-          completed_count: 9,
-          risk_rate: 0.64,
-        },
-        {
-          alert_id: 'alert-003',
-          level: 'P2',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '新时代电子',
-          store: '清华大学体验店',
-          description: '时间过半，完成率 2.5%',
-          related_entity: '清华大学体验店',
-          triggered_at: '2026-04-19T14:20:00Z',
-          total_employees: 120,
-          completed_count: 3,
-          risk_rate: 0.975,
-        },
-        {
-          alert_id: 'alert-004',
-          level: 'P2',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '鼎盛科技',
-          store: '复旦大学服务中心',
-          description: '学习活跃人数占比不足 10%',
-          related_entity: '复旦大学服务中心',
-          triggered_at: '2026-04-19T11:00:00Z',
-          total_employees: 80,
-          completed_count: 5,
-          risk_rate: 0.938,
-        },
-        {
-          alert_id: 'alert-014',
-          level: 'P2',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '华联商贸',
-          store: '沈阳中街店',
-          description: '推送后 48h 未有实质进展',
-          related_entity: '沈阳中街店',
-          triggered_at: '2026-04-18T09:30:00Z',
-          total_employees: 55,
-          completed_count: 4,
-          risk_rate: 0.927,
-        },
-        {
-          alert_id: 'alert-015',
-          level: 'P2',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '盛达通讯',
-          store: '西安钟楼店',
-          description: '完成率 12.5%，落后预期',
-          related_entity: '西安钟楼店',
-          triggered_at: '2026-04-18T10:15:00Z',
-          total_employees: 32,
-          completed_count: 4,
-          risk_rate: 0.875,
-        },
-      ],
-    },
-    'task-mano': {
-      total: 23,
-      alerts: [
-        {
-          alert_id: 'alert-101',
-          level: 'P0',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '鼎盛科技',
-          store: '北京大学直营店',
-          description: '临期危机，完成率 12.4%',
-          related_entity: '北京大学直营店',
-          triggered_at: '2026-04-20T16:30:00Z',
-          total_employees: 42,
-          completed_count: 5,
-          risk_rate: 0.881,
-        },
-        {
-          alert_id: 'alert-104',
-          level: 'P0',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '华联商贸',
-          store: '华中科技大学门店',
-          description: '完成率 8.5%，需立即干预',
-          related_entity: '华中科技大学门店',
-          triggered_at: '2026-04-20T17:15:00Z',
-          total_employees: 35,
-          completed_count: 3,
-          risk_rate: 0.914,
-        },
-        {
-          alert_id: 'alert-102',
-          level: 'P1',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '新时代电子',
-          store: '成都春熙路店',
-          description: '完成率 34.2%，落后计划进度',
-          related_entity: '成都春熙路店',
-          triggered_at: '2026-04-19T12:00:00Z',
-          total_employees: 60,
-          completed_count: 20,
-          risk_rate: 0.667,
-        },
-        {
-          alert_id: 'alert-106',
-          level: 'P1',
-          rtm3: 'Multibrand',
-          rtm4: 'Lifestyle',
-          dealer: '鼎盛科技',
-          store: '上海环贸广场店',
-          description: '进度放缓，完成率 42.1%',
-          related_entity: '上海环贸广场店',
-          triggered_at: '2026-04-19T13:30:00Z',
-          total_employees: 48,
-          completed_count: 20,
-          risk_rate: 0.583,
-        },
-        {
-          alert_id: 'alert-103',
-          level: 'P2',
-          rtm3: 'Multibrand',
-          rtm4: 'Mass Merchant',
-          dealer: '盛达通讯',
-          store: '广州珠江新城店',
-          description: '起步异常，完成率 15.6%',
-          related_entity: '广州珠江新城店',
-          triggered_at: '2026-04-18T07:00:00Z',
-          total_employees: 32,
-          completed_count: 5,
-          risk_rate: 0.844,
-        },
-        {
-          alert_id: 'alert-108',
-          level: 'P2',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '新时代电子',
-          store: '北京三里屯店',
-          description: '时间过半，进度仅 20%',
-          related_entity: '北京三里屯店',
-          triggered_at: '2026-04-18T08:15:00Z',
-          total_employees: 25,
-          completed_count: 5,
-          risk_rate: 0.8,
-        },
-      ],
-    },
-    'task-iphone17': {
-      total: 18,
-      alerts: [
-        {
-          alert_id: 'alert-203',
-          level: 'P0',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '盛达通讯',
-          store: '杭州西湖店',
-          description: '新品培训危机，完成率 5.2%',
-          related_entity: '杭州西湖店',
-          triggered_at: '2026-04-20T10:00:00Z',
-          total_employees: 40,
-          completed_count: 2,
-          risk_rate: 0.95,
-        },
-        {
-          alert_id: 'alert-204',
-          level: 'P0',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '新时代电子',
-          store: '成都万象城店',
-          description: '完成率 10.5%，剩余时间不足',
-          related_entity: '成都万象城店',
-          triggered_at: '2026-04-20T11:15:00Z',
-          total_employees: 38,
-          completed_count: 4,
-          risk_rate: 0.895,
-        },
-        {
-          alert_id: 'alert-205',
-          level: 'P1',
-          rtm3: 'Multibrand',
-          rtm4: 'Mass Merchant',
-          dealer: '鼎盛科技',
-          store: '南京德基广场店',
-          description: '进度落后大盘，完成率 35.5%',
-          related_entity: '南京德基广场店',
-          triggered_at: '2026-04-19T14:30:00Z',
-          total_employees: 50,
-          completed_count: 18,
-          risk_rate: 0.64,
-        },
-        {
-          alert_id: 'alert-201',
-          level: 'P2',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '盛达通讯',
-          store: '广州正佳广场店',
-          description: '起步非常缓慢，完成率 8.2%',
-          related_entity: '广州正佳广场店',
-          triggered_at: '2026-04-19T18:00:00Z',
-          total_employees: 85,
-          completed_count: 7,
-          risk_rate: 0.918,
-        },
-      ],
-    },
-    'task-ipad': {
-      total: 3,
-      alerts: [
-        {
-          alert_id: 'alert-301',
-          level: 'P1',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '鼎盛科技',
-          store: '华北高校门店',
-          description: '完成率 42.8%，需在本周内拉齐进度',
-          related_entity: '华北高校门店',
-          triggered_at: '2026-04-20T10:00:00Z',
-          total_employees: 35,
-          completed_count: 15,
-          risk_rate: 0.571,
-        },
-        {
-          alert_id: 'alert-302',
-          level: 'P2',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '华联商贸',
-          store: '苏南区域店',
-          description: '学习转化率异常偏低',
-          related_entity: '苏南区域店',
-          triggered_at: '2026-04-19T14:30:00Z',
-          total_employees: 60,
-          completed_count: 12,
-          risk_rate: 0.8,
-        },
-      ],
-    },
-    'task-watch': {
-      total: 2,
-      alerts: [
-        {
-          alert_id: 'alert-401',
-          level: 'P2',
-          rtm3: 'Education',
-          rtm4: 'Campus',
-          dealer: '新时代电子',
-          store: '西北大区旗舰店',
-          description: '起步阶段活跃度不足，完成率 15.5%',
-          related_entity: '西北大区旗舰店',
-          triggered_at: '2026-04-18T09:00:00Z',
-          total_employees: 110,
-          completed_count: 17,
-          risk_rate: 0.845,
-        },
-      ],
-    },
-    'task-airpods': {
-      total: 3,
-      alerts: [
-        {
-          alert_id: 'alert-501',
-          level: 'P0',
-          rtm3: 'Carrier',
-          rtm4: 'Mass Merchant',
-          dealer: '华联商贸',
-          store: '华中中心店',
-          description: '临期危机，大批员工未阅读推送',
-          related_entity: '华中中心店',
-          triggered_at: '2026-04-20T11:00:00Z',
-          total_employees: 45,
-          completed_count: 8,
-          risk_rate: 0.822,
-        },
-        {
-          alert_id: 'alert-502',
-          level: 'P1',
-          rtm3: 'Monobrand',
-          rtm4: 'MONO',
-          dealer: '新时代电子',
-          store: '成都太古里店',
-          description: '进度落后区域均值 22pp',
-          related_entity: '成都太古里店',
-          triggered_at: '2026-04-19T16:00:00Z',
-          total_employees: 32,
-          completed_count: 12,
-          risk_rate: 0.625,
-        },
-      ],
-    },
+        if (
+          agentRes.greenCount > 0 ||
+          (agentRes.topTasks.length === 0 && allTasks.value.length > 0)
+        ) {
+          newDiag.push({
+            diagnosis_id: 'diag-ok',
+            priority_rank: 99,
+            severity: 'green',
+            summary_text: agentRes.overallSummary || `其余任务按计划推进中，无需关注`,
+            related_task_id: null,
+            task_title: null,
+            related_region_id: null,
+            related_store_id: null,
+            suggested_action: null,
+            action_type: 'none',
+            action_status: 'pending',
+            generated_at: agentRes.generatedAt || new Date().toISOString(),
+          });
+        }
+        diagnosisData.value = newDiag;
+      }
+    } catch (err) {
+      console.error('获取 Agent 洞察失败', err);
+    } finally {
+      isAgentLoading.value = false;
+    }
   };
 
   const getMockDrillData = (stageId: string, dimension: string, seed = '') => {
@@ -1214,7 +203,13 @@
       .sort((a, b) => b.rate - a.rate);
   };
 
+  const safeFormatRate = (rate: number, decimals = 0, suffix = '%') => {
+    if (rate === null || rate === undefined || isNaN(rate) || !isFinite(rate)) return '-';
+    return rate.toFixed(decimals) + suffix;
+  };
+
   // ================= Global State =================
+  const metricCompletionRateDelta = ref<number>(0);
   const currentTaskId = ref<string | null>(null);
   const isContentLoading = ref(false);
   const isDiagnosisCollapsed = ref(false);
@@ -1306,12 +301,83 @@
 
   const fetchOverview = async (taskId: string) => {
     try {
-      const data = await getDashboardOverview({ taskId }).send();
-      currentOverview.value = data;
+      const [overviewData, trendDataRes, trendHourlyRes] = await Promise.all([
+        getDashboardOverview({ taskId }).send(),
+        getDashboardTrend({ taskId, type: 'daily' })
+          .send()
+          .catch(() => null),
+        getDashboardTrend({ taskId, type: 'hourly' })
+          .send()
+          .catch(() => null),
+      ]);
+      currentOverview.value = overviewData;
 
-      // 如果想要动态计算漏斗数据也可以在这里覆盖，但这里主要覆盖指标区域
+      if (
+        trendDataRes &&
+        trendDataRes.trendData &&
+        trendDataRes.trendData.length > 0 &&
+        overviewData.totalAssignments > 0
+      ) {
+        const today = new Date();
+        const yest = new Date(today);
+        yest.setDate(yest.getDate() - 1);
+        const yestStr = yest.toISOString().split('T')[0];
+
+        let cumulativeYesterday = 0;
+        for (const point of trendDataRes.trendData) {
+          if (point.timeKey <= yestStr) {
+            cumulativeYesterday = point.cumulativeCompleted;
+          } else {
+            break;
+          }
+        }
+
+        const yesterdayRate = cumulativeYesterday / overviewData.totalAssignments;
+        const todayRate = overviewData.completionRate / 100;
+        metricCompletionRateDelta.value = todayRate - yesterdayRate;
+      } else {
+        metricCompletionRateDelta.value = 0;
+      }
+
+      const newTrend: any = { daily: { 所有时间段: [] }, hourly: { 今日走势: [] } };
+
+      if (trendDataRes && trendDataRes.trendData) {
+        newTrend.daily['所有时间段'] = trendDataRes.trendData.map((d: any) => ({
+          time: (d.timeKey || '').substring(5), // YYYY-MM-DD to MM-DD
+          increment: d.newCompleted || 0,
+          cumulative: d.cumulativeCompleted || 0,
+        }));
+      }
+
+      if (trendHourlyRes && trendHourlyRes.trendData) {
+        const hourlyArr: any[] = [];
+        let cumulative = 0;
+        for (let h = 0; h < 24; h++) {
+          const hStr = h.toString().padStart(2, '0');
+          const found = trendHourlyRes.trendData.find((d: any) => d.timeKey === hStr);
+          if (found) {
+            cumulative = found.cumulativeCompleted;
+            hourlyArr.push({
+              time: `${hStr}:00`,
+              increment: found.newCompleted || 0,
+              cumulative: cumulative,
+            });
+          } else {
+            hourlyArr.push({
+              time: `${hStr}:00`,
+              increment: 0,
+              cumulative: cumulative,
+            });
+          }
+        }
+        newTrend.hourly['今日走势'] = hourlyArr;
+      }
+
+      trendData.value = newTrend;
     } catch (error) {
       console.error('获取 overview 失败', error);
+      metricCompletionRateDelta.value = 0;
+      trendData.value = { daily: {}, hourly: {} };
     }
   };
 
@@ -1338,25 +404,28 @@
       const o = currentOverview.value;
       const pushed = o.pushUserCount || o.totalAssignments || 0;
       const delivered = o.totalAssignments || 0;
-      const read = o.totalReadCount || 0;
       const inProgress = o.inProgressCount || 0;
       const completed = o.completedCount || 0;
       return {
         funnel: [
           { stage: 'pushed', label: '推送', count: pushed },
           { stage: 'delivered', label: '送达', count: delivered },
-          { stage: 'read', label: '已读', count: read },
-          { stage: 'in_progress', label: '学习中', count: inProgress + completed }, // 注意，通常漏斗是包含下一步的
+          { stage: 'in_progress', label: '学习中', count: inProgress + completed },
           { stage: 'completed', label: '已完成', count: completed },
         ],
       };
     }
-    return currentTaskId.value ? (funnelDataByTask as any)[currentTaskId.value] : null;
+    return {
+      funnel: [
+        { stage: 'pushed', label: '推送', count: 0 },
+        { stage: 'delivered', label: '送达', count: 0 },
+        { stage: 'in_progress', label: '学习中', count: 0 },
+        { stage: 'completed', label: '已完成', count: 0 },
+      ],
+    };
   });
 
-  const regionData = computed(() =>
-    currentTaskId.value ? (regionRankingByTask as any)[currentTaskId.value] : null
-  );
+  // obsolete, removed usage
 
   const alertSummary = computed(() => {
     if (currentOverview.value) {
@@ -1365,13 +434,19 @@
         p0_count: w.p0 || 0,
         p1_count: w.p1 || 0,
         p2_count: w.p2 || 0,
-        // 后端如果有下钻数据，可以通过 currentAlerts 统计，或者暂时显示简要分类
         p0_breakdown: w.p0 > 0 ? [{ category: '距离截止 < 24h', count: w.p0 }] : [],
         p1_breakdown: w.p1 > 0 ? [{ category: '距离截止 < 48h', count: w.p1 }] : [],
         p2_breakdown: w.p2 > 0 ? [{ category: '起步转化异常', count: w.p2 }] : [],
       };
     }
-    return currentTaskId.value ? (alertSummaryByTask as any)[currentTaskId.value] : null;
+    return {
+      p0_count: 0,
+      p1_count: 0,
+      p2_count: 0,
+      p0_breakdown: [],
+      p1_breakdown: [],
+      p2_breakdown: [],
+    };
   });
 
   const alertFunnelData = computed(() => {
@@ -1380,38 +455,33 @@
       const p2 = w.p2 || 0;
       const p1 = w.p1 || 0;
       const p0 = w.p0 || 0;
-      // 这里因为是风险“层级递进”，人数是包含关系（P2起步异常 -> 没起步最终变成了P1 -> P1最后变成了P0 -> P0最后变成了Unfinished过期）
-      // 为了直观展示转化，我们假设：未完成人数 = overdueCount 或未完成总数
       const unfinished =
         currentOverview.value.overdueCount ||
         currentOverview.value.totalAssignments - currentOverview.value.completedCount ||
         0;
 
-      // 如果没有风险，返回 null 或全0
-      if (p2 === 0 && p1 === 0 && p0 === 0 && unfinished === 0) return null;
-
       return [
-        { stage: 'P2', label: 'P2', count: Math.max(p2, p1, p0, unfinished) },
-        { stage: 'P1', label: 'P1', count: Math.max(p1, p0, unfinished) },
-        { stage: 'P0', label: 'P0', count: Math.max(p0, unfinished) },
+        { stage: 'P2', label: 'P2', count: p2 },
+        { stage: 'P1', label: 'P1', count: p1 },
+        { stage: 'P0', label: 'P0', count: p0 },
         { stage: 'Unfinished', label: '未完成', count: unfinished },
       ];
     }
-    return currentTaskId.value ? (alertFunnelByTask as any)[currentTaskId.value] : null;
+    return [
+      { stage: 'P2', label: 'P2', count: 0 },
+      { stage: 'P1', label: 'P1', count: 0 },
+      { stage: 'P0', label: 'P0', count: 0 },
+      { stage: 'Unfinished', label: '未完成', count: 0 },
+    ];
   });
 
-  const trendData = computed(() =>
-    currentTaskId.value ? (trendDataByTask as any)[currentTaskId.value] : null
-  );
+  const trendData = ref<any>(null);
 
   const alerts = computed(() => {
-    if (currentAlerts.value && currentAlerts.value.length > 0) {
-      return {
-        total: currentAlerts.value.length,
-        alerts: currentAlerts.value,
-      };
-    }
-    return currentTaskId.value ? (alertsByTask as any)[currentTaskId.value] : null;
+    return {
+      total: currentAlerts.value ? currentAlerts.value.length : 0,
+      alerts: currentAlerts.value || [],
+    };
   });
 
   // ================= Methods =================
@@ -1458,24 +528,21 @@
 
   // ... Diagnosis Flow
   const expandedTasks = ref(false);
+
   const isAutoCollapsed = ref(true);
+
+  const visibleDiagnoses = computed(() => {
+    return (diagnosisData.value || []).filter(
+      (diagnosis) =>
+        !isAutoCollapsed.value ||
+        (diagnosis.related_task_id === currentTaskId.value && diagnosis.action_type !== 'none') ||
+        diagnosis.action_type === 'none'
+    );
+  });
+
   const currentTaskTitle = computed(() => {
     const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
     return task ? task.task_title : '';
-  });
-
-  watch(currentTaskId, (newId) => {
-    if (newId) {
-      const hasSpecificDiagnosis = (diagnosisData.value || []).some(
-        (d) => d.related_task_id === newId && d.severity !== 'green'
-      );
-      if (hasSpecificDiagnosis) {
-        isAutoCollapsed.value = true;
-      } else {
-        isAutoCollapsed.value = false;
-        isDiagnosisCollapsed.value = true;
-      }
-    }
   });
 
   const handleDiagnosisClick = (diagnosis: any) => {
@@ -1483,22 +550,20 @@
       expandedTasks.value = !expandedTasks.value;
     } else if (diagnosis.severity !== 'green') {
       isAutoCollapsed.value = true;
-      if (diagnosis.related_task_id)
+      if (diagnosis.related_task_id) {
         triggerLoading(() => (currentTaskId.value = diagnosis.related_task_id));
+      }
     }
   };
 
   const handleTaskSelect = (taskId: string) => {
-    if (taskId === currentTaskId.value) {
-      const hasSpecificDiagnosis = (diagnosisData.value || []).some(
-        (d) => d.related_task_id === taskId && d.severity !== 'green'
-      );
-      if (hasSpecificDiagnosis) {
-        isAutoCollapsed.value = true;
-      } else {
-        isAutoCollapsed.value = false;
-        isDiagnosisCollapsed.value = true;
-      }
+    const hasSpecificDiagnosis = (diagnosisData.value || []).some(
+      (d) => d.related_task_id === taskId && d.severity !== 'green'
+    );
+    if (hasSpecificDiagnosis) {
+      isAutoCollapsed.value = true;
+    } else {
+      isAutoCollapsed.value = false;
     }
     triggerLoading(() => (currentTaskId.value = taskId));
     expandedTasks.value = false;
@@ -1525,35 +590,27 @@
     if (currentOverview.value) {
       return currentOverview.value.completionRate / 100 || 0;
     }
-    return funnelData.value?.completion_rate || 0;
+    return 0;
   });
-  // 假定较昨天的数据：如果后端没有直接返回，我们可以先 mock 一个合理的波动或返回0
-  const metricCompletionRateDelta = computed(() => {
-    return funnelData.value?.completion_rate_delta || 0.02; // 默认给一个+2%的增长演示
+
+  const metricReadCount = computed(() => {
+    return (
+      (currentOverview.value?.inProgressCount || 0) + (currentOverview.value?.completedCount || 0)
+    );
   });
+
   const metricConfirmationRate = computed(() => {
-    if (currentOverview.value) {
-      return currentOverview.value.taskReadRate / 100 || 0;
+    if (currentOverview.value && currentOverview.value.totalAssignments > 0) {
+      const confirmed =
+        (currentOverview.value.inProgressCount || 0) + (currentOverview.value.completedCount || 0);
+      return confirmed / currentOverview.value.totalAssignments;
     }
-    return funnelData.value?.confirmation_rate || 0;
+    return 0;
   });
-  const metricHoursRemaining = computed(() => {
-    const currentTask = allTasks.value.find((t) => t.task_id === currentTaskId.value);
-    if (currentTask && currentTask.deadline && currentTask.deadline !== '无截止时间') {
-      const ddlDate = new Date(currentTask.deadline + 'T23:59:59'); // 假设截止到当天的23:59:59
-      const diff = ddlDate.getTime() - new Date().getTime();
-      if (diff > 0) {
-        return Math.floor(diff / (1000 * 60 * 60));
-      }
-      return 0;
-    }
-    return funnelData.value?.hours_remaining || 0;
-  });
-  const metricReadCount = computed(() => currentOverview.value?.totalReadCount || 0);
   const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
-  const metricP0Count = computed(() => currentOverview.value?.warningCount?.p0 || 0);
-  const metricP1Count = computed(() => currentOverview.value?.warningCount?.p1 || 0);
-  const metricP2Count = computed(() => currentOverview.value?.warningCount?.p2 || 0);
+  const metricP0Count = computed(() => Number(currentOverview.value?.warningCount?.p0 || 0));
+  const metricP1Count = computed(() => Number(currentOverview.value?.warningCount?.p1 || 0));
+  const metricP2Count = computed(() => Number(currentOverview.value?.warningCount?.p2 || 0));
   const metricTotalAlerts = computed(
     () => metricP0Count.value + metricP1Count.value + metricP2Count.value
   );
@@ -1605,9 +662,7 @@
     const s = alertFunnelData.value.find((f: any) => f.stage === stage);
     return s ? s.count : 0;
   };
-  const alertTotalPeople = computed(
-    () => getAlertStageCount('P0') + getAlertStageCount('P1') + getAlertStageCount('P2')
-  );
+  const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
   const getAlertPercentage = (stage: string) => {
     const count = getAlertStageCount(stage);
     if (!alertTotalPeople.value || alertTotalPeople.value === 0) return '0%';
@@ -1640,7 +695,7 @@
     const first = alertFunnelData.value[0].count;
     const last = alertFunnelData.value[alertFunnelData.value.length - 1].count;
     if (first === 0) return 0;
-    return ((first - last) / first) * 100;
+    return currentOverview.value?.nudgeConversionRate || 0;
   };
   const getAlertBarColor = (stageId: string) => {
     switch (stageId) {
@@ -1833,71 +888,62 @@
       '节点名称'
   );
 
-  const rrCurrentNodes = computed(() => {
-    let nodes: any[] = [];
-    if (rrCurrentDimension.value === 'rtm3') {
-      nodes = regionData.value?.regions || [];
-    } else if (rrCurrentDimension.value === 'rtm4') {
-      if (rrSelectedRTM3.value && rrSelectedRTM3.value.children)
-        nodes = rrSelectedRTM3.value.children;
-      else
-        nodes = [
-          {
-            region_id: 'r4-1',
-            region_name: 'MONO',
-            completion_rate: 0.85,
-            completed_count: 8500,
-            employee_count: 10000,
-            avg_time: '1.0h',
-          },
-          {
-            region_id: 'r4-2',
-            region_name: 'Lifestyle',
-            completion_rate: 0.7,
-            completed_count: 5600,
-            employee_count: 8000,
-            avg_time: '1.5h',
-          },
-        ];
-    } else if (rrCurrentDimension.value === 'dealer') {
-      nodes = [
-        {
-          region_id: 'd1',
-          region_name: '鼎盛科技',
-          completion_rate: 0.95,
-          completed_count: 950,
-          employee_count: 1000,
-          avg_time: '0.8h',
-        },
-        {
-          region_id: 'd2',
-          region_name: '华联商贸',
-          completion_rate: 0.88,
-          completed_count: 440,
-          employee_count: 500,
-          avg_time: '1.2h',
-        },
-      ];
-    } else if (rrCurrentDimension.value === 'store') {
-      nodes = [
-        {
-          region_id: 's1',
-          region_name: '北京国贸店',
-          completion_rate: 1.0,
-          completed_count: 25,
-          employee_count: 25,
-          avg_time: '45m',
-        },
-        {
-          region_id: 's2',
-          region_name: '上海七宝店',
-          completion_rate: 0.96,
-          completed_count: 24,
-          employee_count: 25,
-          avg_time: '50m',
-        },
-      ];
+  const rrRawNodes = ref<any[]>([]);
+  const isRtmLoading = ref(false);
+
+  const fetchRegionRanking = async () => {
+    if (!currentTaskId.value) return;
+    isRtmLoading.value = true;
+    try {
+      const params: any = {
+        taskId: currentTaskId.value,
+        rtmLevel:
+          rrCurrentDimension.value === 'rtm3'
+            ? 'rtm'
+            : rrCurrentDimension.value === 'rtm4'
+            ? 'format'
+            : rrCurrentDimension.value === 'dealer'
+            ? 'dealerName'
+            : 'storeId',
+      };
+      if (rrSelectedRTM3.value)
+        params.rtm = rrSelectedRTM3.value.region_name || rrSelectedRTM3.value.entity_name;
+      if (rrSelectedRTM4.value)
+        params.format = rrSelectedRTM4.value.region_name || rrSelectedRTM4.value.entity_name;
+      if (rrSelectedDealer.value)
+        params.dealerName =
+          rrSelectedDealer.value.region_name || rrSelectedDealer.value.entity_name;
+
+      const res = await getDashboardHeatmap(params).send();
+      const heatmapData = (res as any)?.heatmapData || (res as any)?.data?.heatmapData || [];
+      rrRawNodes.value = heatmapData.map((h: any, idx: number) => ({
+        id: h.rtmValue || `empty-${idx}`,
+        region_id: h.rtmValue || `empty-${idx}`,
+        region_name: h.rtmValue || '未知',
+        entity_name: h.rtmValue || '未知',
+        completion_rate: h.completionRate ? h.completionRate / 100 : 0,
+        completed_count: h.completedCount || 0,
+        employee_count: h.assignmentCount || 0,
+        avg_time: h.avgCompletionTimeHours ? `${h.avgCompletionTimeHours.toFixed(1)}h` : '-',
+      }));
+    } catch (e) {
+      console.error('Fetch RTM Ranking Failed', e);
+      rrRawNodes.value = [];
+    } finally {
+      isRtmLoading.value = false;
     }
+  };
+
+  watch(
+    [currentTaskId, rrCurrentDimension, rrSelectedRTM3, rrSelectedRTM4, rrSelectedDealer],
+    () => {
+      fetchRegionRanking();
+    },
+    { immediate: true }
+  );
+
+  const rrCurrentNodes = computed(() => {
+    let nodes = [...(rrRawNodes.value || [])];
 
     if (rrSearchQuery.value.trim()) {
       const q = rrSearchQuery.value.trim().toLowerCase();
@@ -1907,7 +953,7 @@
     const sorted = [...nodes].sort((a, b) => {
       let valA = a[rrSortKey.value];
       let valB = b[rrSortKey.value];
-      if (rrSortKey.value === 'avg_time_val') {
+      if (rrSortKey.value === 'avg_time_val' || rrSortKey.value === 'avg_time') {
         valA = rrParseTime(a.avg_time);
         valB = rrParseTime(b.avg_time);
       } else {
@@ -2847,12 +1893,8 @@
         >
           <div class="space-y-3">
             <div
-              v-for="diagnosis in diagnosisData"
+              v-for="diagnosis in visibleDiagnoses"
               :key="diagnosis.diagnosis_id"
-              v-show="
-                !isAutoCollapsed ||
-                (diagnosis.related_task_id === currentTaskId && diagnosis.action_type !== 'none')
-              "
               @click="handleDiagnosisClick(diagnosis)"
               :class="[
                 'group flex items-center gap-4 p-4 pr-6 rounded-xl transition-all duration-300 cursor-pointer border-none outline-none select-none -webkit-tap-highlight-color-transparent',
@@ -3049,7 +2091,7 @@
                   </div>
                   <div
                     class="text-[36px] leading-none font-bold text-[#111827] font-outfit tracking-tight mb-3"
-                    >{{ (metricCompletionRate * 100).toFixed(2) }}%</div
+                    >{{ safeFormatRate(metricCompletionRate * 100, 2) }}</div
                   >
                   <div class="flex items-center gap-3">
                     <div
@@ -3059,7 +2101,9 @@
                       <span>较昨天</span>
                       <span
                         >{{ metricCompletionRateDelta > 0 ? '+' : ''
-                        }}{{ (metricCompletionRateDelta * 100).toFixed(1) }}pp</span
+                        }}{{
+                          safeFormatRate(Math.abs(metricCompletionRateDelta * 100), 1, 'pp')
+                        }}</span
                       >
                       <svg
                         v-if="metricCompletionRateDelta > 0"
@@ -3140,7 +2184,7 @@
                   </div>
                   <div
                     class="text-[36px] leading-none font-bold text-[#111827] font-outfit tracking-tight mb-3"
-                    >{{ (metricConfirmationRate * 100).toFixed(1) }}%</div
+                    >{{ safeFormatRate(metricConfirmationRate * 100, 1) }}</div
                   >
                   <div class="flex items-center gap-3 text-[12px]">
                     <div class="text-[#111827] font-semibold"
@@ -3185,25 +2229,32 @@
                     :style="{ color: metricTotalAlerts === 0 ? '#10B981' : '#EF4444' }"
                     >{{ metricTotalAlerts }}</div
                   >
-                  <div
-                    v-if="metricTotalAlerts === 0"
-                    class="text-[12px] text-[#10B981] font-semibold"
-                    >当前无风险</div
-                  >
-                  <div v-else class="flex items-center gap-2 text-[11px] font-bold">
+                  <div class="flex items-center gap-2 text-[11px] font-bold">
                     <span
-                      v-if="metricP0Count > 0"
-                      class="px-2 py-0.5 rounded-full bg-red-50 text-red-500 ring-1 ring-inset ring-red-100"
+                      class="px-2 py-0.5 rounded-full ring-1 ring-inset"
+                      :class="
+                        metricP0Count > 0
+                          ? 'bg-red-50 text-red-500 ring-red-100'
+                          : 'bg-gray-50 text-gray-400 ring-gray-200'
+                      "
                       >P0: {{ metricP0Count }}</span
                     >
                     <span
-                      v-if="metricP1Count > 0"
-                      class="px-2 py-0.5 rounded-full bg-orange-50 text-orange-500 ring-1 ring-inset ring-orange-100"
+                      class="px-2 py-0.5 rounded-full ring-1 ring-inset"
+                      :class="
+                        metricP1Count > 0
+                          ? 'bg-orange-50 text-orange-500 ring-orange-100'
+                          : 'bg-gray-50 text-gray-400 ring-gray-200'
+                      "
                       >P1: {{ metricP1Count }}</span
                     >
                     <span
-                      v-if="metricP2Count > 0"
-                      class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 ring-1 ring-inset ring-amber-100"
+                      class="px-2 py-0.5 rounded-full ring-1 ring-inset"
+                      :class="
+                        metricP2Count > 0
+                          ? 'bg-amber-50 text-amber-600 ring-amber-100'
+                          : 'bg-gray-50 text-gray-400 ring-gray-200'
+                      "
                       >P2: {{ metricP2Count }}</span
                     >
                   </div>
@@ -3268,7 +2319,7 @@
                           fontWeight: getFunnelDropRate(index) >= 20 ? 600 : 400,
                         }"
                       >
-                        流失 {{ getFunnelDropRate(index).toFixed(0) }}%
+                        流失 {{ safeFormatRate(getFunnelDropRate(index), 0) }}
                       </span>
                     </div>
                     <div
@@ -3318,9 +2369,9 @@
                         <div class="text-[14px] font-semibold text-[#1D1D1F]">{{
                           stage.count.toLocaleString()
                         }}</div>
-                        <div class="text-[13px] text-[#86868B]"
-                          >{{ getFunnelRate(stage).toFixed(0) }}%</div
-                        >
+                        <div class="text-[13px] text-[#86868B]">{{
+                          safeFormatRate(getFunnelRate(stage), 0)
+                        }}</div>
                       </div>
                     </div>
                   </div>
@@ -3613,7 +2664,7 @@
                           <path d="m6 9 6 6 6-6" />
                         </svg>
                         <span class="text-[11px] font-medium text-[#FF9500]">
-                          转化率 {{ getAlertConversionRate(index).toFixed(1) }}%
+                          转化率 {{ safeFormatRate(getAlertConversionRate(index), 1) }}
                         </span>
                       </div>
                       <div
@@ -3723,9 +2774,9 @@
                         </div>
                       </div>
                       <div class="flex items-baseline gap-1">
-                        <span class="text-[20px] font-bold font-outfit text-[#0071E3]"
-                          >{{ getOverallConversionRate().toFixed(1) }}%</span
-                        >
+                        <span class="text-[20px] font-bold font-outfit text-[#0071E3]">{{
+                          safeFormatRate(getOverallConversionRate(), 1)
+                        }}</span>
                       </div>
                     </div>
                   </div>
@@ -3819,10 +2870,16 @@
             </div>
             <div class="lg:w-1/2 flex-shrink-0 min-w-0 flex flex-col glass-card p-6 md:p-8">
               <!-- Region Ranking Component Inlined -->
-              <div
-                v-if="regionData && regionData.regions"
-                class="w-full flex flex-col h-full min-h-[380px] flex-1"
-              >
+              <div v-if="true" class="w-full flex flex-col h-full min-h-[380px] flex-1 relative">
+                <!-- Loading Overlay -->
+                <div
+                  v-if="isRtmLoading"
+                  class="absolute inset-0 z-50 flex items-center justify-center bg-white/60 backdrop-blur-sm rounded-xl"
+                >
+                  <div
+                    class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"
+                  ></div>
+                </div>
                 <div class="mb-5 space-y-4 flex-shrink-0">
                   <div>
                     <h3
@@ -4287,6 +3344,713 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Funnel Modal -->
+    <div
+      v-if="isFunnelModalOpen"
+      :class="[
+        'fixed inset-0 z-[400] flex items-center justify-center transition-opacity duration-300',
+        isFunnelModalOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+      ]"
+    >
+      <!-- Backdrop -->
+      <div
+        class="absolute inset-0 bg-black/30 backdrop-blur-sm"
+        @click="isFunnelModalOpen = false"
+      ></div>
+
+      <!-- Modal Content -->
+      <div
+        :class="[
+          'relative w-full max-w-4xl max-h-[85vh] bg-white rounded-2xl shadow-2xl flex flex-col mx-4 md:mx-auto transition-transform duration-300 delay-75',
+          isFunnelModalOpen ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4',
+        ]"
+      >
+        <div
+          class="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0"
+        >
+          <div class="flex items-center gap-3">
+            <div
+              class="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-[#0071E3]"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                <polyline points="16 7 22 7 22 13" />
+              </svg>
+            </div>
+            <div>
+              <h3 class="text-[18px] font-bold text-[#111827] font-outfit"
+                >{{ selectedFunnelStage?.label || '' }}阶段 - 数据下钻</h3
+              >
+              <p class="text-[13px] text-[#6B7280] mt-0.5">查看各层级在当前链路节点的转化情况</p>
+            </div>
+          </div>
+          <button
+            @click="isFunnelModalOpen = false"
+            class="p-2 rounded-full hover:bg-gray-100 transition-colors"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#6B7280"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex-1 p-6 overflow-hidden flex flex-col min-h-0 bg-[#F9FAFB]/50 rounded-b-2xl">
+          <div class="flex flex-col mb-4 gap-3 flex-shrink-0">
+            <div>
+              <h3
+                class="text-[16px] leading-[1.3] font-semibold text-[#111827] flex items-center flex-wrap gap-2"
+              >
+                <span
+                  @click="fmGoToBreadcrumb('root')"
+                  :class="[
+                    'cursor-pointer transition-colors duration-200',
+                    fmSelectedRTM3 ? 'text-[#86868B] hover:text-[#0071E3]' : 'text-[#111827]',
+                  ]"
+                  >全部 {{ selectedFunnelStage?.label || '' }}明细</span
+                >
+                <template v-if="fmSelectedRTM3">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="text-[#86868B] flex-shrink-0"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                  <span
+                    @click="fmGoToBreadcrumb('rtm3')"
+                    :class="[
+                      'transition-colors duration-200',
+                      fmSelectedRTM4
+                        ? 'text-[#86868B] hover:text-[#0071E3] cursor-pointer'
+                        : 'text-[#111827]',
+                    ]"
+                    >{{ fmSelectedRTM3 }}</span
+                  >
+                </template>
+                <template v-if="fmSelectedRTM4">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="text-[#86868B] flex-shrink-0"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                  <span
+                    @click="fmGoToBreadcrumb('rtm4')"
+                    :class="[
+                      'transition-colors duration-200',
+                      fmSelectedDealer
+                        ? 'text-[#86868B] hover:text-[#0071E3] cursor-pointer'
+                        : 'text-[#111827]',
+                    ]"
+                    >{{ fmSelectedRTM4 }}</span
+                  >
+                </template>
+                <template v-if="fmSelectedDealer">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="text-[#86868B] flex-shrink-0"
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                  <span class="text-[#111827]">{{ fmSelectedDealer }}</span>
+                </template>
+              </h3>
+              <p class="text-[12px] text-[#86868B] mt-1">
+                {{
+                  fmSelectedRTM3
+                    ? '已下钻至: ' +
+                      (fmSelectedDealer ? '门店' : fmSelectedRTM4 ? '经销商' : 'RTM4')
+                    : '点击行项可向下钻取数据'
+                }}
+              </p>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div
+                class="flex items-center bg-gray-100/80 p-1 rounded-lg flex-shrink-0 overflow-x-auto"
+              >
+                <button
+                  v-for="dim in fmAvailableDimensions"
+                  :key="dim.value"
+                  @click="fmCurrentDimension = dim.value"
+                  :class="[
+                    'px-4 py-1.5 text-[13px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                    fmCurrentDimension === dim.value
+                      ? 'bg-white text-[#111827] shadow-sm'
+                      : 'text-[#6B7280] hover:text-[#111827]',
+                  ]"
+                >
+                  {{ dim.label }}
+                </button>
+              </div>
+              <div class="relative flex-1 sm:max-w-[240px]">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#9CA3AF"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </div>
+                <input
+                  v-model="fmSearchQuery"
+                  type="text"
+                  placeholder="搜索名称..."
+                  class="w-full h-9 pl-9 pr-3 text-[13px] text-[#111827] bg-white border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] rounded-lg outline-none transition-all duration-200 shadow-sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="border border-[#E5E5E7] bg-white rounded-xl overflow-hidden flex-1 flex flex-col shadow-sm"
+          >
+            <div class="overflow-y-auto flex-1">
+              <table class="w-full border-collapse relative">
+                <thead class="sticky top-0 z-10 bg-[#FAFAFA] shadow-[0_1px_0_#E5E5E7]">
+                  <tr>
+                    <th
+                      class="w-40 text-left py-3 px-6 text-[13px] font-medium text-[#6E6E73] whitespace-nowrap"
+                      >{{ fmDimensionLabel }}名称</th
+                    >
+                    <th
+                      class="w-32 text-right py-3 px-6 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                      @click="fmHandleSort('total')"
+                      ><div class="flex items-center justify-end">大盘总人数</div></th
+                    >
+                    <th
+                      class="w-32 text-right py-3 px-6 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                      @click="fmHandleSort('count')"
+                      ><div class="flex items-center justify-end"
+                        >{{ selectedFunnelStage?.label || '' }}人数</div
+                      ></th
+                    >
+                    <th
+                      class="w-32 text-right py-3 px-6 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                      @click="fmHandleSort('rate')"
+                      ><div class="flex items-center justify-end"
+                        >{{ selectedFunnelStage?.label || '' }}率</div
+                      ></th
+                    >
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="fmTableData.length === 0">
+                    <td colspan="4" class="py-12 text-center text-[13px] text-[#86868B]"
+                      >暂无匹配数据</td
+                    >
+                  </tr>
+                  <tr
+                    v-for="(item, index) in fmTableData"
+                    :key="index"
+                    @click="fmCurrentDimension !== 'store' && fmHandleDrillDown(item)"
+                    :class="[
+                      'border-b border-gray-50 transition-colors duration-150',
+                      fmCurrentDimension !== 'store'
+                        ? 'cursor-pointer hover:bg-blue-50/30'
+                        : 'hover:bg-gray-50/50',
+                    ]"
+                  >
+                    <td
+                      class="w-40 py-3.5 px-6 text-[14px] font-semibold text-[#111827] truncate max-w-[160px]"
+                      :title="item.name"
+                    >
+                      <div class="flex items-center gap-1.5">
+                        {{ item.name }}
+                        <svg
+                          v-if="fmCurrentDimension !== 'store'"
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="text-[#9CA3AF] flex-shrink-0"
+                        >
+                          <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                      </div>
+                    </td>
+                    <td class="py-3.5 px-6 text-right text-[14px] text-[#6B7280]">{{
+                      (item.total || 0).toLocaleString()
+                    }}</td>
+                    <td class="py-3.5 px-6 text-right text-[14px] font-bold text-[#111827]">{{
+                      (item.count || 0).toLocaleString()
+                    }}</td>
+                    <td
+                      class="py-3.5 px-6 text-right text-[14px] font-medium"
+                      :style="{
+                        color:
+                          item.rate < 0.3 ? '#FF3B30' : item.rate < 0.6 ? '#FF9500' : '#34C759',
+                      }"
+                    >
+                      {{ (item.rate * 100).toFixed(1) }}%
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Modal -->
+    <div
+      v-if="isAlertModalOpen"
+      :class="[
+        'fixed inset-0 z-[400] flex items-center justify-center transition-opacity duration-300',
+        isAlertModalOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+      ]"
+    >
+      <!-- Backdrop -->
+      <div
+        class="absolute inset-0 bg-black/30 backdrop-blur-sm"
+        @click="isAlertModalOpen = false"
+      ></div>
+
+      <!-- Modal Content -->
+      <div
+        :class="[
+          'relative w-full max-w-5xl max-h-[85vh] bg-white rounded-2xl shadow-2xl flex flex-col mx-4 md:mx-auto transition-transform duration-300 delay-75',
+          isAlertModalOpen ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4',
+        ]"
+      >
+        <div
+          class="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0"
+        >
+          <div class="flex items-center gap-3">
+            <div
+              class="w-8 h-8 rounded-full flex items-center justify-center"
+              :style="{ backgroundColor: amLevelColors.bg }"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                :stroke="amLevelColors.text"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+                />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+            </div>
+            <div>
+              <h3 class="text-[18px] font-bold text-[#111827] font-outfit">
+                <span v-if="alertFilter === 'Unfinished'">未完成人员 明细</span>
+                <span v-else>{{ alertFilter }} 预警明细</span>
+              </h3>
+              <p class="text-[13px] text-[#6B7280] mt-0.5"
+                >查看该风险层级下的具体受影响人员及门店明细</p
+              >
+            </div>
+          </div>
+          <button
+            @click="isAlertModalOpen = false"
+            class="p-2 rounded-full hover:bg-gray-100 transition-colors"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#6B7280"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex-1 p-6 overflow-hidden flex flex-col min-h-0 bg-[#F9FAFB]/50 rounded-b-2xl">
+          <div v-if="alerts && alerts.alerts && alertFilter" class="flex flex-col flex-1 min-h-0">
+            <div class="flex flex-col mb-4 gap-3 flex-shrink-0">
+              <div>
+                <h3
+                  class="text-[16px] leading-[1.3] font-semibold text-[#111827] flex items-center flex-wrap gap-2"
+                >
+                  <span
+                    @click="amGoToBreadcrumb('root')"
+                    :class="[
+                      'cursor-pointer transition-colors duration-200',
+                      amSelectedRTM3 ? 'text-[#86868B] hover:text-[#0071E3]' : 'text-[#111827]',
+                    ]"
+                    >全局大盘</span
+                  >
+                  <template v-if="amSelectedRTM3">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="text-[#86868B] flex-shrink-0"
+                    >
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    <span
+                      @click="amGoToBreadcrumb('rtm3')"
+                      :class="[
+                        'transition-colors duration-200',
+                        amSelectedRTM4
+                          ? 'text-[#86868B] hover:text-[#0071E3] cursor-pointer'
+                          : 'text-[#111827]',
+                      ]"
+                      >{{ amSelectedRTM3 }}</span
+                    >
+                  </template>
+                  <template v-if="amSelectedRTM4">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="text-[#86868B] flex-shrink-0"
+                    >
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    <span
+                      @click="amGoToBreadcrumb('rtm4')"
+                      :class="[
+                        'transition-colors duration-200',
+                        amSelectedDealer
+                          ? 'text-[#86868B] hover:text-[#0071E3] cursor-pointer'
+                          : 'text-[#111827]',
+                      ]"
+                      >{{ amSelectedRTM4 }}</span
+                    >
+                  </template>
+                  <template v-if="amSelectedDealer">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="text-[#86868B] flex-shrink-0"
+                    >
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    <span class="text-[#111827]">{{ amSelectedDealer }}</span>
+                  </template>
+                </h3>
+                <p class="text-[12px] text-[#86868B] mt-1">
+                  {{
+                    amSelectedRTM3
+                      ? '已下钻至: ' +
+                        (amSelectedDealer ? '门店' : amSelectedRTM4 ? '经销商' : 'RTM4')
+                      : '点击行项可向下钻取数据'
+                  }}
+                </p>
+              </div>
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div
+                  class="flex items-center bg-gray-100/80 p-1 rounded-lg flex-shrink-0 overflow-x-auto"
+                >
+                  <button
+                    v-for="dim in amAvailableDimensions"
+                    :key="dim.value"
+                    @click="amCurrentDimension = dim.value"
+                    :class="[
+                      'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                      amCurrentDimension === dim.value
+                        ? 'bg-white text-[#111827] shadow-sm'
+                        : 'text-[#6B7280] hover:text-[#111827]',
+                    ]"
+                  >
+                    {{ dim.label }}
+                  </button>
+                </div>
+                <div class="relative flex-1 min-w-[120px] max-w-[200px]">
+                  <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#9CA3AF"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                  </div>
+                  <input
+                    v-model="amSearchQuery"
+                    type="text"
+                    placeholder="搜索名称..."
+                    class="w-full h-8 pl-9 pr-3 text-[13px] text-[#111827] bg-gray-100/80 border border-transparent focus:border-[#0071E3] focus:bg-white rounded-md outline-none transition-all duration-200"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="amDisplayedAlerts.length > 0"
+              class="border border-[#E5E5E7] rounded-xl overflow-hidden overflow-x-auto flex flex-col flex-1 min-h-0"
+            >
+              <div class="overflow-y-auto max-h-full pr-1 flex-1">
+                <table class="w-full border-collapse relative">
+                  <thead class="sticky top-0 z-10 bg-[#FAFAFA] shadow-[0_1px_0_#E5E5E7]">
+                    <tr class="border-b border-[#E5E5E7]">
+                      <th class="w-12 text-center py-3 text-[13px] font-medium text-[#6E6E73]"
+                        >级别</th
+                      >
+                      <th
+                        class="w-32 text-left py-3 px-4 text-[13px] font-medium text-[#6E6E73] whitespace-nowrap"
+                        >{{ amDimensionLabel }}</th
+                      >
+                      <th
+                        class="w-20 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('total_employees')"
+                        ><div class="flex items-center justify-end">总人数</div></th
+                      >
+                      <th
+                        class="w-20 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('completed_count')"
+                        ><div class="flex items-center justify-end">已完成</div></th
+                      >
+                      <th
+                        v-if="alertFilter === 'P0'"
+                        class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('risk_rate')"
+                        ><div class="flex items-center justify-end">临期危机(P0)率</div></th
+                      >
+                      <th
+                        v-else-if="alertFilter === 'P1'"
+                        class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('risk_rate')"
+                        ><div class="flex items-center justify-end">临期危机(P1)率</div></th
+                      >
+                      <th
+                        v-else-if="alertFilter === 'P2'"
+                        class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('risk_rate')"
+                        ><div class="flex items-center justify-end">起步异常率</div></th
+                      >
+                      <th
+                        v-else
+                        class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
+                        @click="amHandleSort('risk_rate')"
+                        ><div class="flex items-center justify-end">未完成率</div></th
+                      >
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="alert in amDisplayedAlerts"
+                      :key="alert.alert_id"
+                      @click="amCurrentDimension !== 'store' && amHandleDrillDown(alert)"
+                      :class="[
+                        'border-b border-gray-50 transition-colors duration-200',
+                        amCurrentDimension !== 'store'
+                          ? 'cursor-pointer hover:bg-blue-50/30'
+                          : 'hover:bg-gray-50/50',
+                      ]"
+                    >
+                      <td
+                        :class="[
+                          'text-center py-4',
+                          alert.level === 'P0' || alert.level === 'P1' || alert.level === 'P2'
+                            ? 'relative'
+                            : '',
+                        ]"
+                      >
+                        <span
+                          v-if="alert.level === 'P0'"
+                          class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#FF3B30]"
+                        ></span>
+                        <span
+                          v-else-if="alert.level === 'P1'"
+                          class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#FF9500]"
+                        ></span>
+                        <span
+                          v-else-if="alert.level === 'P2'"
+                          class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#FFCC00]"
+                        ></span>
+                        <span
+                          v-else
+                          class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#86868B]"
+                        ></span>
+                        <div
+                          class="w-2 h-2 rounded-full mx-auto shadow-sm"
+                          :style="{
+                            backgroundColor:
+                              alert.level === 'P0'
+                                ? '#FF3B30'
+                                : alert.level === 'P1'
+                                ? '#FF9500'
+                                : alert.level === 'P2'
+                                ? '#FFCC00'
+                                : '#86868B',
+                          }"
+                        ></div>
+                      </td>
+                      <td
+                        class="w-32 py-4 px-4 text-[14px] font-semibold text-[#111827] truncate max-w-[128px]"
+                        :title="alert.entity_name"
+                      >
+                        <div class="flex items-center gap-1">
+                          {{ alert.entity_name }}
+                          <svg
+                            v-if="amCurrentDimension !== 'store'"
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="text-[#9CA3AF] flex-shrink-0"
+                          >
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </div>
+                      </td>
+                      <td class="py-4 px-4 text-right text-[14px] text-[#6B7280]">{{
+                        (alert.total_employees || 0).toLocaleString()
+                      }}</td>
+                      <td class="py-4 px-4 text-right text-[14px] font-bold text-[#111827]">{{
+                        (alert.completed_count || 0).toLocaleString()
+                      }}</td>
+                      <td
+                        class="py-4 px-4 text-right text-[14px] font-medium"
+                        :style="{
+                          color:
+                            alert.risk_rate > 0.5
+                              ? '#FF3B30'
+                              : alert.risk_rate > 0.2
+                              ? '#FF9500'
+                              : '#34C759',
+                        }"
+                      >
+                        {{ (alert.risk_rate * 100).toFixed(1) }}%
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div
+              v-else
+              class="flex-1 flex flex-col items-center justify-center min-h-[300px] bg-white rounded-xl border border-[#E5E5E7]"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#D1D1D6"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="margin-bottom: 12px"
+              >
+                <path
+                  d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+                />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+              <span class="text-[14px]">暂无 {{ alertFilter }} 级别预警数据</span>
+            </div>
+
+            <button
+              v-if="amGroupedAlerts.length > 10 && !amShowMore"
+              @click="amShowMore = true"
+              class="w-full mt-4 py-3 rounded-lg border border-gray-100 bg-gray-50/50 text-[13px] text-[#0071E3] font-semibold hover:bg-gray-100 transition-colors duration-200"
+            >
+              查看更多 ({{ amGroupedAlerts.length - 10 }} 条)
+            </button>
           </div>
         </div>
       </div>

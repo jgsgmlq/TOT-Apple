@@ -175,6 +175,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          ta.store_id,
          ta.task_id,
          t.ddl_at,
+         t.created_at,
          t.auto_nudge_rules,
          SUM(CASE WHEN ta.status != 'completed' THEN 1 ELSE 0 END) AS uncompleted_count
        FROM task_assignments ta
