@@ -225,3 +225,28 @@ export const postDashboardInsightVote = (
     payload
   );
 };
+
+export interface DashboardAgentTaskInsight {
+  taskId: string;
+  title: string;
+  severity: 'red' | 'orange' | 'green';
+  insight: string;
+  focusModule: string;
+  progress: number;
+}
+
+export interface DashboardAgentInsightResult {
+  redCount: number;
+  orangeCount: number;
+  greenCount: number;
+  topTasks: DashboardAgentTaskInsight[];
+  overallSummary: string;
+  allTasks: DashboardAgentTaskInsight[];
+  generatedAt: string;
+}
+
+export const getDashboardAgentInsight = (params?: { refresh?: boolean }) => {
+  return Alova.Get<DashboardAgentInsightResult>('/dashboard/agent/diagnose', {
+    params,
+  });
+};

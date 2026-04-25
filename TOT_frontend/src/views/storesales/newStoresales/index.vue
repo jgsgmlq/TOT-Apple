@@ -708,9 +708,9 @@
           isOverdue = true;
         } else if (ddlTime - nowTime < 24 * 60 * 60 * 1000) {
           status = 'urgent';
-        } else if (assign.nudgeCount > 0) {
+        } else if (assign.nudgeCount > 0 || assign.nudge_count > 0) {
           status = 'nudging';
-        } else if (!assign.startedAt) {
+        } else if (!assign.startedAt && !assign.started_at) {
           status = 'new';
         }
 
@@ -771,11 +771,12 @@
           deadline: t.ddlAt,
           publishedAt: t.createdAt,
           status,
+          startedAt: assign.startedAt || assign.started_at,
           platformName,
           passingScore: t.passScore,
           description: t.description,
           subTasks,
-          completedAt: assign.completedAt,
+          completedAt: assign.completedAt || assign.completed_at,
         };
 
         if (isCompleted) {
@@ -1007,12 +1008,26 @@
   const handleLearn = async (task: any, subTask?: any) => {
     if (!task || !task.assignmentId) return;
 
+    // 跳转到微信小程序 (MyPAL 专用)
+    const targetPlatform = subTask ? subTask.rawPlatform : task.platformName;
+    if (targetPlatform === 'MyPAL') {
+      const a = document.createElement('a');
+      a.href =
+        'weixin://dl/business/?appid=wx8490a792205aecda&path=pages/login/login&query=&env_version=release';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (document.body.contains(a)) document.body.removeChild(a);
+      }, 100);
+      showToast('正在尝试唤起微信小程序...');
+    }
+
     try {
       let opType = 'start_task';
       let platform = '';
 
-      if (task.status === 'new') {
-        // Just start the task
+      if (!task.startedAt || task.status === 'new') {
         opType = 'start_task';
       } else {
         if (task.type === 'bundle' && subTask) {
@@ -1023,34 +1038,45 @@
         }
       }
 
-      await Alova.Put(`/assignments/${task.assignmentId}/status`, {
-        operationType: opType,
-        platform: platform,
-      }).send();
+      await Alova.Put(
+        `/assignments/${task.assignmentId}/status`,
+        { operationType: opType, platform },
+        { meta: { skipGlobalErrorMessage: true } }
+      ).send();
 
       celebrate();
       showToast('状态更新成功！');
       fetchTasks();
     } catch (e: any) {
-      console.error('Failed to update task status', e);
-      if (e?.response?.data?.message) {
-        showToast(e.response.data.message);
+      const errMsg = e?.message || '';
+      // If we tried to start but it was already started (backend throws "当前状态不可开始任务")
+      if (errMsg.includes('当前状态不可开始任务') && (!task.startedAt || task.status === 'new')) {
+        // Optimistically mark as started locally to prevent further 'start_task' attempts
+        task.status = 'normal'; 
+        task.startedAt = new Date().toISOString(); 
+        
+        // Friendly reminder since actual learning platform callback integration is pending
+        showToast('任务已开启。由于暂未联调学习平台，暂时无法自动同步完成状态，请等待后续版本更新。');
       } else {
-        showToast('操作失败，请重试');
+        console.error('Failed to update task status', e);
+        showToast(errMsg || '操作失败，请重试');
       }
     }
   };
 
   const startTaskIfPending = async (task: any) => {
-    if (task && task.status === 'new' && task.assignmentId) {
+    if (task && (!task.startedAt || task.status === 'new') && task.assignmentId) {
       try {
-        await Alova.Put(`/assignments/${task.assignmentId}/status`, {
-          operationType: 'start_task',
-        }).send();
+        await Alova.Put(
+          `/assignments/${task.assignmentId}/status`,
+          { operationType: 'start_task' },
+          { meta: { skipGlobalErrorMessage: true } }
+        ).send();
         task.status = 'normal'; // Optimistically update local status so it doesn't fire again
+        task.startedAt = new Date().toISOString(); // Mark as started
         fetchTasks();
       } catch (e) {
-        // Ignore error
+        // Ignore error silently
       }
     }
   };

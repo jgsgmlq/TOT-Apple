@@ -175,6 +175,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          ta.store_id,
          ta.task_id,
          t.ddl_at,
+         t.created_at,
          t.auto_nudge_rules,
          SUM(CASE WHEN ta.status != 'completed' THEN 1 ELSE 0 END) AS uncompleted_count
        FROM task_assignments ta
@@ -330,6 +331,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
          ${selectDim},
          COUNT(ta.id) AS assignment_count,
          SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
+         SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
          ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
          AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
@@ -349,6 +351,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
       color:          heatmapColor(r.completion_rate || 0),
       assignmentCount: r.assignment_count,
       completedCount:  r.completed_count,
+      inProgressCount: r.in_progress_count,
     }));
 
     const updatedAt = rows.length > 0
