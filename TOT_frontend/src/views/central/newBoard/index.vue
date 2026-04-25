@@ -8,11 +8,21 @@
     getDashboardTrend,
     getDashboardHeatmap,
     getDashboardAgentInsight,
+    streamDashboardInsight,
+    postDashboardInsightVote,
+    type CreateDashboardInsightBody
   } from '@/api/dashboard';
   import { marked } from 'marked';
   import { createDashboardChatSession, streamDashboardChatMessage } from '@/api/chat';
+  import { useMessage } from 'naive-ui';
+  import { ColorWandOutline } from '@vicons/ionicons5';
+  import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
+  import { renderInsightMarkdown } from '@/utils/markdownRender';
+  import AiAnalyzePopover from './components/AiAnalyzePopover.vue';
 
-  // ================= Mock Data =================
+  const message = useMessage();
+
+  // ================= AI Insight (Intelligent Analysis) =================
   const diagnosisData = ref<any[]>([]);
   const isAgentLoading = ref(false);
 
@@ -25,30 +35,46 @@
       const dispatched = (rawTasks || []).filter((t: any) => t.status === 'dispatched');
 
       allTasks.value = dispatched.map((t: any) => {
-        // 在没有请求 Overview 时先给个假进度，以免报错
         return {
           task_id: t.id,
           task_title: t.title,
           deadline: t.ddlAt ? t.ddlAt.substring(0, 10) : '无截止时间',
-          completion_rate: 0.4,
-          severity: 'yellow',
+          fullDeadline: t.ddlAt,
+          completion_rate: null,
+          severity: 'green', // Will be dynamically updated by background fetch
         };
       });
 
       if (allTasks.value.length > 0) {
-        if (!currentTaskId.value) {
-          currentTaskId.value = allTasks.value[0].task_id;
-        }
+        // Asynchronously fetch and fill completion rates for all tasks
+        Promise.all(
+          allTasks.value.map(async (task) => {
+            try {
+              const res = await getDashboardOverview({ taskId: task.task_id }).send();
+              if (res && typeof res.completionRate !== 'undefined') {
+                const rate = res.completionRate / 100;
+                task.completion_rate = rate;
+                
+                // Dynamically update severity based on fetched rate
+                if (rate < 0.5) task.severity = 'red';
+                else if (rate < 0.8) task.severity = 'yellow';
+                else task.severity = 'green';
+              }
+            } catch (err) {
+              console.warn(`Failed to fetch overview for task ${task.task_id}`, err);
+            }
+          })
+        );
       }
 
       await loadAgentInsights();
-
       if (allTasks.value.length > 0 && !currentTaskId.value) {
-        const topTask = diagnosisData.value?.find(
-          (d) => d.severity === 'red' || d.severity === 'yellow'
+        // Pick the very first actionable diagnosis task from the agent's flow
+        const firstActionableDiag = diagnosisData.value?.find(
+          (d) => d.action_type !== 'none' && d.related_task_id
         );
-        if (topTask && topTask.related_task_id) {
-          currentTaskId.value = topTask.related_task_id;
+        if (firstActionableDiag) {
+          currentTaskId.value = firstActionableDiag.related_task_id;
           isAutoCollapsed.value = true;
         } else {
           currentTaskId.value = allTasks.value[0].task_id;
@@ -97,10 +123,7 @@
           };
         });
 
-        if (
-          agentRes.greenCount > 0 ||
-          (agentRes.topTasks.length === 0 && allTasks.value.length > 0)
-        ) {
+        if (allTasks.value.length > 0) {
           newDiag.push({
             diagnosis_id: 'diag-ok',
             priority_rank: 99,
@@ -125,89 +148,6 @@
     }
   };
 
-  const getMockDrillData = (stageId: string, dimension: string, seed = '') => {
-    const isPushed = stageId === 'pushed';
-    const stageRates: Record<string, number> = {
-      pushed: 1.0,
-      delivered: 0.96,
-      read: 0.82,
-      in_progress: 0.55,
-      completed: 0.35,
-    };
-    const baseRate = stageRates[stageId] || 0.5;
-
-    const dims: Record<string, string[]> = {
-      rtm3: ['Monobrand', 'Multibrand', 'Carrier', 'Education'],
-      rtm4: ['MONO', 'Lifestyle', 'Mass Merchant', 'Campus'],
-      dealer: [
-        '鼎盛科技',
-        '华联商贸',
-        '盛达通讯',
-        '新时代电子',
-        '恒大通讯',
-        '远方科技',
-        '创世商贸',
-        '蓝天数码',
-      ],
-      store: [
-        '北京国贸店',
-        '上海七宝店',
-        '广州天环广场店',
-        '深圳万象城店',
-        '成都太古里店',
-        '重庆万象城店',
-        '武汉恒隆广场店',
-        '杭州万象城店',
-        '南京景枫中心店',
-        '沈阳市府恒隆店',
-        '苏州中心店',
-        '宁波中心店',
-        '青岛万象城店',
-        '济南恒隆广场店',
-        '天津大悦城店',
-      ],
-    };
-
-    const list = dims[dimension] || dims.rtm3;
-    return list
-      .map((name) => {
-        const hash = (name + seed).split('').reduce((a, b) => a + b.charCodeAt(0), 0);
-        let baseTotal = 1000;
-        if (dimension === 'rtm3') baseTotal = 4000;
-        if (dimension === 'rtm4') baseTotal = 2500;
-        if (dimension === 'dealer') baseTotal = 800;
-        if (dimension === 'store') baseTotal = 20;
-
-        const total = baseTotal + ((hash * 13) % (baseTotal * 0.8));
-
-        let rate = 1.0;
-        if (!isPushed) {
-          const vary = ((hash * 7) % 20) / 100 - 0.1;
-          rate = Math.min(1, Math.max(0, baseRate + vary));
-          if (dimension === 'store') {
-            const storeVary = ((hash * 11) % 30) / 100 - 0.15;
-            rate = Math.min(1, Math.max(0, baseRate + storeVary));
-          }
-        }
-
-        let count = Math.round(total * rate);
-        if (count > total) count = total;
-
-        return {
-          name,
-          total: Math.round(total),
-          count: count,
-          rate: count / total,
-        };
-      })
-      .sort((a, b) => b.rate - a.rate);
-  };
-
-  const safeFormatRate = (rate: number, decimals = 0, suffix = '%') => {
-    if (rate === null || rate === undefined || isNaN(rate) || !isFinite(rate)) return '-';
-    return rate.toFixed(decimals) + suffix;
-  };
-
   // ================= Global State =================
   const metricCompletionRateDelta = ref<number>(0);
   const currentTaskId = ref<string | null>(null);
@@ -215,13 +155,10 @@
   const isDiagnosisCollapsed = ref(false);
   const lastUpdated = ref(new Date());
   const alertFilter = ref('P0');
-  const isFullscreen = ref(false);
-  const showFullscreenPrompt = ref(false);
   const isAiOpen = ref(false);
   const isFunnelModalOpen = ref(false);
   const isAlertModalOpen = ref(false);
   const selectedFunnelStage = ref<any>(null);
-  let promptTimer: any = null;
 
   // ================= Dashboard Overview Data =================
   const currentAlerts = ref<any[]>([]);
@@ -234,13 +171,14 @@
         getDashboardWarnings({ taskId, warningLevel: 'startDelay', pageSize: 100 }).send(),
         getDashboardWarnings({ taskId, warningLevel: 'p1', pageSize: 100 }).send(),
         getDashboardWarnings({ taskId, warningLevel: 'p0', pageSize: 100 }).send(),
+        getDashboardHeatmap({ taskId, rtmLevel: 'store' }).send(),
       ];
-      const [p2Res, p1Res, p0Res] = await Promise.all(promises);
+      const [p2Res, p1Res, p0Res, heatmapRes] = await Promise.all(promises);
 
       let combinedAlerts = [];
       if (p2Res && p2Res.list) {
         combinedAlerts = combinedAlerts.concat(
-          p2Res.list.map((a) => ({
+          p2Res.list.map((a: any) => ({
             ...a,
             alert_id: a.storeId + '-p2',
             level: 'P2',
@@ -254,7 +192,7 @@
       }
       if (p1Res && p1Res.list) {
         combinedAlerts = combinedAlerts.concat(
-          p1Res.list.map((a) => ({
+          p1Res.list.map((a: any) => ({
             ...a,
             alert_id: a.storeId + '-p1',
             level: 'P1',
@@ -268,7 +206,7 @@
       }
       if (p0Res && p0Res.list) {
         combinedAlerts = combinedAlerts.concat(
-          p0Res.list.map((a) => ({
+          p0Res.list.map((a: any) => ({
             ...a,
             alert_id: a.storeId + '-p0',
             level: 'P0',
@@ -278,6 +216,45 @@
             completed_count: a.completedCount,
             risk_rate: a.warningRate,
           }))
+        );
+      }
+
+      // Synthesize 'Unfinished' list from heatmap data for overdue/uncompleted items
+      // Note: Heatmap has assignmentCount and completedCount.
+      // Unfinished count = assignmentCount - completedCount.
+      // We will only add it if the task is overdue (determined globally) OR if we just want to list all uncompleted.
+      // Since it's 'Unfinished', we show stores with unfinished > 0.
+      if (heatmapRes && (heatmapRes as any).heatmapData) {
+        const heatmapData = (heatmapRes as any).heatmapData;
+        const unfinishedStores = heatmapData.filter((h: any) => {
+           const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+           return uncompleted > 0;
+        });
+
+        // Check if global task is overdue to provide better description
+        const currentTaskInfo = (allTasks.value || []).find((t: any) => t.task_id === taskId);
+        let isTaskOverdue = false;
+        if (currentTaskInfo && currentTaskInfo.deadline && currentTaskInfo.deadline !== '无截止时间') {
+           const todayStr = new Date().toISOString().split('T')[0];
+           if (currentTaskInfo.deadline < todayStr) isTaskOverdue = true;
+        }
+
+        combinedAlerts = combinedAlerts.concat(
+          unfinishedStores.map((h: any) => {
+            const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+            const riskRate = h.assignmentCount > 0 ? (uncompleted / h.assignmentCount) * 100 : 0;
+            return {
+              alert_id: h.rtmValue + '-unfinished',
+              level: 'Unfinished',
+              description: isTaskOverdue ? `任务已逾期，仍有 ${uncompleted} 人未完成` : `目前仍有 ${uncompleted} 人未完成任务`,
+              related_entity: h.rtmValue || '未知门店',
+              storeName: h.rtmValue,
+              total_employees: h.assignmentCount || 0,
+              completed_count: h.completedCount || 0,
+              risk_rate: parseFloat(riskRate.toFixed(2)),
+              aiSuggestion: '建议及时督促对应门店/区域进行学习',
+            };
+          })
         );
       }
 
@@ -301,16 +278,37 @@
 
   const fetchOverview = async (taskId: string) => {
     try {
-      const [overviewData, trendDataRes, trendHourlyRes] = await Promise.all([
+      const today = new Date();
+      const yest = new Date(today);
+      yest.setDate(yest.getDate() - 1);
+      const todayStr = today.toISOString().split('T')[0];
+      const yestStr = yest.toISOString().split('T')[0];
+
+      const [overviewData, trendDataRes, trendHourlyResToday, trendHourlyResYest] = await Promise.all([
         getDashboardOverview({ taskId }).send(),
         getDashboardTrend({ taskId, type: 'daily' })
           .send()
           .catch(() => null),
-        getDashboardTrend({ taskId, type: 'hourly' })
+        getDashboardTrend({ taskId, type: 'hourly', date: todayStr })
+          .send()
+          .catch(() => null),
+        getDashboardTrend({ taskId, type: 'hourly', date: yestStr })
           .send()
           .catch(() => null),
       ]);
       currentOverview.value = overviewData;
+
+      if (overviewData) {
+        // Sync rate back to the allTasks object for UI presentation
+        const currentTaskInList = allTasks.value.find(t => t.task_id === taskId);
+        if (currentTaskInList) {
+          const rate = overviewData.completionRate / 100;
+          currentTaskInList.completion_rate = rate;
+          if (rate < 0.5) currentTaskInList.severity = 'red';
+          else if (rate < 0.8) currentTaskInList.severity = 'yellow';
+          else currentTaskInList.severity = 'green';
+        }
+      }
 
       if (
         trendDataRes &&
@@ -318,11 +316,6 @@
         trendDataRes.trendData.length > 0 &&
         overviewData.totalAssignments > 0
       ) {
-        const today = new Date();
-        const yest = new Date(today);
-        yest.setDate(yest.getDate() - 1);
-        const yestStr = yest.toISOString().split('T')[0];
-
         let cumulativeYesterday = 0;
         for (const point of trendDataRes.trendData) {
           if (point.timeKey <= yestStr) {
@@ -339,38 +332,68 @@
         metricCompletionRateDelta.value = 0;
       }
 
-      const newTrend: any = { daily: { 所有时间段: [] }, hourly: { 今日走势: [] } };
+      const newTrend: any = { daily: {}, hourly: {} };
 
-      if (trendDataRes && trendDataRes.trendData) {
-        newTrend.daily['所有时间段'] = trendDataRes.trendData.map((d: any) => ({
-          time: (d.timeKey || '').substring(5), // YYYY-MM-DD to MM-DD
-          increment: d.newCompleted || 0,
-          cumulative: d.cumulativeCompleted || 0,
-        }));
+      if (trendDataRes && trendDataRes.trendData && trendDataRes.trendData.length > 0) {
+        // Group by weeks backwards (latest 7 days, then previous 7 days...)
+        const dataReversed = [...trendDataRes.trendData].reverse();
+        const weeklyGroups: Record<string, any[]> = {};
+        
+        let chunkIndex = 0;
+        for (let i = 0; i < dataReversed.length; i += 7) {
+          const chunk = dataReversed.slice(i, i + 7).reverse(); // reverse back to chronological order
+          const startDateStr = chunk[0].timeKey.substring(5).replace('-', '.');
+          const endDateStr = chunk[chunk.length - 1].timeKey.substring(5).replace('-', '.');
+          
+          let label = `${startDateStr} - ${endDateStr}`;
+          if (chunkIndex === 0) label += ' (本周)';
+          else if (chunkIndex === 1) label += ' (上周)';
+          else label += ` (-${chunkIndex}周)`;
+          
+          weeklyGroups[label] = chunk.map((d: any) => ({
+            time: d.timeKey.substring(5),
+            increment: d.newCompleted || 0,
+            cumulative: d.cumulativeCompleted || 0,
+          }));
+          chunkIndex++;
+        }
+        
+        Object.assign(newTrend.daily, weeklyGroups);
+      } else {
+        newTrend.daily['所有时间段'] = [];
       }
 
-      if (trendHourlyRes && trendHourlyRes.trendData) {
-        const hourlyArr: any[] = [];
-        let cumulative = 0;
-        for (let h = 0; h < 24; h++) {
-          const hStr = h.toString().padStart(2, '0');
-          const found = trendHourlyRes.trendData.find((d: any) => d.timeKey === hStr);
-          if (found) {
-            cumulative = found.cumulativeCompleted;
-            hourlyArr.push({
-              time: `${hStr}:00`,
-              increment: found.newCompleted || 0,
-              cumulative: cumulative,
-            });
-          } else {
-            hourlyArr.push({
-              time: `${hStr}:00`,
-              increment: 0,
-              cumulative: cumulative,
-            });
+      const processHourly = (hourlyRes: any, label: string) => {
+        if (hourlyRes && hourlyRes.trendData) {
+          const hourlyArr: any[] = [];
+          let cumulative = 0;
+          for (let h = 0; h < 24; h++) {
+            const hStr = h.toString().padStart(2, '0');
+            const found = hourlyRes.trendData.find((d: any) => d.timeKey === hStr);
+            if (found) {
+              cumulative = found.cumulativeCompleted;
+              hourlyArr.push({
+                time: `${hStr}:00`,
+                increment: found.newCompleted || 0,
+                cumulative: cumulative,
+              });
+            } else {
+              hourlyArr.push({
+                time: `${hStr}:00`,
+                increment: 0,
+                cumulative: cumulative,
+              });
+            }
           }
+          newTrend.hourly[label] = hourlyArr;
         }
-        newTrend.hourly['今日走势'] = hourlyArr;
+      };
+
+      processHourly(trendHourlyResToday, `${todayStr} (今日)`);
+      processHourly(trendHourlyResYest, `${yestStr} (昨日)`);
+      
+      if (Object.keys(newTrend.hourly).length === 0) {
+        newTrend.hourly['今日走势'] = [];
       }
 
       trendData.value = newTrend;
@@ -429,14 +452,18 @@
 
   const alertSummary = computed(() => {
     if (currentOverview.value) {
-      const w = currentOverview.value.warningCount || { p0: 0, p1: 0, p2: 0 };
+      const total = currentOverview.value.totalAssignments || 0;
+      const p0 = Math.round(total * (currentOverview.value.crisisP0Rate || 0) / 100);
+      const p1 = Math.round(total * (currentOverview.value.crisisP1Rate || 0) / 100);
+      const p2 = Math.round(total * (currentOverview.value.crisisP2Rate || 0) / 100);
+
       return {
-        p0_count: w.p0 || 0,
-        p1_count: w.p1 || 0,
-        p2_count: w.p2 || 0,
-        p0_breakdown: w.p0 > 0 ? [{ category: '距离截止 < 24h', count: w.p0 }] : [],
-        p1_breakdown: w.p1 > 0 ? [{ category: '距离截止 < 48h', count: w.p1 }] : [],
-        p2_breakdown: w.p2 > 0 ? [{ category: '起步转化异常', count: w.p2 }] : [],
+        p0_count: p0,
+        p1_count: p1,
+        p2_count: p2,
+        p0_breakdown: p0 > 0 ? [{ category: '距离截止 < 24h', count: p0 }] : [],
+        p1_breakdown: p1 > 0 ? [{ category: '距离截止 < 48h', count: p1 }] : [],
+        p2_breakdown: p2 > 0 ? [{ category: '起步转化异常', count: p2 }] : [],
       };
     }
     return {
@@ -451,14 +478,15 @@
 
   const alertFunnelData = computed(() => {
     if (currentOverview.value) {
-      const w = currentOverview.value.warningCount || { p0: 0, p1: 0, p2: 0 };
-      const p2 = w.p2 || 0;
-      const p1 = w.p1 || 0;
-      const p0 = w.p0 || 0;
-      const unfinished =
-        currentOverview.value.overdueCount ||
-        currentOverview.value.totalAssignments - currentOverview.value.completedCount ||
-        0;
+      const o = currentOverview.value;
+      const total = o.totalAssignments || 0;
+
+      // Calculate people count accurately from the percentage returned by the backend
+      const p0 = Math.round(total * (o.crisisP0Rate || 0) / 100);
+      const p1 = Math.round(total * (o.crisisP1Rate || 0) / 100);
+      const p2 = Math.round(total * (o.crisisP2Rate || 0) / 100);
+      
+      const unfinished = o.overdueCount || 0;
 
       return [
         { stage: 'P2', label: 'P2', count: p2 },
@@ -474,7 +502,6 @@
       { stage: 'Unfinished', label: '未完成', count: 0 },
     ];
   });
-
   const trendData = ref<any>(null);
 
   const alerts = computed(() => {
@@ -483,6 +510,234 @@
       alerts: currentAlerts.value || [],
     };
   });
+
+  // ================= AI Insight (Intelligent Analysis) =================
+  type BoardInsightSection = 'northStar' | 'funnel' | 'warning' | 'trend' | 'rtm';
+  interface BoardInsightCardState {
+    content: string;
+    loading: boolean;
+    insightId: string | null;
+    generatedAt: string | null;
+    up: number;
+    down: number;
+    userVote: 'up' | 'down' | null;
+    fetchedKey: string;
+  }
+
+  const globalReasoningEnabled = ref(false);
+  const INSIGHT_VOTE_STORAGE_PREFIX = 'tot_insight_vote_new_';
+
+  const readStoredInsightVote = (insightId: string): 'up' | 'down' | null => {
+    try {
+      const v = sessionStorage.getItem(INSIGHT_VOTE_STORAGE_PREFIX + insightId);
+      if (v === 'up' || v === 'down') return v;
+    } catch {}
+    return null;
+  };
+
+  const writeStoredInsightVote = (insightId: string, v: 'up' | 'down' | null) => {
+    try {
+      const key = INSIGHT_VOTE_STORAGE_PREFIX + insightId;
+      if (v == null) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, v);
+    } catch {}
+  };
+
+  const emptyBoardInsightCard = (): BoardInsightCardState => ({
+    content: '',
+    loading: false,
+    insightId: null,
+    generatedAt: null,
+    up: 0,
+    down: 0,
+    userVote: null,
+    fetchedKey: '',
+  });
+
+  const boardInsightCard = ref<Record<BoardInsightSection, BoardInsightCardState>>({
+    northStar: emptyBoardInsightCard(),
+    funnel: emptyBoardInsightCard(),
+    warning: emptyBoardInsightCard(),
+    trend: emptyBoardInsightCard(),
+    rtm: emptyBoardInsightCard(),
+  });
+
+  const copiedStates = ref<Record<string, boolean>>({
+    northStar: false,
+    funnel: false,
+    warning: false,
+    trend: false,
+    rtm: false,
+  });
+
+  const handleCopyAiInsight = (text: string, section: string) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => {
+        message.success('已复制到剪贴板');
+        copiedStates.value[section] = true;
+        setTimeout(() => (copiedStates.value[section] = false), 2000);
+      });
+    }
+  };
+
+  const formatInsightGeneratedTime = (isoString: string) => {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  };
+
+  const insightVotePending = ref<Record<BoardInsightSection, boolean>>({
+    northStar: false,
+    funnel: false,
+    warning: false,
+    trend: false,
+    rtm: false,
+  });
+
+  const handleAiFeedback = async (section: BoardInsightSection, vote: 'up' | 'down') => {
+    const card = boardInsightCard.value[section];
+    const id = card.insightId;
+    if (!id) return;
+    if (insightVotePending.value[section]) return;
+    insightVotePending.value[section] = true;
+    try {
+      const prev = card.userVote;
+      if (prev === vote) {
+        await postDashboardInsightVote(id, { vote, action: 'remove' }).send();
+        if (vote === 'up') card.up = Math.max(0, card.up - 1);
+        else card.down = Math.max(0, card.down - 1);
+        card.userVote = null;
+        writeStoredInsightVote(id, null);
+      } else {
+        if (prev) {
+          await postDashboardInsightVote(id, { vote: prev, action: 'remove' }).send();
+          if (prev === 'up') card.up = Math.max(0, card.up - 1);
+          else card.down = Math.max(0, card.down - 1);
+        }
+        await postDashboardInsightVote(id, { vote, action: 'add' }).send();
+        if (vote === 'up') card.up++;
+        else card.down++;
+        card.userVote = vote;
+        writeStoredInsightVote(id, vote);
+      }
+    } catch {
+      message.error('反馈提交失败');
+    } finally {
+      insightVotePending.value[section] = false;
+    }
+  };
+
+  const buildBoardInsightRequestKey = (section: BoardInsightSection): string => {
+    const tid = currentTaskId.value || '';
+    const r = globalReasoningEnabled.value ? 'R1' : 'V3';
+    if (section === 'northStar') return `north_star_kpi::${tid}::${r}`;
+    if (section === 'funnel') return `north_star::${tid}::${r}`;
+    if (section === 'warning') return `funnel_alerts::${tid}::${r}`;
+    if (section === 'trend') return `trend::${tid}::${currentDim.value}::${currentSubPeriod.value}::${r}`;
+    if (section === 'rtm') return `channel_north_star::${tid}::${rrCurrentDimension.value}::${r}`;
+    return `default::${tid}`;
+  };
+
+  const buildBoardInsightPayload = (section: BoardInsightSection): CreateDashboardInsightBody | null => {
+    const tid = currentTaskId.value;
+    if (!tid) return null;
+    const base = { reasoning: globalReasoningEnabled.value };
+    if (section === 'northStar') return { ...base, insightType: 'north_star', taskId: tid };
+    if (section === 'funnel') return { ...base, insightType: 'north_star', taskId: tid };
+    if (section === 'warning') return { ...base, insightType: 'funnel_alerts', taskId: tid };
+    if (section === 'trend') {
+      if (currentDim.value === 'hourly') {
+        return { ...base, insightType: 'completion_daily', taskId: tid, trendType: 'hourly' };
+      }
+      return { ...base, insightType: 'completion_weekly', taskId: tid, trendType: 'daily' };
+    }
+    if (section === 'rtm') return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
+    return null;
+  };
+
+  const ensureBoardInsightOnOpen = async (section: BoardInsightSection) => {
+    if (!currentTaskId.value) {
+      message.warning('请先选择一个任务');
+      return;
+    }
+    const key = buildBoardInsightRequestKey(section);
+    const cur = boardInsightCard.value[section];
+    if (cur.fetchedKey === key && cur.content) return;
+
+    const payload = buildBoardInsightPayload(section);
+    if (!payload) return;
+
+    boardInsightCard.value[section] = {
+      ...cur,
+      loading: true,
+      content: '',
+      insightId: null,
+      generatedAt: null,
+      userVote: null,
+      fetchedKey: key,
+    };
+
+    let isFirstChunk = true;
+    let wasReasoning = false;
+    let didReasoning = false;
+
+    try {
+      await streamDashboardInsight(
+        payload,
+        (deltaData) => {
+          if (isFirstChunk) {
+            boardInsightCard.value[section].loading = false;
+            isFirstChunk = false;
+            if (deltaData.phase === 'reasoning') {
+              boardInsightCard.value[section].content += '> **思考过程：**\n> ';
+              wasReasoning = true;
+              didReasoning = true;
+            }
+          }
+          if (deltaData && deltaData.text) {
+            if (deltaData.phase === 'reasoning') {
+              const formattedText = deltaData.text.replace(/\n/g, '\n> ');
+              boardInsightCard.value[section].content += formattedText;
+              wasReasoning = true;
+              didReasoning = true;
+            } else {
+              if (wasReasoning) {
+                boardInsightCard.value[section].content += '\n\n---\n\n';
+                wasReasoning = false;
+              }
+              boardInsightCard.value[section].content += deltaData.text;
+            }
+          }
+        },
+        (fullData) => {
+          boardInsightCard.value[section] = {
+            ...boardInsightCard.value[section],
+            loading: false,
+            content: didReasoning ? boardInsightCard.value[section].content : fullData.content,
+            insightId: fullData.insightId,
+            generatedAt: fullData.createdAt || null,
+            up: fullData.voteSummary?.up ?? 0,
+            down: fullData.voteSummary?.down ?? 0,
+            userVote: readStoredInsightVote(fullData.insightId),
+          };
+        },
+        () => {
+          boardInsightCard.value[section].loading = false;
+          if (!boardInsightCard.value[section].content) {
+            boardInsightCard.value[section].content = '获取智能分析失败';
+          }
+        }
+      );
+    } catch {
+      boardInsightCard.value[section].loading = false;
+    }
+  };
 
   // ================= Methods =================
   const formatTime = (date: Date) => {
@@ -500,43 +755,22 @@
 
   const handleRefresh = () => (lastUpdated.value = new Date());
 
-  const toggleFullscreen = () => {
-    const appElement = document.documentElement;
-    if (!document.fullscreenElement) {
-      appElement.requestFullscreen().catch((err) => {
-        console.error(`Error attempting to enable full-screen mode: ${err.message}`);
-      });
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
-    }
-  };
-
-  const handleFullscreenChange = () => {
-    isFullscreen.value = !!document.fullscreenElement;
-    if (isFullscreen.value) {
-      showFullscreenPrompt.value = true;
-      if (promptTimer) clearTimeout(promptTimer);
-      promptTimer = setTimeout(() => {
-        showFullscreenPrompt.value = false;
-      }, 3000);
-    } else {
-      showFullscreenPrompt.value = false;
-    }
-  };
-
   // ... Diagnosis Flow
   const expandedTasks = ref(false);
 
   const isAutoCollapsed = ref(true);
 
+  watch(isAutoCollapsed, (newVal) => {
+    if (newVal) {
+      expandedTasks.value = false;
+    }
+  });
+
   const visibleDiagnoses = computed(() => {
     return (diagnosisData.value || []).filter(
       (diagnosis) =>
         !isAutoCollapsed.value ||
-        (diagnosis.related_task_id === currentTaskId.value && diagnosis.action_type !== 'none') ||
-        diagnosis.action_type === 'none'
+        (diagnosis.related_task_id === currentTaskId.value && diagnosis.action_type !== 'none')
     );
   });
 
@@ -593,6 +827,19 @@
     return 0;
   });
 
+  const metricHoursRemaining = computed(() => {
+    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+    if (!task || !task.fullDeadline) return 0;
+    
+    // Replace '-' with '/' for safe parsing in all browsers, e.g. "2026/04/20 23:59:59"
+    const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+    const nowTime = new Date().getTime();
+    const diffMs = ddlTime - nowTime;
+    
+    if (diffMs <= 0) return 0;
+    return Math.floor(diffMs / (1000 * 60 * 60));
+  });
+
   const metricReadCount = computed(() => {
     return (
       (currentOverview.value?.inProgressCount || 0) + (currentOverview.value?.completedCount || 0)
@@ -608,15 +855,29 @@
     return 0;
   });
   const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
-  const metricP0Count = computed(() => Number(currentOverview.value?.warningCount?.p0 || 0));
-  const metricP1Count = computed(() => Number(currentOverview.value?.warningCount?.p1 || 0));
-  const metricP2Count = computed(() => Number(currentOverview.value?.warningCount?.p2 || 0));
+  const metricP0Count = computed(() => {
+    if (!currentOverview.value) return 0;
+    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP0Rate || 0) / 100);
+  });
+  const metricP1Count = computed(() => {
+    if (!currentOverview.value) return 0;
+    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP1Rate || 0) / 100);
+  });
+  const metricP2Count = computed(() => {
+    if (!currentOverview.value) return 0;
+    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP2Rate || 0) / 100);
+  });
   const metricTotalAlerts = computed(
     () => metricP0Count.value + metricP1Count.value + metricP2Count.value
   );
 
   const getTrendColor = (delta: number) =>
     delta > 0 ? '#34C759' : delta < 0 ? '#FF3B30' : '#86868B';
+
+  const safeFormatRate = (rate: number, decimals = 0, suffix = '%') => {
+    if (rate === null || rate === undefined || isNaN(rate) || !isFinite(rate)) return '-';
+    return rate.toFixed(decimals) + suffix;
+  };
 
   // ... Funnel Chart
   const funnelAnimated = ref(false);
@@ -651,6 +912,7 @@
     const curr = funnelData.value.funnel[index].count;
     return ((prev - curr) / funnelMaxCount.value) * 100;
   };
+
   const handleFunnelDrillDown = (stage: any) => {
     selectedFunnelStage.value = stage;
     isFunnelModalOpen.value = true;
@@ -682,20 +944,17 @@
     },
     { immediate: true }
   );
-  const alertFunnelMaxCount = computed(() => alertFunnelData.value?.[0]?.count || 1);
+  const alertFunnelMaxCount = computed(() => {
+    if (!alertFunnelData.value || alertFunnelData.value.length === 0) return 1;
+    const max = Math.max(...alertFunnelData.value.map(s => s.count));
+    return max > 0 ? max : 1;
+  });
   const getAlertFunnelWidth = (stage: any) => (stage.count / alertFunnelMaxCount.value) * 100;
   const getAlertConversionRate = (index: number) => {
-    if (index === 0 || !alertFunnelData.value) return 0;
-    const prev = alertFunnelData.value[index - 1].count;
-    const curr = alertFunnelData.value[index].count;
-    return (curr / prev) * 100;
+    return null as any;
   };
   const getOverallConversionRate = () => {
-    if (!alertFunnelData.value || alertFunnelData.value.length < 2) return 0;
-    const first = alertFunnelData.value[0].count;
-    const last = alertFunnelData.value[alertFunnelData.value.length - 1].count;
-    if (first === 0) return 0;
-    return currentOverview.value?.nudgeConversionRate || 0;
+    return null as any;
   };
   const getAlertBarColor = (stageId: string) => {
     switch (stageId) {
@@ -904,15 +1163,17 @@
             ? 'format'
             : rrCurrentDimension.value === 'dealer'
             ? 'dealerName'
-            : 'storeId',
+            : 'store',
       };
       if (rrSelectedRTM3.value)
         params.rtm = rrSelectedRTM3.value.region_name || rrSelectedRTM3.value.entity_name;
       if (rrSelectedRTM4.value)
         params.format = rrSelectedRTM4.value.region_name || rrSelectedRTM4.value.entity_name;
-      if (rrSelectedDealer.value)
-        params.dealerName =
-          rrSelectedDealer.value.region_name || rrSelectedDealer.value.entity_name;
+      
+      const dName = rrSelectedDealer.value?.region_name || rrSelectedDealer.value?.entity_name || '';
+      if (rrSelectedDealer.value && dName !== '(未知)' && dName !== '(未知实体)' && dName !== '(未知门店)') {
+        params.dealerName = dName;
+      }
 
       const res = await getDashboardHeatmap(params).send();
       const heatmapData = (res as any)?.heatmapData || (res as any)?.data?.heatmapData || [];
@@ -996,9 +1257,30 @@
       rrSelectedDealer.value = null;
       rrCurrentDimension.value = 'dealer';
     } else if (rrCurrentDimension.value === 'dealer') {
-      rrSelectedDealer.value = region;
+      const dealer = region.region_name || region.entity_name || '';
+      if (dealer === '(未知)' || dealer === '(未知实体)' || dealer === '(未知门店)') {
+        rrSelectedDealer.value = null;
+      } else {
+        rrSelectedDealer.value = region;
+      }
       rrCurrentDimension.value = 'store';
     }
+    rrExpandedMiddle.value = false;
+    rrSearchQuery.value = '';
+  };
+
+  const rrChangeDimension = (dim: string) => {
+    if (dim === 'rtm3') {
+      rrSelectedRTM3.value = null;
+      rrSelectedRTM4.value = null;
+      rrSelectedDealer.value = null;
+    } else if (dim === 'rtm4') {
+      rrSelectedRTM4.value = null;
+      rrSelectedDealer.value = null;
+    } else if (dim === 'dealer') {
+      rrSelectedDealer.value = null;
+    }
+    rrCurrentDimension.value = dim;
     rrExpandedMiddle.value = false;
     rrSearchQuery.value = '';
   };
@@ -1084,40 +1366,38 @@
           'div',
           {
             class:
-              'relative mt-4 mb-2 border border-gray-200 rounded-xl p-2 bg-gray-50 flex flex-col shadow-sm',
+              'relative mt-4 mb-2 border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden group/chart',
+            style: { minHeight: '260px' }
           },
           [
             h(
               'div',
               {
-                class: 'flex justify-between items-center px-2 pb-2 mb-2 border-b border-gray-200',
+                class: 'absolute top-3 right-3 z-[900] opacity-0 group-hover/chart:opacity-100 transition-opacity duration-200',
               },
               [
-                h(
-                  'span',
-                  { class: 'text-xs text-gray-500 font-semibold' },
-                  '📈 交互式图表 (可拖拽右下角缩放)'
-                ),
                 h(
                   'button',
                   {
                     onClick: downloadChart,
                     class:
-                      'p-1.5 bg-white hover:bg-gray-100 rounded text-[#0071E3] text-xs transition-colors shadow-sm border border-gray-200',
+                      'px-3 py-1.5 bg-white/90 hover:bg-white backdrop-blur-sm rounded-md text-[#0071E3] font-medium text-[12px] transition-colors shadow-sm border border-gray-200 flex items-center gap-1.5',
                     title: '下载图表为图片',
                   },
-                  '⬇️ 下载'
+                  [
+                    h('span', null, '⬇️'),
+                    h('span', null, '下载')
+                  ]
                 ),
               ]
             ),
             h('div', {
               ref: chartRef,
+              class: 'w-full h-full p-2',
               style: {
-                width: '100%',
-                height: '260px',
+                minHeight: '260px',
                 resize: 'both',
                 overflow: 'hidden',
-                minHeight: '150px',
               },
             }),
           ]
@@ -1392,12 +1672,17 @@
     }
   });
 
-  // ... Funnel Modal
+  
+  // ... Funnel Modal Logic
   const fmCurrentDimension = ref('rtm3');
   const fmSearchQuery = ref('');
   const fmSelectedRTM3 = ref<string | null>(null);
   const fmSelectedRTM4 = ref<string | null>(null);
   const fmSelectedDealer = ref<string | null>(null);
+  const fmSortKey = ref('rate');
+  const fmSortOrder = ref('desc');
+  const fmTableData = ref<any[]>([]);
+  const fmTableLoading = ref(false);
 
   const fmAvailableDimensions = computed(() => {
     if (!fmSelectedRTM3.value)
@@ -1420,6 +1705,34 @@
       ];
     return [{ label: '门店', value: 'store' }];
   });
+
+  const fmDimensionLabel = computed(() => {
+    return fmAvailableDimensions.value.find((d) => d.value === fmCurrentDimension.value)?.label || 'RTM3';
+  });
+
+  const fmHandleSort = (key: string) => {
+    if (fmSortKey.value === key) fmSortOrder.value = fmSortOrder.value === 'desc' ? 'asc' : 'desc';
+    else {
+      fmSortKey.value = key;
+      fmSortOrder.value = 'desc';
+    }
+  };
+
+  const fmChangeDimension = (dim: string) => {
+    if (dim === 'rtm3') {
+      fmSelectedRTM3.value = null;
+      fmSelectedRTM4.value = null;
+      fmSelectedDealer.value = null;
+    } else if (dim === 'rtm4') {
+      fmSelectedRTM4.value = null;
+      fmSelectedDealer.value = null;
+    } else if (dim === 'dealer') {
+      fmSelectedDealer.value = null;
+    }
+    fmCurrentDimension.value = dim;
+    fmSearchQuery.value = '';
+  };
+
   const fmGoToBreadcrumb = (level: string) => {
     if (level === 'root') {
       fmSelectedRTM3.value = null;
@@ -1436,6 +1749,7 @@
     }
     fmSearchQuery.value = '';
   };
+
   const fmHandleDrillDown = (row: any) => {
     if (fmCurrentDimension.value === 'rtm3') {
       fmSelectedRTM3.value = row.name;
@@ -1444,37 +1758,104 @@
       fmSelectedRTM4.value = row.name;
       fmCurrentDimension.value = 'dealer';
     } else if (fmCurrentDimension.value === 'dealer') {
-      fmSelectedDealer.value = row.name;
+      const dealer = row.name || '';
+      if (dealer === '(未知)' || dealer === '(未知实体)' || dealer === '(未知门店)') {
+        fmSelectedDealer.value = '';
+      } else {
+        fmSelectedDealer.value = row.name;
+      }
       fmCurrentDimension.value = 'store';
     }
     fmSearchQuery.value = '';
   };
-  const fmSortKey = ref('rate');
-  const fmSortOrder = ref('desc');
-  const fmHandleSort = (key: string) => {
-    if (fmSortKey.value === key) fmSortOrder.value = fmSortOrder.value === 'desc' ? 'asc' : 'desc';
-    else {
-      fmSortKey.value = key;
-      fmSortOrder.value = 'desc';
+
+  const loadFunnelModalData = async () => {
+    if (!selectedFunnelStage.value) return;
+    fmTableLoading.value = true;
+    try {
+      const heatParams: any = {
+        taskId: currentTaskId.value,
+        rtmLevel: fmCurrentDimension.value === 'rtm3' ? 'rtm' :
+                  fmCurrentDimension.value === 'rtm4' ? 'format' :
+                  fmCurrentDimension.value === 'dealer' ? 'dealerName' : 'store',
+      };
+      if (fmSelectedRTM3.value) heatParams.rtm = fmSelectedRTM3.value;
+      if (fmSelectedRTM4.value) heatParams.format = fmSelectedRTM4.value;
+      if (fmSelectedDealer.value) heatParams.dealerName = fmSelectedDealer.value;
+
+      const heatRes = await getDashboardHeatmap(heatParams).send();
+      const entities = heatRes?.heatmapData || [];
+
+      // Only fetch overview concurrently if we really need "read" or "in_progress"
+      // Wait, heatmap doesn't return 'in_progress'. 
+      // But let's check what the overview endpoints need:
+      // For each entity, we need its specific data
+      
+      const promises = entities.map(async (h: any) => {
+        const ovParams = { ...heatParams };
+        if (fmCurrentDimension.value === 'rtm3') ovParams.rtm = h.rtmValue;
+        else if (fmCurrentDimension.value === 'rtm4') ovParams.format = h.rtmValue;
+        else if (fmCurrentDimension.value === 'dealer') ovParams.dealerName = h.rtmValue;
+        else if (fmCurrentDimension.value === 'store') {
+          // Heatmap API returns store name in rtmValue. Overview API only accepts storeId.
+          // Wait, heatmap API doesn't return storeId! Actually, if level=store, heatmap groups by s.id but returns MAX(s.name) AS rtm_value. 
+          // Since we can't reliably map store name to storeId on the fly, for store level we might have to use only the heatmap data!
+          // Heatmap provides assignmentCount and completedCount.
+        }
+
+        // If it's just 'pushed' or 'completed', heatmap data already has it!
+        // We can save API calls.
+        const st = selectedFunnelStage.value.stage;
+        let count = 0;
+        let total = h.assignmentCount || 1;
+        
+        if (st === 'pushed' || st === 'delivered') {
+          return { name: h.rtmValue, total, count: total, rate: 1 };
+        } else if (st === 'completed') {
+          return { name: h.rtmValue, total, count: h.completedCount, rate: h.completionRate / 100 };
+        } else if (st === 'in_progress') {
+          // Heatmap now returns inProgressCount! 
+          // Funnel "in_progress" logic is inProgressCount + completedCount
+          count = (h.inProgressCount || 0) + (h.completedCount || 0);
+          return { name: h.rtmValue, total, count, rate: total > 0 ? count/total : 0 };
+        } else {
+          // 'read' - fallback to overview if possible, else 0.
+          // For safety, let's just make the overview call if NOT store level
+          if (fmCurrentDimension.value !== 'store') {
+             try {
+                const ov = await getDashboardOverview(ovParams).send();
+                if (st === 'read') count = ov.employeeReadCount || ov.totalReadCount || 0;
+             } catch(e){}
+          }
+          return { name: h.rtmValue, total, count, rate: total > 0 ? count/total : 0 };
+        }
+      });
+
+      const rawList = await Promise.all(promises);
+      fmTableData.value = rawList;
+
+    } catch (e) {
+      fmTableData.value = [];
+    } finally {
+      fmTableLoading.value = false;
     }
   };
-  const fmTableData = computed(() => {
-    if (!isFunnelModalOpen.value || !selectedFunnelStage.value) return [];
-    const seed =
-      (fmSelectedRTM3.value || '') + (fmSelectedRTM4.value || '') + (fmSelectedDealer.value || '');
-    let data = getMockDrillData(selectedFunnelStage.value.stage, fmCurrentDimension.value, seed);
+
+  const fmGroupedData = computed(() => {
+    let results = [...fmTableData.value];
     if (fmSearchQuery.value.trim()) {
       const q = fmSearchQuery.value.trim().toLowerCase();
-      data = data.filter((d) => d.name.toLowerCase().includes(q));
+      results = results.filter((r) => (r.name || '').toLowerCase().includes(q));
     }
-    return data.sort((a, b) => {
-      const valA = (a as any)[fmSortKey.value];
-      const valB = (b as any)[fmSortKey.value];
+    return results.sort((a, b) => {
+      const valA = a[fmSortKey.value] || 0;
+      const valB = b[fmSortKey.value] || 0;
       if (valA < valB) return fmSortOrder.value === 'asc' ? -1 : 1;
       if (valA > valB) return fmSortOrder.value === 'asc' ? 1 : -1;
       return 0;
     });
   });
+
   watch(isFunnelModalOpen, (v) => {
     if (v) {
       fmSelectedRTM3.value = null;
@@ -1482,10 +1863,16 @@
       fmSelectedDealer.value = null;
       fmCurrentDimension.value = 'rtm3';
       fmSearchQuery.value = '';
+      loadFunnelModalData();
     }
   });
 
-  // ... Alert Modal / Table
+  watch([fmCurrentDimension, currentTaskId], () => {
+    if (isFunnelModalOpen.value) {
+      loadFunnelModalData();
+    }
+  });
+
   const amFilter = ref(alertFilter.value);
   const amShowMore = ref(false);
   const amCurrentDimension = ref('rtm3');
@@ -1503,6 +1890,27 @@
     },
     { immediate: true }
   );
+
+  watch(isAlertModalOpen, (v) => {
+    if (v) {
+      amFilter.value = alertFilter.value;
+      amSelectedRTM3.value = null;
+      amSelectedRTM4.value = null;
+      amSelectedDealer.value = null;
+      amCurrentDimension.value = 'rtm3';
+      amSearchQuery.value = '';
+      loadAlertModalData();
+    } else {
+      amShowMore.value = false;
+    }
+  });
+
+  watch([amCurrentDimension, alertFilter, currentTaskId], () => {
+    if (isAlertModalOpen.value) {
+      loadAlertModalData();
+    }
+  });
+
   const amHandleSort = (key: string) => {
     if (amSortKey.value === key) amSortOrder.value = amSortOrder.value === 'desc' ? 'asc' : 'desc';
     else {
@@ -1531,6 +1939,21 @@
       ];
     return [{ label: '门店', value: 'store' }];
   });
+  const amChangeDimension = (dim: string) => {
+    if (dim === 'rtm3') {
+      amSelectedRTM3.value = null;
+      amSelectedRTM4.value = null;
+      amSelectedDealer.value = null;
+    } else if (dim === 'rtm4') {
+      amSelectedRTM4.value = null;
+      amSelectedDealer.value = null;
+    } else if (dim === 'dealer') {
+      amSelectedDealer.value = null;
+    }
+    amCurrentDimension.value = dim;
+    amSearchQuery.value = '';
+  };
+
   const amGoToBreadcrumb = (level: string) => {
     if (level === 'root') {
       amSelectedRTM3.value = null;
@@ -1555,59 +1978,95 @@
       amSelectedRTM4.value = row.entity_name;
       amCurrentDimension.value = 'dealer';
     } else if (amCurrentDimension.value === 'dealer') {
-      amSelectedDealer.value = row.entity_name;
+      const dealer = row.entity_name || '';
+      if (dealer === '(未知)' || dealer === '(未知实体)' || dealer === '(未知门店)') {
+        amSelectedDealer.value = '';
+      } else {
+        amSelectedDealer.value = row.entity_name;
+      }
       amCurrentDimension.value = 'store';
     }
     amSearchQuery.value = '';
   };
-  const amFilteredAlerts = computed(() => {
-    let alts = alerts.value?.alerts || [];
-    if (amFilter.value === 'Unfinished') {
-      alts = alts
-        .filter((a: any) => a.completed_count < a.total_employees)
-        .map((a: any) => ({
-          ...a,
-          level: 'Unfinished',
-          risk_rate: 1 - (a.completed_count || 0) / (a.total_employees || 1),
-        }));
-    } else {
-      alts = alts.filter((a: any) => a.level === amFilter.value);
-    }
-    if (amSelectedRTM3.value) alts = alts.filter((a: any) => a.rtm3 === amSelectedRTM3.value);
-    if (amSelectedRTM4.value) alts = alts.filter((a: any) => a.rtm4 === amSelectedRTM4.value);
-    if (amSelectedDealer.value) alts = alts.filter((a: any) => a.dealer === amSelectedDealer.value);
-    return alts;
-  });
-  const amGroupedAlerts = computed(() => {
-    const raw = amFilteredAlerts.value;
-    let results: any[] = [];
-    if (amCurrentDimension.value === 'store') {
-      results = raw.map((a: any) => ({ ...a, entity_name: a.store || a.related_entity }));
-    } else {
-      const map: Record<string, any> = {};
-      raw.forEach((a: any) => {
-        const key = a[amCurrentDimension.value] || '未知';
-        if (!map[key]) {
-          map[key] = {
-            alert_id: key + '-' + a.level,
-            level: a.level,
-            entity_name: key,
-            total_employees: 0,
-            completed_count: 0,
-            risk_rate: 0,
-            count: 0,
+  const amTableData = ref<any[]>([]);
+  const amTableLoading = ref(false);
+
+  const loadAlertModalData = async () => {
+    amTableLoading.value = true;
+    try {
+      if (alertFilter.value === 'Unfinished') {
+        const heatmapParams: any = {
+          taskId: currentTaskId.value,
+          rtmLevel: amCurrentDimension.value === 'rtm3' ? 'rtm' : amCurrentDimension.value === 'rtm4' ? 'format' : amCurrentDimension.value,
+        };
+        // Heatmap API handles rtm, format, dealerName differently.
+        if (amSelectedRTM3.value) heatmapParams.rtm = amSelectedRTM3.value;
+        if (amSelectedRTM4.value) heatmapParams.format = amSelectedRTM4.value;
+        if (amSelectedDealer.value) heatmapParams.dealerName = amSelectedDealer.value;
+
+        const res = await getDashboardHeatmap(heatmapParams).send();
+        const heatmapData = (res as any)?.heatmapData || (res as any)?.data?.heatmapData || [];
+
+        const unfinishedNodes = heatmapData.filter((h: any) => {
+           const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+           return uncompleted > 0;
+        });
+
+        amTableData.value = unfinishedNodes.map((h: any) => {
+          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+          const riskRate = h.assignmentCount > 0 ? (uncompleted / h.assignmentCount) : 0;
+          return {
+            alert_id: h.rtmValue + '-unfinished',
+            level: 'Unfinished',
+            entity_name: h.rtmValue || '未知实体',
+            total_employees: h.assignmentCount || 0,
+            completed_count: h.completedCount || 0,
+            risk_count: uncompleted,
+            risk_rate: riskRate,
           };
-        }
-        map[key].total_employees += a.total_employees || 0;
-        map[key].completed_count += a.completed_count || 0;
-        map[key].risk_rate += a.risk_rate || 0;
-        map[key].count += 1;
-      });
-      results = Object.values(map).map((g) => {
-        g.risk_rate = g.count > 0 ? g.risk_rate / g.count : 0;
-        return g;
-      });
+        });
+
+      } else {
+        const params: any = {
+          taskId: currentTaskId.value,
+          warningLevel: alertFilter.value.toLowerCase(),
+          level: amCurrentDimension.value === 'rtm3' ? 'rtm' : amCurrentDimension.value === 'rtm4' ? 'format' : amCurrentDimension.value,
+          pageSize: 100,
+        };
+        if (amSelectedRTM3.value) params.rtm = amSelectedRTM3.value;
+        if (amSelectedRTM4.value) params.format = amSelectedRTM4.value;
+        if (amSelectedDealer.value) params.dealerName = amSelectedDealer.value;
+
+        const res = await getDashboardWarnings(params).send();
+        let rawList = res?.list || [];
+
+        amTableData.value = rawList.map((a: any) => {
+          const riskCount = (a.totalCount || 0) - (a.completedCount || 0);
+          return {
+            alert_id: a.targetId + '-' + a.warningLevel,
+            level: a.warningLevel ? a.warningLevel.toUpperCase() : 'Unfinished',
+            entity_name: a.targetName,
+            total_employees: a.totalCount,
+            completed_count: a.completedCount,
+            risk_count: riskCount,
+            risk_rate: a.warningRate / 100,
+          };
+        });
+      }
+    } catch (e) {
+      console.error('Fetch Alert Modal Data Failed', e);
+      amTableData.value = [];
+    } finally {
+      amTableLoading.value = false;
     }
+  };
+
+  const amFilteredAlerts = computed(() => {
+    return amTableData.value;
+  });
+
+  const amGroupedAlerts = computed(() => {
+    let results = [...amFilteredAlerts.value];
     if (amSearchQuery.value.trim()) {
       const q = amSearchQuery.value.trim().toLowerCase();
       results = results.filter((r) => (r.entity_name || '').toLowerCase().includes(q));
@@ -1641,13 +2100,11 @@
 
   onMounted(() => {
     loadTasks();
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
     window.addEventListener('resize', () => {
       if (chartInstance) chartInstance.resize();
     });
   });
   onUnmounted(() => {
-    document.removeEventListener('fullscreenchange', handleFullscreenChange);
     if (chartInstance) chartInstance.dispose();
   });
 </script>
@@ -1719,58 +2176,8 @@
               class="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-[#F9FAFB]"
             ></div>
           </button>
-          <button
-            @click="toggleFullscreen"
-            class="p-2.5 rounded-full hover:bg-[#F5F5F7] transition-colors duration-200"
-            :title="isFullscreen ? '退出全屏' : '全屏显示'"
-          >
-            <svg
-              v-if="isFullscreen"
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#0071E3"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M8 3v3a2 2 0 0 1-2 2H3" />
-              <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
-              <path d="M3 16h3a2 2 0 0 1 2 2v3" />
-              <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
-            </svg>
-            <svg
-              v-else
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#0071E3"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-              <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-              <path d="M3 16v3a2 2 0 0 0 2 2h3" />
-              <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-            </svg>
-          </button>
         </div>
       </div>
-    </div>
-
-    <!-- Toast Prompt -->
-    <div
-      :class="[
-        'fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-2.5 bg-gray-800/90 backdrop-blur-md text-white text-[14px] font-medium rounded-full shadow-2xl transition-all duration-500 pointer-events-none',
-        showFullscreenPrompt ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-8',
-      ]"
-    >
-      按 ESC 键退出全屏
     </div>
 
     <!-- Diagnosis Flow Section -->
@@ -2035,13 +2442,13 @@
                     <div
                       class="h-full rounded-full transition-all duration-300"
                       :style="{
-                        width: task.completion_rate * 100 + '%',
+                        width: task.completion_rate !== null ? task.completion_rate * 100 + '%' : '0%',
                         backgroundColor: severityColors[task.severity],
                       }"
                     ></div>
                   </div>
                   <div class="text-[12px] text-[#6B7280] font-medium w-10 text-right"
-                    >{{ Math.round(task.completion_rate * 100) }}%</div
+                    >{{ task.completion_rate !== null ? Math.round(task.completion_rate * 100) + '%' : '-' }}</div
                   >
                 </div>
               </div>
@@ -2059,12 +2466,25 @@
         <div class="w-full mx-auto px-6 sm:px-10 lg:px-12 xl:px-16">
           <!-- Layer 2: Core Metrics + Funnel -->
           <div class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
-            <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10">
+            <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10 group/card relative">
               <!-- Metric Cards Component Inlined -->
-              <div class="glass-card flex flex-col h-full w-full border-none flex-1">
+              <div class="glass-card flex flex-col h-full w-full border-none flex-1 relative">
+                <AiAnalyzePopover
+                  class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
+                  :loading="boardInsightCard.northStar.loading"                  :content="boardInsightCard.northStar.content"
+                  :generated-at="boardInsightCard.northStar.generatedAt"
+                  :user-vote="boardInsightCard.northStar.userVote"
+                  :is-reasoning="globalReasoningEnabled"
+                  :copied="copiedStates.northStar"
+                  :render-markdown="renderInsightMarkdown"
+                  @open="ensureBoardInsightOnOpen('northStar')"
+                  @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('northStar')"
+                  @feedback="handleAiFeedback('northStar', $event)"
+                  @copy="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"
+                />
                 <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
-                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide group relative cursor-help z-10"
+                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
                     按时完成率
                     <svg
@@ -2077,14 +2497,14 @@
                       stroke-width="2"
                       stroke-linecap="round"
                       stroke-linejoin="round"
-                      class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                      class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                     >
                       <circle cx="12" cy="12" r="10" />
                       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                       <path d="M12 17h.01" />
                     </svg>
                     <div
-                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-48 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
+                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-48 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                     >
                       在截止时间前完成任务的员工比例。用于衡量大盘整体的推进效率。
                     </div>
@@ -2157,7 +2577,7 @@
                 <div class="h-px bg-gray-100 mx-6"></div>
                 <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
-                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide group relative cursor-help z-10"
+                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
                     触达确认率
                     <svg
@@ -2170,14 +2590,14 @@
                       stroke-width="2"
                       stroke-linecap="round"
                       stroke-linejoin="round"
-                      class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                      class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                     >
                       <circle cx="12" cy="12" r="10" />
                       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                       <path d="M12 17h.01" />
                     </svg>
                     <div
-                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
+                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                     >
                       已阅读/确认任务的人数占成功送达总人数的比例，体现任务下发的触达质量。
                     </div>
@@ -2199,7 +2619,7 @@
                 <div class="h-px bg-gray-100 mx-6"></div>
                 <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
-                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide group relative cursor-help z-10"
+                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
                     预警条数
                     <svg
@@ -2212,14 +2632,14 @@
                       stroke-width="2"
                       stroke-linecap="round"
                       stroke-linejoin="round"
-                      class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                      class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                     >
                       <circle cx="12" cy="12" r="10" />
                       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                       <path d="M12 17h.01" />
                     </svg>
                     <div
-                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-48 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
+                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-48 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                     >
                       系统诊断出的异常状态总数。P0表示距ddl不足24h，P1表示距ddl不足48h，P2表示起步异常。
                     </div>
@@ -2261,8 +2681,22 @@
                 </div>
               </div>
             </div>
-            <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0">
-              <div class="flex items-center gap-1.5 mb-4 group relative w-fit cursor-help">
+            <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
+              <AiAnalyzePopover
+                class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
+                :loading="boardInsightCard.funnel.loading"
+                :content="boardInsightCard.funnel.content"
+                :generated-at="boardInsightCard.funnel.generatedAt"
+                :user-vote="boardInsightCard.funnel.userVote"
+                :is-reasoning="globalReasoningEnabled"
+                :copied="copiedStates.funnel"
+                :render-markdown="renderInsightMarkdown"
+                @open="ensureBoardInsightOnOpen('funnel')"
+                @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('funnel')"
+                @feedback="handleAiFeedback('funnel', $event)"
+                @copy="handleCopyAiInsight(boardInsightCard.funnel.content, 'funnel')"
+              />
+              <div class="flex items-center gap-1.5 mb-4 relative w-fit cursor-help z-10">
                 <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
                   >转化漏斗</h3
                 >
@@ -2276,14 +2710,14 @@
                   stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                  class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                 >
                   <circle cx="12" cy="12" r="10" />
                   <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                   <path d="M12 17h.01" />
                 </svg>
                 <div
-                  class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
+                  class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
                 >
                   展示任务生命周期各阶段的转化和流失情况。流失率达到 20% 时会触发系统自动标红预警。
                 </div>
@@ -2381,31 +2815,33 @@
           </div>
 
           <!-- Layer 3: Unified Alert Block -->
-          <div class="mt-16">
-            <div class="flex items-center gap-1.5 mb-6 group relative w-fit cursor-help">
-              <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
-                >预警中心</h3
-              >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                <path d="M12 17h.01" />
-              </svg>
-              <div
-                class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-56 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
-              >
-                实时展示诊断出的各层级业务风险项，漏斗图展示了高危风险逐步缩口的转化情况。
+          <div class="mt-16 relative group">
+            <div class="flex items-center justify-between mb-6 relative z-10">
+              <div class="flex items-center gap-1.5 w-fit cursor-help">
+                <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
+                  >预警中心</h3
+                >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                  <path d="M12 17h.01" />
+                </svg>
+                <div
+                  class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-56 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
+                >
+                  实时展示诊断出的各层级业务风险项，漏斗图展示了高危风险逐步缩口的转化情况。
+                </div>
               </div>
             </div>
             <div class="flex flex-col lg:flex-row gap-5 items-stretch">
@@ -2612,8 +3048,22 @@
                   </div>
                 </div>
               </div>
-              <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0">
-                <div class="flex items-center gap-1.5 mb-4 group relative w-fit cursor-help">
+              <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
+                <AiAnalyzePopover
+                  class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
+                  :loading="boardInsightCard.warning.loading"
+                  :content="boardInsightCard.warning.content"
+                  :generated-at="boardInsightCard.warning.generatedAt"
+                  :user-vote="boardInsightCard.warning.userVote"
+                  :is-reasoning="globalReasoningEnabled"
+                  :copied="copiedStates.warning"
+                  :render-markdown="renderInsightMarkdown"
+                  @open="ensureBoardInsightOnOpen('warning')"
+                  @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('warning')"
+                  @feedback="handleAiFeedback('warning', $event)"
+                  @copy="handleCopyAiInsight(boardInsightCard.warning.content, 'warning')"
+                />
+                <div class="flex items-center gap-1.5 mb-4 relative w-fit cursor-help z-10">
                   <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
                     >预警风险漏斗</h3
                   >
@@ -2627,14 +3077,14 @@
                     stroke-width="2"
                     stroke-linecap="round"
                     stroke-linejoin="round"
-                    class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                    class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                   >
                     <circle cx="12" cy="12" r="10" />
                     <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                     <path d="M12 17h.01" />
                   </svg>
                   <div
-                    class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
+                    class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
                   >
                     漏斗图展示了各阶段异常向更严重状态发展的转化情况。点击可下钻明细表。
                   </div>
@@ -2730,7 +3180,7 @@
                     <div
                       class="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between"
                     >
-                      <div class="flex items-center gap-2 group relative cursor-help">
+                      <div class="flex items-center gap-2 relative cursor-help">
                         <div
                           class="w-6 h-6 rounded-full bg-[#EBF5FF] flex items-center justify-center"
                         >
@@ -2760,14 +3210,14 @@
                           stroke-width="2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
-                          class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
+                          class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
                         >
                           <circle cx="12" cy="12" r="10" />
                           <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
                           <path d="M12 17h.01" />
                         </svg>
                         <div
-                          class="absolute bottom-full mb-2 left-0 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
+                          class="absolute bottom-full mb-2 left-0 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                         >
                           预警转化率 = (最初进入P2风险人数 - 最终未完成人数) /
                           最初进入P2风险人数。衡量对风险人员的挽回效率。
@@ -2786,38 +3236,54 @@
           </div>
 
           <!-- Layer 4: Trend Chart + Region Ranking -->
-          <div class="mt-16 mb-16 flex flex-col lg:flex-row gap-6 items-stretch">
-            <div class="lg:w-1/2 flex-shrink-0 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10">
+          <div class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
+            <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card">
               <!-- Trend Chart Container -->
-              <div class="w-full flex flex-col h-full">
+              <div class="w-full flex flex-col h-full z-10">
                 <div
                   class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4 flex-shrink-0"
                 >
-                  <div class="flex items-center gap-1.5 group relative w-fit cursor-help">
-                    <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
-                      >完成趋势</h3
-                    >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                      <path d="M12 17h.01" />
-                    </svg>
-                    <div
-                      class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
-                    >
-                      显示大盘在所选时间段内的推进情况。折线代表历史累计完成人数，柱状图代表各个节点的单日/单时新增完成人数。
+                  <div class="flex items-center gap-3 relative w-fit z-10">
+                    <div class="flex items-center gap-1.5 relative w-fit cursor-help">
+                      <h3 class="text-[18px] leading-[1.3] font-semibold text-[#111827] font-outfit"
+                        >完成趋势</h3
+                      >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                        <path d="M12 17h.01" />
+                      </svg>
+                      <div
+                        class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
+                      >
+                        显示大盘在所选时间段内的推进情况。折线代表历史累计完成人数，柱状图代表各个节点的单日/单时新增完成人数。
+                      </div>
                     </div>
+                    <AiAnalyzePopover
+                      class="relative opacity-0 group-hover/card:opacity-100 transition-opacity duration-200"
+                      :loading="boardInsightCard.trend.loading"
+                      :content="boardInsightCard.trend.content"
+                      :generated-at="boardInsightCard.trend.generatedAt"
+                      :user-vote="boardInsightCard.trend.userVote"
+                      :is-reasoning="globalReasoningEnabled"
+                      :copied="copiedStates.trend"
+                      :render-markdown="renderInsightMarkdown"
+                      @open="ensureBoardInsightOnOpen('trend')"
+                      @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('trend')"
+                      @feedback="handleAiFeedback('trend', $event)"
+                      @copy="handleCopyAiInsight(boardInsightCard.trend.content, 'trend')"
+                    />
                   </div>
                   <div class="flex items-center gap-3">
                     <!-- Select Week/Date -->
@@ -2868,9 +3334,9 @@
                 </div>
               </div>
             </div>
-            <div class="lg:w-1/2 flex-shrink-0 min-w-0 flex flex-col glass-card p-6 md:p-8">
+            <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
               <!-- Region Ranking Component Inlined -->
-              <div v-if="true" class="w-full flex flex-col h-full min-h-[380px] flex-1 relative">
+              <div v-if="true" class="w-full flex flex-col h-full min-h-[380px] flex-1 relative z-10">
                 <!-- Loading Overlay -->
                 <div
                   v-if="isRtmLoading"
@@ -2885,39 +3351,55 @@
                     <h3
                       class="text-[18px] leading-[1.3] font-semibold text-[#1D1D1F] flex items-center gap-2 flex-wrap"
                     >
-                      <div class="flex items-center gap-1.5 group relative w-fit cursor-help">
-                        <span
-                          @click="rrGoToBreadcrumb('root')"
-                          :class="[
-                            'cursor-pointer transition-colors duration-200',
-                            rrSelectedRTM3
-                              ? 'text-[#86868B] hover:text-[#0071E3]'
-                              : 'text-[#1D1D1F]',
-                          ]"
-                          >RTM 进度排行</span
-                        >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          class="text-[#9CA3AF] group-hover:text-[#6B7280] transition-colors"
-                        >
-                          <circle cx="12" cy="12" r="10" />
-                          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                          <path d="M12 17h.01" />
-                        </svg>
-                        <div
-                          class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
-                        >
-                          显示各级业务节点的任务完成进度排名。可切换查看 RTM / 经销商 /
-                          门店层级，并支持下钻查看特定节点的详细分布。
+                      <div class="flex items-center gap-3 relative w-fit z-10">
+                        <div class="flex items-center gap-1.5 relative w-fit cursor-help">
+                          <span
+                            @click="rrGoToBreadcrumb('root')"
+                            :class="[
+                              'cursor-pointer transition-colors duration-200',
+                              rrSelectedRTM3
+                                ? 'text-[#86868B] hover:text-[#0071E3]'
+                                : 'text-[#1D1D1F]',
+                            ]"
+                            >RTM 进度排行</span
+                          >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
+                          >
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                            <path d="M12 17h.01" />
+                          </svg>
+                          <div
+                            class="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-64 bg-gray-900 text-white text-[12px] font-normal leading-relaxed rounded-lg py-2.5 px-3.5 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-[999] text-left shadow-lg"
+                          >
+                            显示各级业务节点的任务完成进度排名。可切换查看 RTM / 经销商 /
+                            门店层级，并支持下钻查看特定节点的详细分布。
+                          </div>
                         </div>
+                        <AiAnalyzePopover
+                          class="relative opacity-0 group-hover/card:opacity-100 transition-opacity duration-200"
+                          :loading="boardInsightCard.rtm.loading"
+                          :content="boardInsightCard.rtm.content"
+                          :generated-at="boardInsightCard.rtm.generatedAt"
+                          :user-vote="boardInsightCard.rtm.userVote"
+                          :is-reasoning="globalReasoningEnabled"
+                          :copied="copiedStates.rtm"
+                          :render-markdown="renderInsightMarkdown"
+                          @open="ensureBoardInsightOnOpen('rtm')"
+                          @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('rtm')"
+                          @feedback="handleAiFeedback('rtm', $event)"
+                          @copy="handleCopyAiInsight(boardInsightCard.rtm.content, 'rtm')"
+                        />
                       </div>
                       <template v-if="rrSelectedRTM3">
                         <svg
@@ -3007,7 +3489,7 @@
                       <button
                         v-for="dim in rrAvailableDimensions"
                         :key="dim.value"
-                        @click="rrCurrentDimension = dim.value"
+                        @click="rrChangeDimension(dim.value)"
                         :class="[
                           'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
                           rrCurrentDimension === dim.value
@@ -3048,144 +3530,145 @@
                   </div>
                 </div>
 
-                <div
-                  class="flex items-center gap-3 px-4 pb-2 mb-2 text-[12px] font-medium text-[#86868B] border-b border-[#E5E5E7] flex-shrink-0"
-                >
-                  <div class="w-6 text-center flex-shrink-0">排名</div>
-                  <div class="w-4 flex-shrink-0"></div>
-                  <div class="w-20 flex-shrink-0 truncate">{{ rrDimensionLabel }}</div>
-                  <div class="flex-1">完成进度</div>
-                  <div
-                    class="w-16 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
-                    @click="rrHandleSort('completion_rate')"
-                  >
-                    比例
+                <div class="flex-1 overflow-x-auto">
+                  <div class="min-w-[480px]">
                     <div
-                      class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
+                      class="flex items-center gap-2 lg:gap-3 px-2 lg:px-4 pb-2 mb-2 text-[12px] font-medium text-[#86868B] border-b border-[#E5E5E7] flex-shrink-0 min-w-max"
                     >
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 -mb-[4px] transition-colors',
-                          rrSortKey === 'completion_rate' && rrSortOrder === 'asc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
+                      <div class="w-5 lg:w-6 text-center flex-shrink-0">排名</div>
+                      <div class="w-3 lg:w-4 flex-shrink-0"></div>
+                      <div class="w-24 lg:w-32 flex-shrink-0 truncate">{{ rrDimensionLabel }}</div>
+                      <div class="flex-1 min-w-[60px] hidden sm:block">完成进度</div>
+                      <div
+                        class="w-12 lg:w-16 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
+                        @click="rrHandleSort('completion_rate')"
                       >
-                        <path d="m18 15-6-6-6 6" />
-                      </svg>
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 transition-colors',
-                          rrSortKey === 'completion_rate' && rrSortOrder === 'desc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
+                        比例
+                        <div
+                          class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
+                        >
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 -mb-[4px] transition-colors',
+                              rrSortKey === 'completion_rate' && rrSortOrder === 'asc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m18 15-6-6-6 6" />
+                          </svg>
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 transition-colors',
+                              rrSortKey === 'completion_rate' && rrSortOrder === 'desc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
+                      </div>
+                      <div
+                        class="w-20 lg:w-24 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
+                        @click="rrHandleSort('completed_count')"
                       >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
+                        达成情况
+                        <div
+                          class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
+                        >
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 -mb-[4px] transition-colors',
+                              rrSortKey === 'completed_count' && rrSortOrder === 'asc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m18 15-6-6-6 6" />
+                          </svg>
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 transition-colors',
+                              rrSortKey === 'completed_count' && rrSortOrder === 'desc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
+                      </div>
+                      <div
+                        class="w-16 lg:w-24 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
+                        @click="rrHandleSort('avg_time_val')"
+                      >
+                        人均耗时
+                        <div
+                          class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
+                        >
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 -mb-[4px] transition-colors',
+                              rrSortKey === 'avg_time_val' && rrSortOrder === 'asc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m18 15-6-6-6 6" />
+                          </svg>
+                          <svg
+                            :class="[
+                              'w-2.5 h-2.5 transition-colors',
+                              rrSortKey === 'avg_time_val' && rrSortOrder === 'desc'
+                                ? 'text-[#0071E3]'
+                                : 'text-[#9CA3AF]',
+                            ]"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    class="w-24 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
-                    @click="rrHandleSort('completed_count')"
-                  >
-                    达成情况
+                    
                     <div
-                      class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
-                    >
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 -mb-[4px] transition-colors',
-                          rrSortKey === 'completed_count' && rrSortOrder === 'asc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="m18 15-6-6-6 6" />
-                      </svg>
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 transition-colors',
-                          rrSortKey === 'completed_count' && rrSortOrder === 'desc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </div>
-                  </div>
-                  <div
-                    class="w-24 text-right flex-shrink-0 whitespace-nowrap cursor-pointer hover:text-[#111827] flex items-center justify-end select-none"
-                    @click="rrHandleSort('avg_time_val')"
-                  >
-                    人均耗时
-                    <div
-                      class="inline-flex flex-col items-center justify-center w-3 h-3 ml-1 align-middle"
-                    >
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 -mb-[4px] transition-colors',
-                          rrSortKey === 'avg_time_val' && rrSortOrder === 'asc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="m18 15-6-6-6 6" />
-                      </svg>
-                      <svg
-                        :class="[
-                          'w-2.5 h-2.5 transition-colors',
-                          rrSortKey === 'avg_time_val' && rrSortOrder === 'desc'
-                            ? 'text-[#0071E3]'
-                            : 'text-[#9CA3AF]',
-                        ]"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="3.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="flex-1">
-                  <div
-                    v-if="rrCurrentNodes.length === 0"
+                      v-if="rrCurrentNodes.length === 0"
                     class="py-12 text-center text-[#86868B] text-[13px] border border-dashed border-[#E5E5E7] rounded-lg mt-4"
                   >
                     该维度下暂无数据
@@ -3196,40 +3679,41 @@
                       <div
                         @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
                         :class="[
-                          'flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 bg-[#F0FFF4]',
+                          'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#F0FFF4] min-w-max',
                           rrCurrentDimension !== 'store'
                             ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
                             : '',
                         ]"
                       >
                         <div
-                          class="text-[15px] font-bold w-6 text-center flex items-center justify-center flex-shrink-0"
+                          class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
                           style="color: #34c759"
                           ><span>{{ region.rank }}</span></div
                         >
                         <div
-                          class="w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                          class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
                           ><svg
                             v-if="rrCurrentDimension !== 'store'"
                             xmlns="http://www.w3.org/2000/svg"
-                            width="16"
-                            height="16"
+                            width="14"
+                            height="14"
                             viewBox="0 0 24 24"
                             fill="none"
                             stroke="currentColor"
                             stroke-width="2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
+                            class="lg:w-4 lg:h-4"
                           >
                             <path d="m9 18 6-6-6-6" /></svg
                         ></div>
                         <div
-                          class="text-[14px] font-semibold text-[#1D1D1F] w-20 truncate flex-shrink-0"
+                          class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
                           :title="region.region_name || region.entity_name"
                           >{{ region.region_name || region.entity_name }}</div
                         >
                         <div
-                          class="flex-1 h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden min-w-[50px]"
+                          class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
                         >
                           <div
                             class="h-full rounded-full transition-all duration-500"
@@ -3245,16 +3729,16 @@
                           ></div>
                         </div>
                         <div
-                          class="text-[14px] font-bold text-[#1D1D1F] w-16 text-right flex-shrink-0"
+                          class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
                           >{{ Math.round(region.completion_rate * 100) }}%</div
                         >
-                        <div class="text-[12px] text-[#86868B] w-24 text-right flex-shrink-0"
+                        <div class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
                           >{{ (region.completed_count || 0).toLocaleString() }}/{{
                             (region.employee_count || 0).toLocaleString()
                           }}</div
                         >
                         <div
-                          class="text-[13px] text-[#1D1D1F] font-bold w-24 text-right flex-shrink-0"
+                          class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
                           >{{ region.avg_time || '-' }}</div
                         >
                       </div>
@@ -3262,11 +3746,90 @@
 
                     <div v-if="rrMiddleRegions.length > 0">
                       <div
-                        class="w-full flex items-center justify-between px-4 py-3 bg-[#F5F5F7] rounded-lg transition-colors duration-200"
+                        @click="rrExpandedMiddle = !rrExpandedMiddle"
+                        class="w-full flex items-center justify-between px-4 py-3 bg-[#F5F5F7] hover:bg-[#E5E5E7] cursor-pointer rounded-lg transition-colors duration-200 min-w-max"
                       >
-                        <span class="text-[13px] text-[#86868B]"
-                          >其余 {{ rrMiddleRegions.length }} 个节点</span
+                        <span class="text-[13px] text-[#86868B] font-medium"
+                          >{{ rrExpandedMiddle ? '收起' : '展开' }}其余 {{ rrMiddleRegions.length }} 个节点</span
                         >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          :class="['text-[#86868B] transition-transform duration-200', rrExpandedMiddle ? 'rotate-180' : '']"
+                        >
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </div>
+
+                      <!-- Expanded Middle Regions -->
+                      <div v-if="rrExpandedMiddle" class="mt-2 space-y-2">
+                        <template v-for="region in rrMiddleRegions" :key="region.id || region.region_id">
+                          <div
+                            @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
+                            :class="[
+                              'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-white border border-gray-100 min-w-max',
+                              rrCurrentDimension !== 'store' ? 'cursor-pointer hover:bg-blue-50/30' : 'hover:bg-gray-50/50',
+                            ]"
+                          >
+                            <div
+                              class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                              ><span>{{ region.rank }}</span></div
+                            >
+                            <div
+                              class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                              ><svg
+                                v-if="rrCurrentDimension !== 'store'"
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                class="opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                <path d="m9 18 6-6-6-6" />
+                              </svg></div
+                            >
+                            <div
+                              class="w-24 lg:w-32 text-[14px] font-semibold text-[#111827] truncate flex-shrink-0"
+                              :title="region.region_name || region.entity_name"
+                              >{{ region.region_name || region.entity_name }}</div
+                            >
+                            <div class="flex-1 min-w-[60px] hidden sm:flex items-center gap-3">
+                              <div class="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                  class="h-full rounded-full transition-all duration-500 bg-[#86868B]"
+                                  :style="{ width: region.completion_rate * 100 + '%' }"
+                                ></div>
+                              </div>
+                            </div>
+                            <div
+                              class="w-12 lg:w-16 text-right text-[14px] lg:text-[15px] font-bold font-outfit text-[#111827] flex-shrink-0"
+                              >{{ Math.round(region.completion_rate * 100) }}%</div
+                            >
+                            <div
+                              class="text-[13px] text-[#6B7280] font-medium w-16 lg:w-20 text-right flex-shrink-0"
+                              >{{ (region.completed_count || 0).toLocaleString() }} /
+                              {{
+                                (region.employee_count || 0).toLocaleString()
+                              }}</div
+                            >
+                            <div
+                              class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
+                              >{{ region.avg_time || '-' }}</div
+                            >
+                          </div>
+                        </template>
                       </div>
                     </div>
 
@@ -3277,40 +3840,41 @@
                       <div
                         @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
                         :class="[
-                          'flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 bg-[#FFF5F5]',
+                          'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#FFF5F5] min-w-max',
                           rrCurrentDimension !== 'store'
                             ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
                             : '',
                         ]"
                       >
                         <div
-                          class="text-[15px] font-bold w-6 text-center flex items-center justify-center flex-shrink-0"
+                          class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
                           style="color: #ff3b30"
                           ><span>{{ region.rank }}</span></div
                         >
                         <div
-                          class="w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                          class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
                           ><svg
                             v-if="rrCurrentDimension !== 'store'"
                             xmlns="http://www.w3.org/2000/svg"
-                            width="16"
-                            height="16"
+                            width="14"
+                            height="14"
                             viewBox="0 0 24 24"
                             fill="none"
                             stroke="currentColor"
                             stroke-width="2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
+                            class="lg:w-4 lg:h-4"
                           >
                             <path d="m9 18 6-6-6-6" /></svg
                         ></div>
                         <div
-                          class="text-[14px] font-semibold text-[#1D1D1F] w-20 truncate flex-shrink-0"
+                          class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
                           :title="region.region_name || region.entity_name"
                           >{{ region.region_name || region.entity_name }}</div
                         >
                         <div
-                          class="flex-1 h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden min-w-[50px]"
+                          class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
                         >
                           <div
                             class="h-full rounded-full transition-all duration-500"
@@ -3326,16 +3890,16 @@
                           ></div>
                         </div>
                         <div
-                          class="text-[14px] font-bold text-[#1D1D1F] w-16 text-right flex-shrink-0"
+                          class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
                           >{{ Math.round(region.completion_rate * 100) }}%</div
                         >
-                        <div class="text-[12px] text-[#86868B] w-24 text-right flex-shrink-0"
+                        <div class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
                           >{{ (region.completed_count || 0).toLocaleString() }}/{{
                             (region.employee_count || 0).toLocaleString()
                           }}</div
                         >
                         <div
-                          class="text-[13px] text-[#1D1D1F] font-bold w-24 text-right flex-shrink-0"
+                          class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
                           >{{ region.avg_time || '-' }}</div
                         >
                       </div>
@@ -3346,9 +3910,11 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
     </div>
 
+    
     <!-- Funnel Modal -->
     <div
       v-if="isFunnelModalOpen"
@@ -3432,7 +3998,7 @@
                     'cursor-pointer transition-colors duration-200',
                     fmSelectedRTM3 ? 'text-[#86868B] hover:text-[#0071E3]' : 'text-[#111827]',
                   ]"
-                  >全部 {{ selectedFunnelStage?.label || '' }}明细</span
+                  >全局大盘</span
                 >
                 <template v-if="fmSelectedRTM3">
                   <svg
@@ -3520,9 +4086,8 @@
                 <button
                   v-for="dim in fmAvailableDimensions"
                   :key="dim.value"
-                  @click="fmCurrentDimension = dim.value"
-                  :class="[
-                    'px-4 py-1.5 text-[13px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                  @click="fmChangeDimension(dim.value)"
+                  :class="[                    'px-4 py-1.5 text-[13px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
                     fmCurrentDimension === dim.value
                       ? 'bg-white text-[#111827] shadow-sm'
                       : 'text-[#6B7280] hover:text-[#111827]',
@@ -3559,8 +4124,17 @@
           </div>
 
           <div
-            class="border border-[#E5E5E7] bg-white rounded-xl overflow-hidden flex-1 flex flex-col shadow-sm"
+            class="border border-[#E5E5E7] bg-white rounded-xl overflow-hidden flex-1 flex flex-col shadow-sm relative"
           >
+            <!-- Loading Overlay -->
+            <div
+              v-if="fmTableLoading"
+              class="absolute inset-0 z-50 flex items-center justify-center bg-white/60 backdrop-blur-sm"
+            >
+              <div
+                class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"
+              ></div>
+            </div>
             <div class="overflow-y-auto flex-1">
               <table class="w-full border-collapse relative">
                 <thead class="sticky top-0 z-10 bg-[#FAFAFA] shadow-[0_1px_0_#E5E5E7]">
@@ -3591,13 +4165,13 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="fmTableData.length === 0">
+                  <tr v-if="fmGroupedData.length === 0 && !fmTableLoading">
                     <td colspan="4" class="py-12 text-center text-[13px] text-[#86868B]"
                       >暂无匹配数据</td
                     >
                   </tr>
                   <tr
-                    v-for="(item, index) in fmTableData"
+                    v-for="(item, index) in fmGroupedData"
                     :key="index"
                     @click="fmCurrentDimension !== 'store' && fmHandleDrillDown(item)"
                     :class="[
@@ -3833,9 +4407,8 @@
                   <button
                     v-for="dim in amAvailableDimensions"
                     :key="dim.value"
-                    @click="amCurrentDimension = dim.value"
-                    :class="[
-                      'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                    @click="amChangeDimension(dim.value)"
+                    :class="[                      'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
                       amCurrentDimension === dim.value
                         ? 'bg-white text-[#111827] shadow-sm'
                         : 'text-[#6B7280] hover:text-[#111827]',
@@ -3872,9 +4445,18 @@
             </div>
 
             <div
-              v-if="amDisplayedAlerts.length > 0"
-              class="border border-[#E5E5E7] rounded-xl overflow-hidden overflow-x-auto flex flex-col flex-1 min-h-0"
+              v-if="amDisplayedAlerts.length > 0 || amTableLoading"
+              class="border border-[#E5E5E7] rounded-xl overflow-hidden overflow-x-auto flex flex-col flex-1 min-h-0 relative"
             >
+              <!-- Loading Overlay -->
+              <div
+                v-if="amTableLoading"
+                class="absolute inset-0 z-50 flex items-center justify-center bg-white/60 backdrop-blur-sm"
+              >
+                <div
+                  class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"
+                ></div>
+              </div>
               <div class="overflow-y-auto max-h-full pr-1 flex-1">
                 <table class="w-full border-collapse relative">
                   <thead class="sticky top-0 z-10 bg-[#FAFAFA] shadow-[0_1px_0_#E5E5E7]">
@@ -3895,6 +4477,11 @@
                         class="w-20 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('completed_count')"
                         ><div class="flex items-center justify-end">已完成</div></th
+                      >
+                      <th
+                        class="w-24 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none whitespace-nowrap"
+                        @click="amHandleSort('risk_count')"
+                        ><div class="flex items-center justify-end">预警人数</div></th
                       >
                       <th
                         v-if="alertFilter === 'P0'"
@@ -4001,6 +4588,10 @@
                       <td class="py-4 px-4 text-right text-[14px] font-bold text-[#111827]">{{
                         (alert.completed_count || 0).toLocaleString()
                       }}</td>
+                      <td class="py-4 px-4 text-right text-[14px] font-bold"
+                          :style="{ color: alert.total_employees - alert.completed_count > 0 ? '#FF3B30' : '#111827' }">
+                        {{ ((alert.total_employees || 0) - (alert.completed_count || 0)).toLocaleString() }}
+                      </td>
                       <td
                         class="py-4 px-4 text-right text-[14px] font-medium"
                         :style="{
@@ -4020,7 +4611,7 @@
               </div>
             </div>
             <div
-              v-else
+              v-else-if="!amTableLoading"
               class="flex-1 flex flex-col items-center justify-center min-h-[300px] bg-white rounded-xl border border-[#E5E5E7]"
             >
               <svg
