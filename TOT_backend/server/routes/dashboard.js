@@ -205,15 +205,35 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     // 催办转化率：有被催办且在催办后开始任务/完成任务的 assignment 数？
     // 简化处理：若 PRD 只写“点击任务开始学习任务数/总任务数”，那可能就是 `started` / `total`。但因为名字叫“催办转化率”，我们取:
     // 有被催办记录（nudge_count > 0）且已开始或已完成的数量 / 被催办的总数量。
-    const nudgeRow = db.get(
-      `SELECT
-         COUNT(ta.id) AS total_nudged,
-         SUM(CASE WHEN ta.started_at IS NOT NULL OR ta.status = 'completed' THEN 1 ELSE 0 END) AS converted_nudged
-       FROM task_assignments ta
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere} AND ta.nudge_count > 0`,
-      allParams
-    );
+    
+    // 原来基于 assignment.nudge_count 的催办转化率，现改为基于 notification_events
+    // 逻辑：该维度下，收到过 nudge_* 的 DISTINCT 人数，以及收到后 status 变更为 completed 且 completed_at > 下发时间的人数。
+    let total_nudged = 0, converted_nudged = 0;
+    try {
+      const q = `
+        SELECT
+          COUNT(DISTINCT ne.target_user_id) AS total_nudged,
+          COUNT(DISTINCT CASE 
+            WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+            ELSE NULL 
+          END) AS converted_nudged
+        FROM notification_events ne
+        LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
+        ${drill.hasDrill ? 'JOIN stores s ON s.id = ne.store_id' : ''}
+        WHERE ne.event_type IN ('nudge_red', 'nudge_orange', 'nudge_yellow')
+          ${taskId ? 'AND ne.task_id = ?' : ''}
+          ${drill.hasDrill ? 'AND ' + drill.sql.replace(/^\s*AND\s+/, '') : ''}
+      `;
+      const p = [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])];
+      const result = db.get(q, p);
+      if (result) {
+        total_nudged = result.total_nudged || 0;
+        converted_nudged = result.converted_nudged || 0;
+      }
+    } catch(e) {}
+
+    const nudgeRow = { total_nudged, converted_nudged };
+
     const nudgeConversionRate =
       nudgeRow.total_nudged > 0
         ? parseFloat(((100 * nudgeRow.converted_nudged) / nudgeRow.total_nudged).toFixed(2))

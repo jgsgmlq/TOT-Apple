@@ -25,8 +25,15 @@ async function dashboardDiagnoseHandler(context) {
   // 注入自身的身份类型以区分记忆库
   context.agentType = 'dashboard';
 
+  // 解决大模型幻觉，强行注入当前的系统绝对时间作为锚点
+  const nowString = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
   const systemPrompt = `你是一个高度智能、可自我进化和记忆的 Apple 培训看板数据分析 Agent。
 你的核心任务是对当前看板正在执行的培训任务进行全局深度诊断，发现异常，并给出优化建议。
+
+【当前系统时间（重要基准）】
+现在的真实系统时间是：${nowString}
+请你以此作为时间基准，去判断各个任务数据中的 \`ddl_at\` 距离今天还有多久。绝对不要自己胡编乱造“今天”是哪一天，在计算逾期、临期情况时务必做准确的相对时间运算。
 
 【执行 SOP 必选动作】
 你必须按以下顺序行动，否则是不称职的：
@@ -54,6 +61,7 @@ async function dashboardDiagnoseHandler(context) {
 【业务硬性要求】
 - 全局最多 1 个任务被评为 "red"。
 - \`topTasks\` 必须按 severity (red > orange > green) 降序排列。
+- \`insight\` 字段里必须给出人类易读的白话业务解释，绝对禁止在 \`insight\` 里直接抛出后端变量名（例如严禁出现 "crisisP0Rate=94%"、"startDelay=2" 这种机器词汇），应该转换为业务解释（例如 "面临P0危机的占比达到94%"）。
 - 只有当你确信已经准备好上述要求的 JSON 数据时，才输出文本内容！
 `;
 
