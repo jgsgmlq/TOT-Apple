@@ -61,6 +61,7 @@ async function dashboardDiagnoseHandler(context) {
 【业务硬性要求】
 - 全局最多 1 个任务被评为 "red"。
 - \`topTasks\` 必须按 severity (red > orange > green) 降序排列。
+- \`insight\` 字段里必须给出人类易读的白话业务解释，绝对禁止在 \`insight\` 里直接抛出后端变量名（例如严禁出现 "crisisP0Rate=94%"、"startDelay=2" 这种机器词汇），应该转换为业务解释（例如 "面临P0危机的占比达到94%"）。
 - 只有当你确信已经准备好上述要求的 JSON 数据时，才输出文本内容！
 `;
 
