@@ -100,5 +100,6 @@ async function getDashboardAgentInsight(userId, refresh = false) {
 }
 
 module.exports = {
-  getDashboardAgentInsight
+  getDashboardAgentInsight,
+  generateDashboardAgentInsight
 };

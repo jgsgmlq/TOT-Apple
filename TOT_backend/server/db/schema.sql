@@ -205,7 +205,7 @@ CREATE INDEX IF NOT EXISTS idx_um_hash    ON user_memories(memory_hash);
 CREATE TABLE IF NOT EXISTS dashboard_insights (
   id                  TEXT PRIMARY KEY,
   module_type         TEXT NOT NULL
-                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts', 'global_agent')),
+                        CHECK (module_type IN ('north_star', 'completion_weekly', 'completion_daily', 'channel_north_star', 'funnel_alerts', 'global_agent', 'conversion_funnel')),
   task_id             TEXT REFERENCES tasks(id),
   filter_rtm          TEXT,
   filter_format       TEXT,
