@@ -15,6 +15,7 @@ const MODULE_TYPES = [
   'completion_daily',
   'channel_north_star',
   'funnel_alerts',
+  'conversion_funnel',
 ];
 const INSIGHT_TYPES = [
   'north_star',
@@ -22,6 +23,7 @@ const INSIGHT_TYPES = [
   'completion_daily',
   'channel_north_star',
   'funnel_alerts',
+  'conversion_funnel',
 ];
 
 function normalizeQuery(body) {
@@ -491,6 +493,7 @@ function resolveInsightType(body) {
   const raw = (body.insightType || '').trim();
   if (INSIGHT_TYPES.includes(raw)) return raw;
   if (body.module === 'funnel') return 'north_star';
+  if (body.module === 'conversion_funnel') return 'conversion_funnel';
   if (body.module === 'trend') {
     return body.trendType === 'hourly' ? 'completion_daily' : 'completion_weekly';
   }
@@ -539,12 +542,17 @@ function buildPromptByInsightType(insightType, facts) {
     };
   }
 
+  if (insightType === 'conversion_funnel') {
+    return {
+      system: '你是资深零售漏斗转化分析师。只分析漏斗各层级转化率（推送->阅读->在学->完课），禁止建议、禁止评估催办预警。',
+      user: `请严格按结构输出：\n### 📊 核心转化漏斗特征\n### 🔍 转化流失节点深度归因\n数据：${JSON.stringify(facts, null, 2)}`,
+      options: { maxTokens: 800, temperature: 0.2 },
+    };
+  }
+
   return {
-    system: '你是资深零售链路分析师。只输出客观洞察与归因，禁止建议、禁止行动方案、禁止评估催办时间点。',
-    user:
-      `请严格按结构输出：\n` +
-      `### 📊一、 全局链路健康度洞察\n### 🔍二、 核心数据洞察与深度归因\n` +
-      `数据：${JSON.stringify(facts, null, 2)}`,
+    system: '你是资深零售预警与催办数据分析师。只基于输入数据输出客观洞察与归因，禁止建议，聚焦逾期、各级预警率及催办有效性转化率。',
+    user: `请严格按结构输出：\n### 🚨 预警健康度洞察\n### 🔔 催办有效性与深度归因\n数据：${JSON.stringify(facts, null, 2)}`,
     options: { maxTokens: 1100, temperature: 0.2 },
   };
 }
@@ -572,6 +580,7 @@ function prepareInsightContext(body) {
   else if (insightType === 'completion_weekly') facts = buildWeeklyCompletionFacts(body);
   else if (insightType === 'completion_daily') facts = buildDailyCompletionFacts(body);
   else if (insightType === 'channel_north_star') facts = buildChannelNorthStarFacts(body);
+  else if (insightType === 'conversion_funnel') facts = buildFunnelFacts(body);
   else facts = buildFunnelFacts(body);
 
   const promptPack = buildPromptByInsightType(insightType, facts);
