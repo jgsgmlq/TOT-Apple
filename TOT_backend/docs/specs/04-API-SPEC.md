@@ -1,5 +1,9 @@
 # ToT API 接口定义文档
 
+### v1.5.4（2026-04-27）
+
+- **智能洞察模块解耦**：为配合前端布局拆分，新增了独立的 `conversion_funnel` (转化漏斗) 洞察类型。原先与北极星指标共享的漏斗分析现在拥有独立的持久化缓存和专用的 AI Prompt 诊断；并将原 `funnel_alerts` (预警中心) 的 AI 分析口径完全缩窄至专注逾期率与催办有效性转化率。
+
 ### v1.5.3（2026-04-21）
 
 - **新增催办转化率看板接口**：新增 `GET /api/v1/dashboard/nudge-conversion` 以支持对各下钻维度（门店/大区）的红/橙/黄各级别历史累计催办下发人数与真实转化完课人数的统计报表。
@@ -1882,14 +1886,15 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 | **北极星** | `north_star` | 聚焦 **按时完成率** 与 **人均完成耗时（小时）**，并辅以总人数、待开始/进行中/已完成/逾期等分布，用于判断任务整体健康度与节奏（对应 Prompt：北极星模块）。 |
 | **完成人数趋势** | `completion_weekly` 或 `completion_daily` | 同一前端模块下的两种时间粒度：**周趋势** 取最近有完成记录的自然日序列（最多 7 段）形成「第 N 天 + 新增/累计完成」；**日内趋势** 取指定 `date` 当天按 2 小时桶的完成分布（对应 Prompt：完成人数模块-周 / 完成人数模块-日）。传 `completion_daily` 时建议带 **`date`**（`YYYY-MM-DD`），默认当天。 |
 | **区域进度与门店排行** | `channel_north_star` | 按门店所属 **`stores.rtm` 渠道**（Multibrand、Monobrand、Enterprise、Education、Carrier）聚合 **按时完成率** 与 **人均完成时长（分钟）**，并给出大盘均值/中位数与各渠道对比，用于「区域/渠道侧」执行差异与归因（与 §5.2 热力、§5.3 门店排行同源任务数据域；对应 Prompt：分渠道北极星下钻）。 |
-| **漏斗链路数据** + **预警率统计** | `funnel_alerts` | **后端合并为同一洞察类型**：一次生成同时覆盖 **链路漏斗**（触达率、读取率、提醒转化率等）与 **预警占比**（起步异常、P1/P0 临期危机等占 assignment 总数的比例）；对应原「漏斗」与「预警」两块能力合并后的 Prompt（链路数据 + 预警率）。 |
+| **漏斗链路数据** | `conversion_funnel` | 聚焦漏斗各层级转化率（推送->阅读->在学->完课），分析流失节点。 |
+| **预警率统计** | `funnel_alerts` | 聚焦逾期、各级预警率及催办有效性转化率。 |
 
 > **存储说明**：落库字段仍为 `dashboard_insights.module_type`，取值与上表 **`insightType`** 一致（见 `docs/backend/03-DATABASE.md` §12）。
 
 - **请求体（JSON）**：
   | 字段 | 类型 | 必选 | 说明 |
   |------|------|------|------|
-  | insightType | string | 是 | 见上表「前端模块名称 ↔ insightType」；枚举：`north_star`、`completion_weekly`、`completion_daily`、`channel_north_star`、`funnel_alerts` |
+  | insightType | string | 是 | 见上表「前端模块名称 ↔ insightType」；枚举：`north_star`、`completion_weekly`、`completion_daily`、`channel_north_star`、`funnel_alerts`、`conversion_funnel` |
   | taskId | string | 条件 | `completion_weekly`、`completion_daily`、`channel_north_star` **必填**；`north_star`、`funnel_alerts` 可选（不传则按全任务范围） |
   | rtm / format / dealerName / storeId | string | 否 | 与 §5.1 下钻一致，可组合 AND |
   | date | string | 否 | `completion_daily` 建议传 `YYYY-MM-DD`，默认当天 |
