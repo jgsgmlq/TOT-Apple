@@ -10,12 +10,9 @@ const { AGENT_MODE } = chatAgentRunner;
 const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
-const { createAgentTrace, endSpan, maskPII, preview, NOOP_TRACE } = require('../utils/tracer');
+const { createAgentTrace, endSpan, maskPII, preview } = require('../utils/tracer');
 const { buildGraph } = require('../agent/graph/graph');
-const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
-const Database = require('better-sqlite3');
-const path = require('path');
-const { Langfuse } = require('langfuse');
+const { MemorySaver } = require('@langchain/langgraph');const { Langfuse } = require('langfuse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(reqUser) {
