@@ -18,13 +18,13 @@
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
 | T0 开发前冻结项 | `已完成` | 100% | 已创建 2026-04-27-t0-freeze-spec.md，所有数据契约及门槛完全冻结 |
-| T1 主链路图编排 | `已完成` | 100% | 已搭建骨架、实现三路分流及单测桩 |
-| T2 流式输出与兼容 | `已完成` | 100% | 已通过 config.configurable 注入 Emitter 实现 token 级推流及边界事件 |
-| T3 工具执行层与护栏 | `已完成` | 100% | 实现了白名单校验、越权拦截和 Fail Fast 修参超限闭环 |
-| T4 记忆链路（Queue） | `已完成` | 100% | 已实现 BullMQ 生产端抽象和 Fire & Forget 机制 |
-| T5 观测与评测 | `已完成` | 100% | 成功集成 Langfuse Callback 及业务指标埋点 (FC 步数、错误码等) |
-| T6 发布与回退 | `已完成` | 100% | 发布前检查完毕，并通过 simulate_rollback.sh 预演了失败回滚 |
-| 文档同步清单 | `已完成` | 100% | plans 已同步；09/11/12 specs 均已更新完毕，匹配架构演进 |
+| T1 主链路图编排 | `骨架完成` | 40% | 已搭建图流转骨架，`nodes.js` 仍为 Mock，尚未接入真实 LLM 工具调用 |
+| T2 流式输出与兼容 | `骨架完成` | 40% | Emitter 接口与副作用已打通，待真实 `fc_LlmToolCallStep` 接入 OpenAI |
+| T3 工具执行层与护栏 | `骨架完成` | 40% | 鉴权护栏闭环在 Graph 中已预埋，未与真实 `chatToolsService.js` 打通 |
+| T4 记忆链路（Queue） | `骨架完成` | 40% | 建立了 Fire&Forget 抽象层和 `MemoryQueueProducer`，暂为内存数组并非真实 BullMQ/Redis |
+| T5 观测与评测 | `骨架完成` | 40% | 仅通过了 `t5MockTest.js` 本地发包测试，缺少线上回归与 CI 阻断 |
+| T6 发布与回退 | `骨架完成` | 40% | 脚本停留在 demo `echo`，尚未编写与 DevOps 联动的真实 `kubectl` 部署与判定脚本 |
+| 文档同步清单 | `进行中` | 60% | 架构方案已更新，代码脱离 Mock 后需再次复核 Specs 细节 |
 
 ### T0 子项状态
 
@@ -61,6 +61,7 @@
 
 ## T1. 主链路图编排（单图）
 
+**阶段一：骨架与 Mock (已完成)**
 - [x] 搭建单层 `StateGraph` 骨架：`LoadContext -> ContextAnalyzerRouter -> ToolRetrieve -> fc_* -> PersistAndEmit`
 - [x] 实现 `chat_only` / `deny` / `tool_action` 三路分流
 - [x] 实现 `HumanInTheLoopGate + Checkpointer` 中断与恢复入口（明确 Checkpointer 存储选型，如 Redis/Postgres，或 PoC 期标注使用 MemorySaver）
@@ -69,86 +70,114 @@
 - [x] 打通 `fc_CheckSteps / fc_LlmToolCallStep / fc_CheckDuplicate / fc_ValidateParams / fc_ParamRepair / fc_ExecuteTool / fc_MergeToolResults`
 - [x] 统一 `PersistAndEmit -> __end__` 图终止语义
 
+**阶段二：真实落地 (未开始)**
+- [ ] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取
+- [ ] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`
+- [ ] `HumanInTheLoopGate + Checkpointer` 接入真正的 Postgres 存储
+
 **验收**：
 
-- [x] 至少 3 条核心工具问答端到端通过
-- [x] 纯净逻辑的单元测试覆盖核心分流路径
-- [x] `fc_*` 循环不出现 Node 内 while
+- [ ] 至少 3 条核心工具问答端到端通过
+- [ ] 纯净逻辑的单元测试覆盖核心分流路径
+- [ ] `fc_*` 循环不出现 Node 内 while
 
 ---
 
 ## T2. 流式输出与兼容
 
+**阶段一：骨架与 Mock (已完成)**
 - [x] 在 `fc_LlmToolCallStep` 注入 token 级 Side-effect（`reasoning/content`）
 - [x] 工具执行边界事件对齐（`tool_start/tool_end`）
-- [x] 保持 `markdownContent` 兼容，不破坏前端渲染
+
+**阶段二：真实落地 (未开始)**
+- [ ] 解析真实 LLM 流式返回的 chunks，将 reasoning 与 content 平滑分离并 `emit`
+- [ ] 与旧版 `chatAgentRunner` 的 markdown 渲染 100% 协议对齐并过前端联调
 
 **验收**：
 
-- [x] SSE 协议回放通过
-- [x] 客户端 Abort 后节点可收敛
+- [ ] SSE 协议回放通过
+- [ ] 客户端 Abort 后节点可收敛
 
 ---
 
 ## T3. 工具执行层与护栏
 
+**阶段一：骨架与 Mock (已完成)**
 - [x] 工具注册、Top-K 检索、白名单执行限定到 `tool_namespace = executive_chat`
 - [x] 在 `fc_ExecuteTool` 前完成 scope/national_only 硬校验
 - [x] 参数校验失败走 `fc_ParamRepair` 闭环，超限后澄清/降级
 - [x] 错误码与 legacy 语义对齐
 
+**阶段二：真实落地 (未开始)**
+- [ ] 接入 `chatToolsService.executeByName`，打通真实 SQLite / API 工具
+- [ ] 基于 JSON Schema 的真实验证库（如 Zod 或 Ajv）接管 `fc_ValidateParams`
+- [ ] `fc_ExecuteTool` 里实现真实的 RTM/区域 鉴权解析
+
 **验收**：
 
-- [x] 越权用例全通过（regional/rtm/national）
-- [x] `param_schema_pass_rate` / `param_business_pass_rate` 可观测
+- [ ] 越权用例全通过（regional/rtm/national）
+- [ ] `param_schema_pass_rate` / `param_business_pass_rate` 可观测
 
 ---
 
 ## T4. 记忆链路（Queue 抽象先行）
 
+**阶段一：骨架与 Mock (已完成)**
 - [x] 实现 `LoadContext`（非 LLM）语义检索注入
 - [x] 在 `PersistAndEmit` 后发布 `MemoryIngestRequested` 事件
 - [x] 新建 Queue 抽象层（producer/consumer interface + payload contract）
-- [x] 先接 producer；consumer/BullMQ 连接配置后补
-- [x] 定义 mid-term TTL 14 天策略（原生 TTL 优先，Cron 兜底）
+
+**阶段二：真实落地 (未开始)**
+- [ ] 连接真实 Redis，并用 `bullmq` 的 Queue 实例替换 `mockStore` 数组
+- [ ] 实现 `MemoryWorker` (消费者端)，利用 LLM 执行记忆萃取和去重并写入数据库
+- [ ] 真实调用 Store API 读取 `mid_term`
+- [ ] 定义 mid-term TTL 14 天策略（原生 TTL 优先，Cron 兜底）
 
 **验收**：
 
-- [x] 主请求线程不阻塞记忆萃取
-- [x] 事件 payload 可重放、可追踪、可幂等
+- [ ] 主请求线程不阻塞记忆萃取
+- [ ] 事件 payload 可重放、可追踪、可幂等
 
 ---
 
 ## T5. 观测与评测
 
+**阶段一：骨架与 Mock (已完成)**
 - [x] 接入 LangfuseCallbackHandler，补全 root/node/tool span
 - [x] 打点 `selected_tier`、`fc_steps_used`、`fallback_count`、错误码
 - [x] 对齐附件 D 的 Dataset/Score 字段
-- [x] 落地评测脚本（如 `scripts/evaluate_langgraph.ts`）：支持拉取 Dataset、批量执行、回传 Score
-- [x] 接入 CI 阻断：在 Prompt/工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
-- [x] 建立最低门禁：核心场景回归 + 风险场景回归
+
+**阶段二：真实落地 (未开始)**
+- [ ] 为所有的 LLM 真实请求（Router, FC 引擎, Memory 萃取）添加 Span 和 Generation
+- [ ] 落地评测脚本（如 `scripts/evaluate_langgraph.ts`）：支持拉取 Dataset、批量执行、回传 Score
+- [ ] 接入 CI 阻断：在 Prompt/工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
+- [ ] 建立最低门禁：核心场景回归 + 风险场景回归
 
 **验收**：
 
-- [x] Trace 可串起入口到出口全链路
-- [x] 回归报告包含正确性与性能基线
-- [x] 评测脚本在本地与 CI 均可执行，且基线阈值有记录
+- [ ] Trace 可串起入口到出口全链路
+- [ ] 回归报告包含正确性与性能基线
+- [ ] 评测脚本在本地与 CI 均可执行，且基线阈值有记录
 
 ---
 
 ## T6. 发布与回退（全量切流）
 
-- [x] 完成“全量切流前检查清单”（依赖、配置、容量、监控、告警）
-- [x] 预演一次全量发布流程（含故障注入）
-- [x] 预演一次**版本级回退**流程（不依赖运行时双栈开关）
-- [x] 安排前端研发在测试环境进行真实 UI 交互回归，确保打字机效果和平滑度不低于旧版
-- [x] 发布后 24h 加强巡检（SSE、clarify/resume、权限、成本）
+**阶段一：骨架与 Mock (已完成)**
+- [x] 预演一次**版本级回退**流程（不依赖运行时双栈开关）(Shell Demo)
+
+**阶段二：真实落地 (未开始)**
+- [ ] 完成“全量切流前检查清单”（依赖、配置、容量、监控、告警）
+- [ ] 预演一次全量发布流程（含故障注入）
+- [ ] 完善真实的 `kubectl` / `PM2` 发布控制与异常捕获脚本
+- [ ] 安排前端研发在测试环境进行真实 UI 交互回归，确保打字机效果和平滑度不低于旧版
+- [ ] 发布后 24h 加强巡检（SSE、clarify/resume、权限、成本）
 
 **验收**：
 
-- [x] 发布 Runbook 与回退 Runbook 可独立执行
-- [x] 触发门槛和责任人明确
-- [x] 前端渲染无退化（流式平滑度、Markdown 解析正常）
+- [ ] 发布 Runbook 与回退 Runbook 可独立执行
+- [ ] 触发门槛和责任人明确
+- [ ] 前端渲染无退化（流式平滑度、Markdown 解析正常）
 
 ---
 

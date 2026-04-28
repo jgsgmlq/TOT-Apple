@@ -404,88 +404,30 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   const startMs = Date.now();
   let result;
-  
-  // T2 包装 SSE Sender 以支持 config.configurable 注入
-  const sseEmitter = {
-    handleLLMNewToken: (token, info = {}) => {
-      const phase = info.isReasoning ? 'reasoning' : 'content';
-      if (phase === 'reasoning') sseReasoningCount += 1;
-      if (typeof token === 'string' && token) {
-        sseDeltaCount += 1;
-        sseDeltaBytes += token.length;
-      }
-      wrappedSend('delta', { text: token, phase });
-    },
-    handleToolStart: (toolInfo) => {
-      sseToolStartCount += 1;
-      wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
-    },
-    handleToolEnd: (result) => {
-      wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
-    }
-  };
-
   try {
-    // 【切流】使用 LangGraph 的引擎替换旧的 chatAgentRunner
-    const app = buildGraph().compile({ checkpointer: new MemorySaver() }); // 生产应用这里可以换成 Postgres Checkpointer
-    
-    // 初始化外层的真实 Langfuse Core (复用老版基础设施)
-    const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
-    
-    console.log(`[API Debug] ENV LANGFUSE_ENABLED: ${process.env.LANGFUSE_ENABLED}, USER: ${currentDeveloper}`);
-
-    // 直接复用 `chatService` 顶部已有的 trace（它是通过 `utils/tracer.js` 的 `createAgentTrace` 建出来的）
-    // 给它的 tag 里再打上新版引擎和开发者的标签
-    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
-       trace.update({
-         name: `ExecutiveChat-Prod-[${currentDeveloper}]`,
-         tags: ["executive_chat", "langgraph_prod", `dev:${currentDeveloper}`]
-       });
-       console.log(`[API Debug] Using GLOBAL Tracer. trace_id: ${trace.id}`);
-    } else {
-       console.log(`[API Debug] Global Trace is NOOP. (LANGFUSE_ENABLED=${process.env.LANGFUSE_ENABLED})`);
-    }
-
-    const inputState = { 
-      userMessage, 
+    // 【紧急修复】恢复生产真实能力，将 LangGraph 切回旧版 chatAgentRunner
+    result = await chatAgentRunner.run(userMessage, history, regionScope, {
       sessionId,
-      userId: session.user_id.toString(),
-      regionScope 
-    };
-
-    const thread = { 
-      configurable: { 
-        thread_id: sessionId,
-        sseEmitter 
-      }
-    };
-
-    const finalState = await app.invoke(inputState, thread);
-    
-    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
-      trace.update({
-        output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
-        metadata: {
-          selected_tier: finalState.selected_tier,
-          fc_steps_used: finalState.fc_super_step_count,
-          repair_attempts: finalState.fc_repair_attempts,
-          intent: finalState.intent
-        }
-      });
-      console.log(`[Langfuse Prod] Trace 已准备好: ${trace.id}`);
-    }
-
-    // 将最终状态转换成兼容旧版本的 result 格式以便后续落库
-    result = {
-      _intentType: finalState.intent,
-      _formatVersion: "v4.0.0",
-      _safetyCheck: finalState.safety,
-      // Markdown 文本
-      markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
-      // 这里可以收集 graph 中的工具调用，为了 Mock 我们暂时置空
-      _toolMeta: { toolCalls: [] } 
-    };
-
+      userId: session.user_id,
+      signal: abortController.signal,
+      trace,
+      streamFormatCallbacks: {
+        onDelta: (text, meta) => {
+          const phase = meta?.phase || 'content';
+          if (phase === 'reasoning') sseReasoningCount += 1;
+          else if (phase === 'tool_start') sseToolStartCount += 1;
+          if (typeof text === 'string' && text) {
+            sseDeltaCount += 1;
+            sseDeltaBytes += text.length;
+          }
+          wrappedSend('delta', {
+            text,
+            phase,
+            reasoningLevel: meta?.reasoningLevel || undefined,
+          });
+        },
+      },
+    });
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.info('chat_stream_aborted', { sessionId });
