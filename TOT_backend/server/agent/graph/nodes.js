@@ -97,7 +97,20 @@ const loadContext = async (state) => {
   };
 };
 
-const contextAnalyzerRouter = async (state) => {
+// === 静态配置注入 ===
+const RoutingPolicy = {
+  thresholds: {
+    complexity_score_l2_max: 0.35,
+    complexity_score_l4_min: 0.70
+  },
+  tiers: {
+    L2_intent_fastpath: { max_super_steps: 1, max_repair_attempts: 1 },
+    L3_fc_guarded:      { max_super_steps: 3, max_repair_attempts: 2 },
+    L4_heavy_fc:        { max_super_steps: 5, max_repair_attempts: 3 }
+  }
+};
+
+const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
   
   // T1 阶段二: 真实接入 LLM 进行意图分发
@@ -145,7 +158,9 @@ ${state.memoryContext || ''}
       intent: parsed.intent || "tool_action",
       entities: parsed.entities || {},
       // 根据复杂度定级，这里实现一个极其简单的判定逻辑
-      selected_tier: (parsed.complexity_score >= 0.7) ? "L4_heavy_fc" : ((parsed.complexity_score <= 0.35) ? "L2_intent_fastpath" : "L3_fc_guarded")
+      selected_tier: (parsed.complexity_score >= RoutingPolicy.thresholds.complexity_score_l4_min) 
+        ? "L4_heavy_fc" 
+        : ((parsed.complexity_score <= RoutingPolicy.thresholds.complexity_score_l2_max) ? "L2_intent_fastpath" : "L3_fc_guarded")
     };
   } catch (err) {
     console.error(`[Router] 意图解析失败，降级为默认安全流转. Raw: ${rawJson}`, err);
@@ -163,14 +178,11 @@ const fc_CheckSteps = async (state) => {
 };
 
 const fc_LlmToolCallStep = async (state, config) => {
-  const trimMessages = (msgs) => msgs.slice(-10);
-  const recentMessages = trimMessages(state.messages);
-
   const emitter = config?.configurable?.sseEmitter;
 
-  // 如果已经达到了最大的步骤（由 RoutingPolicy 决定，这里简单假设是 3），强制要求 LLM 不要再返回工具，直接出答案
+  // 如果已经达到了最大的步骤（由 RoutingPolicy 决定），强制要求 LLM 不要再返回工具，直接出答案
   const currentStep = state.fc_super_step_count;
-  const maxSteps = state.selected_tier === "L4_heavy_fc" ? 5 : (state.selected_tier === "L2_intent_fastpath" ? 1 : 3);
+  const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
   
   // 组装最终传给大模型的 Message 数组
   // OpenAI 对历史消息顺序有极高要求。在 PoC 阶段为了绝对稳定，每次都只给最新的 System 和 Human Message，
@@ -270,8 +282,10 @@ const fc_ValidateParams = async (state) => {
      missingParam = "dimensions";
   }
 
+  const maxRepairAttempts = RoutingPolicy.tiers[state.selected_tier]?.max_repair_attempts || 2;
+
   if (hasError) {
-    if (state.fc_repair_attempts >= 2) {
+    if (state.fc_repair_attempts >= maxRepairAttempts) {
       console.log("[T3 护栏] 参数修复超限，执行 Fail Fast 中止");
       return { 
         intent: "chat_only", 
