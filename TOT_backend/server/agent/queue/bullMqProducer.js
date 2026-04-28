@@ -1,21 +1,32 @@
 const crypto = require('crypto');
+const { Queue } = require('bullmq');
+const IORedis = require('ioredis');
 
 /**
- * 抽象 Queue Producer 契约（T4 阶段先行）
- * 真实环境中，这将连接到 Redis 和真实的 BullMQ 实例
+ * 抽象 Queue Producer 契约（T4 阶段真实落地）
+ * 连接到 Redis 并使用真实的 BullMQ 实例
  */
 class MemoryQueueProducer {
   constructor() {
     this.queueName = "MemoryIngestionQueue";
     this.isConnected = false;
-    // PoC 期使用内存数组暂存，后期替换为 bullmq 的 queue 实例
-    this.mockStore = [];
+    this.bullQueue = null;
+    this.redisClient = null;
   }
 
   async connect() {
-    // 模拟连接 Redis
-    this.isConnected = true;
-    console.log(`[Queue] Connected to BullMQ (${this.queueName})`);
+    if (this.isConnected) return;
+    
+    try {
+      // 默认尝试连接本地 Redis，真实生产环境可通过环境变量覆盖
+      const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+      this.redisClient = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+      this.bullQueue = new Queue(this.queueName, { connection: this.redisClient });
+      this.isConnected = true;
+      console.log(`[Queue] Connected to BullMQ (${this.queueName})`);
+    } catch (err) {
+      console.error(`[Queue] Failed to connect to BullMQ:`, err);
+    }
   }
 
   /**
@@ -24,7 +35,13 @@ class MemoryQueueProducer {
    */
   async publishMemoryIngestion(payload) {
     if (!this.isConnected) {
-      console.warn(`[Queue] Warning: Queue not connected, but attempting to publish.`);
+      // 如果还没连上，就主动连一次
+      await this.connect();
+    }
+
+    if (!this.isConnected || !this.bullQueue) {
+      console.warn(`[Queue] Warning: Queue not connected. Event will be dropped.`);
+      return null;
     }
 
     const event = {
@@ -42,15 +59,18 @@ class MemoryQueueProducer {
       }
     };
 
-    // 生产环境中这里将是: await this.bullQueue.add('ingest', event, { removeOnComplete: true });
-    // T4 模拟：由于是 Fire & Forget，不抛错，直接扔进 mockStore
-    this.mockStore.push(event);
-    
-    // 我们用 setTimeout 来模拟异步 worker 消费的延迟，不阻塞主线程
-    setTimeout(() => {
-      console.log(`\n[Queue Worker Mock] 异步消费 Memory 事件: ${event.event_id}`);
-      console.log(`[Queue Worker Mock] 提取到的事实将落库并设置 14 天过期...`);
-    }, 500);
+    // 生产环境中 Fire & Forget：将任务加入真正的 BullMQ 队列
+    try {
+      await this.bullQueue.add('ingest', event, { 
+        removeOnComplete: true, // 完成后清理
+        removeOnFail: false,    // 失败保留以便排查死信
+        attempts: 3,            // 失败重试次数
+        backoff: { type: 'exponential', delay: 2000 } // 退避策略
+      });
+      console.log(`[Queue Producer] 成功发布异步记忆任务: ${event.event_id}`);
+    } catch (e) {
+      console.error(`[Queue Producer] 发布记忆任务失败:`, e);
+    }
 
     return event.event_id;
   }

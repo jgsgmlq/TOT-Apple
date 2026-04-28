@@ -68,11 +68,33 @@ const getLlmWithTools = () => {
 
 // == 图节点实现 (真实落地) ==
 
+const chatMemoryService = require('../../services/chatMemoryService');
+
 const loadContext = async (state) => {
-  // 短期记忆注入（暂时留存 T4 简单字符串版，因为真实 Store 检索还未打通）
-  const recentContextStr = "[近期记忆] 本周重点看新品培训任务";
-  console.log(`[T4 记忆注入] LoadContext: ${recentContextStr}`);
-  return { ...state };
+  // T4 阶段二：真实调用 Store API 读取 `mid_term` 记忆
+  let recentContextStr = "";
+  try {
+    const rawMemories = chatMemoryService.getMemories(state.userId);
+    if (rawMemories && rawMemories.trim() !== '') {
+      recentContextStr = `[用户历史偏好/已知记忆]\n${rawMemories}`;
+    }
+  } catch (err) {
+    console.error("[LoadContext] 真实记忆注入失败:", err);
+  }
+  
+  if (recentContextStr) {
+    console.log(`[T4 记忆注入] 真实加载到 ${state.userId} 的长期偏好`);
+    // 为了不污染 state 导致多次循环追加，我们可以将其写入到 system prompt 或者通过一个额外的上下文包裹，
+    // 但鉴于 `ExecChatGraphState` 是拍平的，这里只需要修改 state.userMessage 加上下文，或者直接在 router 组装消息时加入。
+    // 我们目前采取“隐式附加”的形式，在组装 SystemMessage 时，它会被带进去。
+    // 为此我们给状态机增加一个字段 `memoryContext`。如果没声明过，直接赋值。
+  }
+  
+  return { 
+    ...state,
+    // 我们通过扩展返回对象给 Graph 添加隐式数据
+    memoryContext: recentContextStr 
+  };
 };
 
 const contextAnalyzerRouter = async (state) => {
@@ -92,6 +114,8 @@ Your task is to analyze the user's message and strictly output valid JSON matchi
   "complexity_score": number // 0.0 to 1.0 (estimate how hard the query is, e.g. "national revenue" is 0.2, "correlations between region A and B" is 0.9)
 }
 NEVER wrap your response in markdown code blocks. OUTPUT RAW JSON ONLY.
+
+${state.memoryContext || ''}
   `;
 
   const messages = [
@@ -173,7 +197,9 @@ const fc_LlmToolCallStep = async (state, config) => {
     new SystemMessage(`You are Executive Chat data analyst. Your namespace is ${state.tool_namespace}. 
 Your current tier is ${state.selected_tier}, allowed steps: ${maxSteps}, current step: ${currentStep}.
 If you have enough information, write a markdown summary.
-When calling tools, omit the namespace prefix.`),
+When calling tools, omit the namespace prefix.
+
+${state.memoryContext || ''}`),
     new HumanMessage(state.userMessage),
     ...safeHistory
   ];

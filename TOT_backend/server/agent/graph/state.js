@@ -6,6 +6,7 @@ const ExecChatGraphState = Annotation.Root({
   sessionId: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   userId: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   userMessage: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  memoryContext: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   
   // 消息追加
   messages: Annotation({ 

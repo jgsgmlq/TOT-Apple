@@ -201,7 +201,7 @@ ${conversationText}`;
  */
 function getMemories(userId) {
   const rows = db.all('SELECT memory_type, content FROM user_memories WHERE user_id = ?', [userId]);
-  if (!rows.length) return '';
+  if (!rows || !rows.length) return '';
   
   return rows.map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
 }

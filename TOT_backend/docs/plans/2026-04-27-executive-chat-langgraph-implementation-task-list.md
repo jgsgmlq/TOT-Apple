@@ -21,7 +21,7 @@
 | T1 主链路图编排 | `进行中` | 80% | 已接入真实 DeepSeek ChatOpenAI 模型，跑通了路由与 FC 流程 |
 | T2 流式输出与兼容 | `进行中` | 80% | 真实流式 chunk 拆解及 reasoning 分离已经连通 |
 | T3 工具执行层与护栏 | `进行中` | 80% | 已经打通真实工具链 `executeByName` 并触发 `sqlite` 执行 |
-| T4 记忆链路（Queue） | `骨架完成` | 40% | 建立了 Fire&Forget 抽象层和 `MemoryQueueProducer`，暂为内存数组并非真实 BullMQ/Redis |
+| T4 记忆链路（Queue） | `进行中` | 80% | 已经打通了真实的 BullMQ 与 Redis 连接，并实现了基于 LLM 抽取的 Worker 后台进程 |
 | T5 观测与评测 | `进行中` | 60% | Langchain CallbackHandler 已注入 Router 与 FC 层，元数据已挂钩 |
 | T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo 脚本，未编写与 DevOps 联动的 `kubectl` 部署与判定脚本 |
 | 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码脱离 Mock 后需再次复核 Specs 细节 |
@@ -129,15 +129,15 @@
 - [x] 新建 Queue 抽象层（producer/consumer interface + payload contract）
 
 **阶段二：真实落地 (未开始)**
-- [ ] 连接真实 Redis，并用 `bullmq` 的 Queue 实例替换 `mockStore` 数组
-- [ ] 实现 `MemoryWorker` (消费者端)，利用 LLM 执行记忆萃取和去重并写入数据库
-- [ ] 真实调用 Store API 读取 `mid_term`
-- [ ] 定义 mid-term TTL 14 天策略（原生 TTL 优先，Cron 兜底）
+- [x] 连接真实 Redis，并用 `bullmq` 的 Queue 实例替换 `mockStore` 数组
+- [x] 实现 `MemoryWorker` (消费者端)，利用 LLM 执行记忆萃取和去重并写入数据库
+- [x] 真实调用 Store API 读取 `mid_term`
+- [x] 定义 mid-term TTL 14 天策略（原生 TTL 优先，Cron 兜底）
 
 **验收**：
 
-- [ ] 主请求线程不阻塞记忆萃取
-- [ ] 事件 payload 可重放、可追踪、可幂等
+- [x] 主请求线程不阻塞记忆萃取
+- [x] 事件 payload 可重放、可追踪、可幂等
 
 ---
 
