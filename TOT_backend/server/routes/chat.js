@@ -43,13 +43,15 @@ async function handlePostMessage(req, res, next) {
       throw createError(400, 'content 不能为空', 'CHAT_005');
     }
 
-    if (stream === 'langgraph') {
-      await chatService.sendMessageStreamLangGraph(sessionId, content.trim(), req.user.id, req, res);
+    if (stream === 'legacy_stream') {
+      // 保留一个后门，允许测试人员或灰度策略回退到老引擎
+      await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
       return;
     }
 
-    if (stream === true) {
-      await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
+    if (stream === true || stream === 'langgraph') {
+      // 默认将前端的所有流式请求（前端传 stream: true）全部导向新版 LangGraph 引擎
+      await chatService.sendMessageStreamLangGraph(sessionId, content.trim(), req.user.id, req, res);
       return;
     }
 
@@ -112,8 +114,14 @@ async function handleRegenerate(req, res, next) {
     const { sessionId, messageId } = req.params;
     const { stream } = req.body;
 
-    if (stream === true) {
+    if (stream === 'legacy_stream') {
       await chatService.regenerateLastAssistantStream(sessionId, messageId, req.user.id, req, res);
+      return;
+    }
+
+    if (stream === true || stream === 'langgraph') {
+      // Regenerate 也要引向 LangGraph 引擎（需要在 chatService 中增加映射方法）
+      await chatService.regenerateLastAssistantStreamLangGraph(sessionId, messageId, req.user.id, req, res);
       return;
     }
 

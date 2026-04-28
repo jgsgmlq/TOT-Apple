@@ -932,6 +932,52 @@ function setMessageFeedback(sessionId, messageId, userId, feedback) {
   }
 }
 
+// ─── regenerateLastAssistantStreamLangGraph ──────────────────────────────────
+async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, userId, req, res) {
+  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) {
+    res.status(404).json({ code: 404, message: 'Session not found', errorCode: 'CHAT_003' });
+    return;
+  }
+  if (Number(session.user_id) !== Number(userId)) {
+    res.status(403).json({ code: 403, message: 'Forbidden', errorCode: 'CHAT_004' });
+    return;
+  }
+
+  const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
+  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
+    res.status(400).json({ code: 400, message: 'Can only regenerate the last assistant message', errorCode: 'CHAT_008' });
+    return;
+  }
+
+  // 获取上一个 user message
+  const chronological = loadFormattedHistory(sessionId, NOOP_TRACE);
+  if (chronological.length < 2) {
+    res.status(400).json({ code: 400, message: 'Not enough history to regenerate', errorCode: 'CHAT_008' });
+    return;
+  }
+
+  const lastTurn = chronological[chronological.length - 1];
+  const prevTurn = chronological[chronological.length - 2];
+  if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
+    res.status(400).json({ code: 400, message: 'Expected user message before assistant message', errorCode: 'CHAT_008' });
+    return;
+  }
+  
+  const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
+  if (!userPrompt.trim()) {
+    res.status(400).json({ code: 400, message: 'User message is empty', errorCode: 'CHAT_008' });
+    return;
+  }
+
+  // 将请求桥接到标准的 LangGraph stream，直接用当时的用户输入重跑图。
+  // 在 LangGraph 侧，它自己会去 Checkpointer 读取真实上下文。
+  // 注意，对于 regenerate，我们需要通过特殊标记清空最后一步的 State（后续可在 Graph 层做 snapshot 重置），
+  // 这里我们简化：对于 PoC，由于 state 是通过 thread_id 绑定的，如果需要无痕 regenerate，最好分配一个新的 thread_id，
+  // 或者在 state 中注入一个 flag 触发 rewind，目前直接将其视为一次新的对话追加。
+  return await sendMessageStreamLangGraph(sessionId, userPrompt, userId, req, res);
+}
+
 // ─── regenerateLastAssistantStream ────────────────────────────────────────────
 async function regenerateLastAssistantStream(sessionId, messageId, userId, req, res) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
@@ -1336,4 +1382,4 @@ function deleteSessionById(sessionId) {
   chatSessionStateService.clearSession(sessionId);
 }
 
-module.exports = { createSession, sendMessage, sendMessageStream, sendMessageStreamLangGraph, resumeMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream };
+module.exports = { createSession, sendMessage, sendMessageStream, sendMessageStreamLangGraph, resumeMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream, regenerateLastAssistantStreamLangGraph };
