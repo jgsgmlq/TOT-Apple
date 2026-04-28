@@ -18,14 +18,17 @@ const path = require('path');
 const { Langfuse } = require('langfuse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
-function resolveRegionScope(user) {
-  const roles = user.roles || ['executive'];
-  if (user.executive_rtm) {
-    return { type: 'rtm', rtm: user.executive_rtm, regions: null, userRoles: roles };
+function resolveRegionScope(reqUser) {
+  const roles = reqUser?.roles;
+  if (!roles || !Array.isArray(roles) || roles.length === 0) {
+    throw Object.assign(new Error('User roles are missing or invalid'), { status: 403, code: 'AUTH_005' });
   }
-  if (user.executive_regions) {
+  if (reqUser.executive_rtm) {
+    return { type: 'rtm', rtm: reqUser.executive_rtm, regions: null, userRoles: roles };
+  }
+  if (reqUser.executive_regions) {
     try {
-      const regions = JSON.parse(user.executive_regions);
+      const regions = JSON.parse(reqUser.executive_regions);
       if (!Array.isArray(regions) || regions.length === 0) {
         throw Object.assign(new Error('executive_regions must be a non-empty array for regional scope'), { status: 400, code: 'AUTH_003' });
       }
@@ -257,8 +260,12 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
-    userRoles: req?.user?.roles || ['executive']
+    userRoles: req?.user?.roles
   };
+
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   // 先建 trace，让 Persist_User_Message / Load_History 能挂在同一棵树下
   const trace = createAgentTrace({
@@ -368,8 +375,12 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
-    userRoles: req?.user?.roles || ['executive']
+    userRoles: req?.user?.roles
   };
+
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   const trace = createAgentTrace({
     sessionId,
@@ -518,8 +529,12 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
-    userRoles: req?.user?.roles || ['executive']
+    userRoles: req?.user?.roles
   };
+
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   const trace = createAgentTrace({
     sessionId,
@@ -849,7 +864,10 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       content: m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles };
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   writeSseHeaders(res);
   const send = createSseSender(res);
@@ -1024,7 +1042,10 @@ async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
     throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
   }
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles };
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   // 先建 trace 让 Load_History / Persist 挂上去
   const trace = createAgentTrace({
@@ -1068,7 +1089,10 @@ async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
         m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles };
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
 
   const startMs = Date.now();
   let result;

@@ -139,11 +139,21 @@ async function executeByName(toolName, params, regionScope) {
     };
   }
 
-  // Context wrapper (support passing user roles from upstream, fallback to executive)
+  // Context wrapper (support passing user roles from upstream)
   const sessionContext = {
     regionScope,
-    userRoles: regionScope?.userRoles || ['executive']
+    userRoles: regionScope?.userRoles
   };
+
+  if (!sessionContext.userRoles || !Array.isArray(sessionContext.userRoles) || sessionContext.userRoles.length === 0) {
+    return {
+      error: {
+        code: 'PERMISSION_DENIED',
+        message: 'No user roles found in the context payload.',
+        recommendation: 'Check user role assignments.'
+      }
+    };
+  }
 
   try {
     // 2) 参数 schema 校验
