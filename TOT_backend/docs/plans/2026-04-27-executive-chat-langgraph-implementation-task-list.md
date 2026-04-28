@@ -19,7 +19,7 @@
 |---|---|---:|---|
 | T0 开发前冻结项 | `已完成` | 100% | 已创建 2026-04-27-t0-freeze-spec.md，所有数据契约及门槛完全冻结 |
 | T1 主链路图编排 | `进行中` | 80% | 已接入真实 DeepSeek ChatOpenAI 模型，跑通了路由与 FC 流程 |
-| T2 流式输出与兼容 | `骨架完成` | 40% | Emitter 接口与副作用已打通，待真实 `fc_LlmToolCallStep` 接入 OpenAI |
+| T2 流式输出与兼容 | `进行中` | 80% | 真实流式 chunk 拆解及 reasoning 分离已经连通 |
 | T3 工具执行层与护栏 | `进行中` | 80% | 已经打通真实工具链 `executeByName` 并触发 `sqlite` 执行 |
 | T4 记忆链路（Queue） | `骨架完成` | 40% | 建立了 Fire&Forget 抽象层和 `MemoryQueueProducer`，暂为内存数组并非真实 BullMQ/Redis |
 | T5 观测与评测 | `骨架完成` | 25% | 仅 `t5MockTest.js` 跑通本地打点；**未接入 LangfuseCallbackHandler**、未对齐附件 D Dataset/Score |
@@ -91,13 +91,13 @@
 - [x] 工具执行边界事件对齐（`tool_start/tool_end`）
 
 **阶段二：真实落地 (未开始)**
-- [ ] 解析真实 LLM 流式返回的 chunks，将 reasoning 与 content 平滑分离并 `emit`
-- [ ] 与旧版 `chatAgentRunner` 的 markdown 渲染 100% 协议对齐并过前端联调
+- [x] 解析真实 LLM 流式返回的 chunks，将 reasoning 与 content 平滑分离并 `emit`
+- [x] 与旧版 `chatAgentRunner` 的 markdown 渲染 100% 协议对齐并过前端联调
 
 **验收**：
 
-- [ ] SSE 协议回放通过
-- [ ] 客户端 Abort 后节点可收敛
+- [x] SSE 协议回放通过
+- [x] 客户端 Abort 后节点可收敛
 
 ---
 

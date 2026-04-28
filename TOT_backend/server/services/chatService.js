@@ -433,7 +433,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       configurable: { 
         thread_id: sessionId,
         sseEmitter 
-      }
+      },
+      signal: abortController.signal
     };
 
     const finalState = await app.invoke(inputState, thread);

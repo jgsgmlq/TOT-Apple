@@ -34,11 +34,11 @@ const routeAfterValidateParams = (state) => {
   // 根据上一步是否抛出 param 错误，如果是走 repair，否走 execute
   if (state.hitl_status === "pending_interrupt") return "HumanInTheLoopGate"; 
   
-  // mock logic based on attempts 
-  const lastMsg = state.messages[state.messages.length - 1];
-  const needsRepair = lastMsg?.tool_calls?.[0]?.name === "executive_chat.query_progress" && !lastMsg.tool_calls[0].args.region_id && state.userMessage.includes("无地点");
-
-  if (needsRepair) {
+  // check if params failed and we incremented repair_attempts
+  if (state.fc_repair_attempts > 0) {
+    const lastMsg = state.messages[state.messages.length - 1];
+    // 为了防止无限循环，这里简单判定如果 AI 输出包含 "SYSTEM_ERROR"，说明被 fail_fast 中止了
+    if (state.intent === "chat_only") return "FinalResponseStep";
     return "fc_ParamRepair"; 
   }
   
