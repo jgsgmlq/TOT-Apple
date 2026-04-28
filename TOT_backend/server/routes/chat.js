@@ -43,6 +43,11 @@ async function handlePostMessage(req, res, next) {
       throw createError(400, 'content 不能为空', 'CHAT_005');
     }
 
+    if (stream === 'langgraph') {
+      await chatService.sendMessageStreamLangGraph(sessionId, content.trim(), req.user.id, req, res);
+      return;
+    }
+
     if (stream === true) {
       await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
       return;

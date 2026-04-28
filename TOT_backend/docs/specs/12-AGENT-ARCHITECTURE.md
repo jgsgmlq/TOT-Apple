@@ -55,9 +55,10 @@ Agent 可使用的能力封装在 `server/agent/tools/` 目录下（如 `dashboa
 - **幻觉隔离**：Agent 最终被要求以 `json_object` format 强制输出 JSON，且由专门的正则 `extractJsonFromText` 进行安全反序列化。
 - **循环限制**：在 `dashboardDiagnose.js` 等 Skill 执行流中，硬编码了 `MAX_LOOPS = 6`。如果大模型陷入“连续调用工具而不输出最终结果”的死循环，达到 6 轮后将主动抛出 `AGENT_003` 异常终止执行，防止 Token 消耗失控。
 
-## 5. LangGraph 演进 (v4.0 Executive Chat)
+## 5. LangGraph 演进（Executive Chat，目标态说明）
 
-对于对话类 Agent (如 Executive Chat)，为了解决状态流转隐式化、消歧恢复困难及与 SSE 协议耦合过深的问题，系统在 API v4.0.0 阶段引入了 **LangGraph**。
+对于对话类 Agent（如 Executive Chat），为了解决状态流转隐式化、消歧恢复困难及与 SSE 协议耦合过深的问题，团队正在推进 **LangGraph** 迁移。  
+**当前代码事实**：主链仍是 `chatService -> chatAgentRunner`；`server/agent/graph/*` 为原型实现，尚未替换线上主路径。
 
 ### 5.1 单层 StateGraph 模型
 
@@ -75,11 +76,12 @@ LangGraph 图包含了以下关键流转节点：
 
 ### 5.3 Fire & Forget 记忆异步写入
 
-在图流转结束后 (`PersistAndEmit` 节点)，提取长期记忆的行为不再阻塞主线程响应。系统会向后端的 `MemoryIngestionQueue` (BullMQ 抽象) 抛出一个不等待的事件。独立的 Queue Worker 在后台消费事件、提取新知识并设置 TTL（如 Redis EX 的 14 天过期）。
+在目标态图流转结束后 (`PersistAndEmit` 节点)，记忆提取不再阻塞主线程。系统将向 `MemoryIngestionQueue` 抛出事件并由 Worker 异步处理。  
+**当前实现**：仍以 `chatMemoryService.extract(sessionId)` 的 `setImmediate` 异步方式为主，BullMQ Producer 已有原型但未接入主链。
 
 ---
 
 ## 6. 更新日志与版本记录
 
-- **v4.0.0 (2026-04-27)**: Executive Chat 模块整体迁移至 LangGraph。实现动态 `RoutingPolicy` 分层、Postgres Checkpointer 状态机恢复以及异步 Queue 记忆架构。
+- **v4.0.0 (2026-04-27)**: Executive Chat LangGraph 迁移方案与原型落地（目标态文档与原型代码已建立，主链待切换）。
 - **v1.5.3 (2026-04-23)**: 首次引入全局 `agent_guidelines` 记忆表与 `agentTools` 工具链。将原有的静态 Prompt 接口 `/api/v1/dashboard/agent/diagnose` 升级为具备多轮思考能力的自主 Agent，实现动态经验加载与自动进化。

@@ -1,6 +1,6 @@
 # Executive Chat (高管 AI 助手) 架构与规格
 
-**版本:** 4.0.0 | **更新日期:** 2026-04-22 | **状态:** Current
+**版本:** 4.0.1 | **更新日期:** 2026-04-28 | **状态:** Current
 
 **HTTP 契约正本：** 请求/响应字段级定义以 [04-API-SPEC.md](./04-API-SPEC.md) **§6 Executive Chat Agent API** 为准。  
 **意图与工具实现正本：** 以 [10-EXECUTIVE-CHAT-INTENTS-TOOLS.md](./10-EXECUTIVE-CHAT-INTENTS-TOOLS.md) 为准。  
@@ -14,7 +14,7 @@
 
 Executive Chat (E-Chat) 面向 VP、区域总监和总部看板运营角色，目标是把培训治理从“手工看报表”升级为“自然语言驱动的数据分析”。
 
-### 1.1 核心能力 (v4.0)
+### 1.1 核心能力（当前实现口径）
 
 1. **多维培训数据查询 (SQL Tools)**
    - `matrix_query`: 高阶矩阵式查询，支持大区/业态维度对比、多度量复合与排行。
@@ -23,18 +23,17 @@ Executive Chat (E-Chat) 面向 VP、区域总监和总部看板运营角色，�
    - `warning_query`: 风险门店识别、预警与关注清单。
    - `drill_down`: 支持“全国 -> 区域 -> 门店”层层下钻。
 
-2. **深度推理与动态算力沙盒 (Advanced Data Analysis)**
-   - 基于云端 MicroVM 沙盒环境 (`@e2b/code-interpreter`)，允许 AI 现场编写 Python/Pandas 代码。
-   - 支持高阶长尾分析（方差、正态分布、回归拟合、复杂相关性等）。
-   - 后端通过 `fetchRawDataset` 单向推送脱敏 CSV 保证数据安全。
+2. **统计分析能力 (Advanced Analytics)**
+   - 通过 `runAnalytics` 工具支持分位数、分布、相关性、方差、预测、截尾均值等分析。
+   - 以工具返回数据 + 模型总结为主，不将 Code Interpreter 作为当前默认路径。
 
-3. **Agentic UX 交互层**
+3. **交互层**
    - **透明思维链 (CoT)**：在流式输出期间通过 `phase: 'reasoning'` 下发安全脱敏后的内部思考摘要，缓解等待焦虑。
-   - **行内挂起与恢复 (Stateful Resume)**：遇到歧义（如命中多门店）时，无需打断会话，在同一次大循环内通过持久化状态机优雅恢复。
+   - **行内挂起与恢复 (Clarify/Resume)**：遇到歧义（如命中多门店）时，通过 `clarify` 事件 + 后续 `clarificationResponse` 恢复。
 
-4. **多轮对话与全局记忆 (Core Memory)**
+4. **多轮对话与记忆 (Core Memory)**
    - **短期上下文**：自动继承单次 Session 内提及的区域、门店、任务、指标。
-   - **长期全局记忆**：后台自动提取用户的业务定义（如“我不看安徽数据”）和展示偏好（如“喜欢柱状图”），跨会话持久化并动态注入 System Prompt。
+   - **异步记忆提取**：回复结束后通过 `chatMemoryService.extract()` 异步提取与写入（当前主链如此）。
 
 5. **AI 原生输出与生成式 UI (Generative UI)**
    - 流式 Markdown 回答（表格、列表、结论）。
@@ -51,12 +50,12 @@ Executive Chat (E-Chat) 面向 VP、区域总监和总部看板运营角色，�
 
 Executive Chat 的技术路线分为两层：**运行模式路线** 与 **产品体验路线**。
 
-### 2.1 运行模式路线
+### 2.1 运行模式路线（当前）
 
-- **主路径：`function_calling`（默认）**
+- **主路径：`function_calling`（默认，当前生效）**
   - 模型自主选择工具并拼装最终 Markdown 回答。
   - 支持 `tool_start/tool_end` 状态可视化。
-- **降级路径：`intent_routing`（兜底）**
+- **降级路径：`intent_routing`（兜底，当前可切）**
   - 通过意图分类 + 工具映射 + 结构化回答保底可用性。
   - 作为故障回退开关，避免 FC 不稳定时服务不可用。
 
@@ -102,7 +101,7 @@ Client (Executive / Dashboard)
 
 ### 3.4 Agent 编排层（Agent Runner Layer）
 
-- `chatAgentRunner.js` 是核心调度器。
+- `chatAgentRunner.js` 是当前核心调度器（见 `11-EXECUTIVE-CHAT-REQUEST-FLOW.md`）。
 - 承担四类职责：
   1. 执行模式选择（FC 或 routing）。
   2. 安全短路（越界语义提前拦截）。
@@ -195,7 +194,14 @@ User clicks stop
 ### 6.3 可观测性与故障降级
 
 - 通过 `tool_start/tool_end` 观察慢查询节点。
-- FC 异常时可切 `intent_routing` 保持业务连续性。
+- FC 异常时可切 `intent_routing` 保持业务连续性（环境开关）。
+
+---
+
+## 附：LangGraph 口径说明（避免与实现混淆）
+
+- `server/agent/graph/*` 与 `server/agent/queue/*` 目前为迁移原型代码，尚未接入 `chatService -> chatAgentRunner` 线上主链。
+- 文档中涉及 LangGraph 的内容以 `docs/plans/` 下迁移计划为目标态，不应与当前 As-Is 运行事实混用。
 
 ---
 
