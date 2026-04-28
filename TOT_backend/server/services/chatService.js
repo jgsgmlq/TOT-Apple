@@ -11,6 +11,9 @@ const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
 const { createAgentTrace, endSpan, maskPII, preview } = require('../utils/tracer');
+const { buildGraph } = require('../agent/graph/graph');
+const { MemorySaver } = require('@langchain/langgraph');
+const { Langfuse } = require('langfuse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(user) {
@@ -401,29 +404,89 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   const startMs = Date.now();
   let result;
+  
+  // T2 包装 SSE Sender 以支持 config.configurable 注入
+  const sseEmitter = {
+    handleLLMNewToken: (token, info = {}) => {
+      const phase = info.isReasoning ? 'reasoning' : 'content';
+      if (phase === 'reasoning') sseReasoningCount += 1;
+      if (typeof token === 'string' && token) {
+        sseDeltaCount += 1;
+        sseDeltaBytes += token.length;
+      }
+      wrappedSend('delta', { text: token, phase });
+    },
+    handleToolStart: (toolInfo) => {
+      sseToolStartCount += 1;
+      wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
+    },
+    handleToolEnd: (result) => {
+      wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+    }
+  };
+
   try {
-    result = await chatAgentRunner.run(userMessage, history, regionScope, {
+    // 【切流】使用 LangGraph 的引擎替换旧的 chatAgentRunner
+    const app = buildGraph().compile({ checkpointer: new MemorySaver() }); // 生产应用这里可以换成 Postgres Checkpointer
+    
+    // 初始化外层的真实 Langfuse Core
+    let lfTrace;
+    const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
+    
+    if (process.env.LANGFUSE_ENABLED === 'true') {
+       const langfuse = new Langfuse({
+         publicKey: process.env.LANGFUSE_PUBLIC_KEY,
+         secretKey: process.env.LANGFUSE_SECRET_KEY,
+         baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST
+       });
+       lfTrace = langfuse.trace({
+         name: `ExecutiveChat-Prod-[${currentDeveloper}]`,
+         sessionId: sessionId,
+         userId: session.user_id.toString(),
+         tags: ["executive_chat", "langgraph_prod", `dev:${currentDeveloper}`],
+         input: { userMessage, regionScope }
+       });
+    }
+
+    const inputState = { 
+      userMessage, 
       sessionId,
-      userId: session.user_id,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          wrappedSend('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-          });
-        },
-      },
-    });
+      userId: session.user_id.toString(),
+      regionScope 
+    };
+
+    const thread = { 
+      configurable: { 
+        thread_id: sessionId,
+        sseEmitter 
+      }
+    };
+
+    const finalState = await app.invoke(inputState, thread);
+    
+    if (lfTrace) {
+      lfTrace.update({
+        output: finalState.finalResponse,
+        metadata: {
+          selected_tier: finalState.selected_tier,
+          fc_steps_used: finalState.fc_super_step_count,
+          repair_attempts: finalState.fc_repair_attempts,
+          intent: finalState.intent
+        }
+      });
+    }
+
+    // 将最终状态转换成兼容旧版本的 result 格式以便后续落库
+    result = {
+      _intentType: finalState.intent,
+      _formatVersion: "v4.0.0",
+      _safetyCheck: finalState.safety,
+      // Markdown 文本
+      markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+      // 这里可以收集 graph 中的工具调用，为了 Mock 我们暂时置空
+      _toolMeta: { toolCalls: [] } 
+    };
+
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.info('chat_stream_aborted', { sessionId });
