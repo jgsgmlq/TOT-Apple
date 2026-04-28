@@ -139,10 +139,10 @@ async function executeByName(toolName, params, regionScope) {
     };
   }
 
-  // Temporary session context wrapper (will be passed from above in future refactor)
+  // Context wrapper (support passing user roles from upstream, fallback to executive)
   const sessionContext = {
     regionScope,
-    userRoles: ['executive'] // Executive chat defaults to executive role
+    userRoles: regionScope?.userRoles || ['executive']
   };
 
   try {

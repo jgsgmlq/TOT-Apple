@@ -53,7 +53,7 @@ async function handlePostMessage(req, res, next) {
       return;
     }
 
-    const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);
+    const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id, req);
     res.json({ code: 200, message: 'success', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);
@@ -96,7 +96,7 @@ async function handleRegenerate(req, res, next) {
       return;
     }
 
-    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
+    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id, req);
 
     res.json({
       code: 200,

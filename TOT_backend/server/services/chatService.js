@@ -19,8 +19,9 @@ const { Langfuse } = require('langfuse');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(user) {
+  const roles = user.roles || ['executive'];
   if (user.executive_rtm) {
-    return { type: 'rtm', rtm: user.executive_rtm, regions: null };
+    return { type: 'rtm', rtm: user.executive_rtm, regions: null, userRoles: roles };
   }
   if (user.executive_regions) {
     try {
@@ -28,12 +29,12 @@ function resolveRegionScope(user) {
       if (!Array.isArray(regions) || regions.length === 0) {
         throw Object.assign(new Error('executive_regions must be a non-empty array for regional scope'), { status: 400, code: 'AUTH_003' });
       }
-      return { type: 'regional', regions, rtm: null };
+      return { type: 'regional', regions, rtm: null, userRoles: roles };
     } catch (e) {
       if (e.code === 'AUTH_003') throw e;
     }
   }
-  return { type: 'national', regions: null, rtm: null };
+  return { type: 'national', regions: null, rtm: null, userRoles: roles };
 }
 
 function parseSessionRegionsStored(regionsJson, sessionId = null) {
@@ -256,6 +257,7 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
+    userRoles: req?.user?.roles || ['executive']
   };
 
   // 先建 trace，让 Persist_User_Message / Load_History 能挂在同一棵树下
@@ -366,6 +368,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
+    userRoles: req?.user?.roles || ['executive']
   };
 
   const trace = createAgentTrace({
@@ -515,6 +518,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     type: session.role_scope,
     regions: parseSessionRegionsStored(session.regions, sessionId),
     rtm: session.rtm || null,
+    userRoles: req?.user?.roles || ['executive']
   };
 
   const trace = createAgentTrace({
@@ -845,7 +849,7 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       content: m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null };
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
 
   writeSseHeaders(res);
   const send = createSseSender(res);
@@ -1008,7 +1012,7 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
 }
 
 // ─── regenerateLastAssistant ──────────────────────────────────────────────────
-async function regenerateLastAssistant(sessionId, messageId, userId) {
+async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
   if (Number(session.user_id) !== Number(userId)) {
@@ -1019,6 +1023,8 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
   if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
     throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
   }
+
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
 
   // 先建 trace 让 Load_History / Persist 挂上去
   const trace = createAgentTrace({
@@ -1062,7 +1068,7 @@ async function regenerateLastAssistant(sessionId, messageId, userId) {
         m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null };
+  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
 
   const startMs = Date.now();
   let result;
