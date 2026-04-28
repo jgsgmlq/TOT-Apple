@@ -52,6 +52,11 @@ function getDb() {
     migrateDashboardInsightCounts(_db);
     migrateDashboardInsightModuleTypes(_db);
     ensureAgentGuidelinesTable(_db);
+
+    // T1: 自动初始化 LangGraph 的 SqliteSaver 所需三张表
+    const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
+    const checkpointer = new SqliteSaver(_db);
+    checkpointer.setup();
   }
   return _db;
 }

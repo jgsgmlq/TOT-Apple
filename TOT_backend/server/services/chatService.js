@@ -428,7 +428,6 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     const dbPath = path.join(__dirname, '..', 'database.db');
     const sqliteDb = new Database(dbPath);
     const checkpointer = new SqliteSaver(sqliteDb);
-    checkpointer.setup(); 
     
     const app = buildGraph().compile({ checkpointer }); 
 
@@ -570,7 +569,6 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     const dbPath = path.join(__dirname, '..', 'database.db');
     const sqliteDb = new Database(dbPath);
     const checkpointer = new SqliteSaver(sqliteDb);
-    checkpointer.setup(); 
     
     const app = buildGraph().compile({ checkpointer }); 
 
