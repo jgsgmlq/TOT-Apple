@@ -56,6 +56,11 @@ const fc_LlmToolCallStep = async (state, config) => {
     ? "executive_chat.query_national_analytics" 
     : "executive_chat.query_analytics";
 
+  // 根据用户输入动态 mock 参数，如果包含"无地点"就故意漏掉 region_id 以触发 T3 的 Fail Fast 测试
+  const args = state.userMessage.includes("无地点") 
+    ? { metric: "revenue" } 
+    : { metric: "revenue", region_id: "all" };
+
   return { 
     messages: [
       new AIMessage({
@@ -63,7 +68,7 @@ const fc_LlmToolCallStep = async (state, config) => {
         tool_calls: [{
           id: "call_mock123",
           name: toolName,
-          args: { metric: "revenue" }
+          args: args
         }]
       })
     ] 

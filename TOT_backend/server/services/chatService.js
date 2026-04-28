@@ -429,23 +429,21 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     // 【切流】使用 LangGraph 的引擎替换旧的 chatAgentRunner
     const app = buildGraph().compile({ checkpointer: new MemorySaver() }); // 生产应用这里可以换成 Postgres Checkpointer
     
-    // 初始化外层的真实 Langfuse Core
-    let lfTrace, langfuse;
+    // 初始化外层的真实 Langfuse Core (复用老版基础设施)
     const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
     
-    if (process.env.LANGFUSE_ENABLED === 'true') {
-       langfuse = new Langfuse({
-         publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-         secretKey: process.env.LANGFUSE_SECRET_KEY,
-         baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST
-       });
-       lfTrace = langfuse.trace({
+    console.log(`[API Debug] ENV LANGFUSE_ENABLED: ${process.env.LANGFUSE_ENABLED}, USER: ${currentDeveloper}`);
+
+    // 直接复用 `chatService` 顶部已有的 trace（它是通过 `utils/tracer.js` 的 `createAgentTrace` 建出来的）
+    // 给它的 tag 里再打上新版引擎和开发者的标签
+    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+       trace.update({
          name: `ExecutiveChat-Prod-[${currentDeveloper}]`,
-         sessionId: sessionId,
-         userId: session.user_id.toString(),
-         tags: ["executive_chat", "langgraph_prod", `dev:${currentDeveloper}`],
-         input: { userMessage, regionScope }
+         tags: ["executive_chat", "langgraph_prod", `dev:${currentDeveloper}`]
        });
+       console.log(`[API Debug] Using GLOBAL Tracer. trace_id: ${trace.id}`);
+    } else {
+       console.log(`[API Debug] Global Trace is NOOP. (LANGFUSE_ENABLED=${process.env.LANGFUSE_ENABLED})`);
     }
 
     const inputState = { 
@@ -464,8 +462,8 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
     const finalState = await app.invoke(inputState, thread);
     
-    if (lfTrace) {
-      lfTrace.update({
+    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+      trace.update({
         output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
         metadata: {
           selected_tier: finalState.selected_tier,
@@ -474,9 +472,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
           intent: finalState.intent
         }
       });
-      // 在 HTTP 返回前，强制推送当前请求的 Trace 数据
-      langfuse.flushAsync().catch(e => console.error("[Langfuse] flush error:", e));
-      console.log(`[Langfuse Prod] Trace 已发出: ${lfTrace.id}`);
+      console.log(`[Langfuse Prod] Trace 已准备好: ${trace.id}`);
     }
 
     // 将最终状态转换成兼容旧版本的 result 格式以便后续落库
