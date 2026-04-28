@@ -430,11 +430,11 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     const app = buildGraph().compile({ checkpointer: new MemorySaver() }); // 生产应用这里可以换成 Postgres Checkpointer
     
     // 初始化外层的真实 Langfuse Core
-    let lfTrace;
+    let lfTrace, langfuse;
     const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
     
     if (process.env.LANGFUSE_ENABLED === 'true') {
-       const langfuse = new Langfuse({
+       langfuse = new Langfuse({
          publicKey: process.env.LANGFUSE_PUBLIC_KEY,
          secretKey: process.env.LANGFUSE_SECRET_KEY,
          baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST
@@ -466,7 +466,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
     
     if (lfTrace) {
       lfTrace.update({
-        output: finalState.finalResponse,
+        output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
         metadata: {
           selected_tier: finalState.selected_tier,
           fc_steps_used: finalState.fc_super_step_count,
@@ -474,6 +474,9 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
           intent: finalState.intent
         }
       });
+      // 在 HTTP 返回前，强制推送当前请求的 Trace 数据
+      langfuse.flushAsync().catch(e => console.error("[Langfuse] flush error:", e));
+      console.log(`[Langfuse Prod] Trace 已发出: ${lfTrace.id}`);
     }
 
     // 将最终状态转换成兼容旧版本的 result 格式以便后续落库
