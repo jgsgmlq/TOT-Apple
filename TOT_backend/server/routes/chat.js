@@ -27,7 +27,7 @@ function requireSessionOwnership(req, res, next) {
 
 function handleCreateSession(req, res, next) {
   try {
-    const result = chatService.createSession(req.user.id);
+    const result = chatService.createSession(req.user.id, req.user);
     res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);

@@ -121,11 +121,13 @@ function buildExampleQuestions() {
 }
 
 // ─── createSession ────────────────────────────────────────────────────────────
-function createSession(userId) {
+function createSession(userId, reqUser) {
   const user = db.get('SELECT id, executive_regions, executive_rtm FROM users WHERE id = ?', [userId]);
   if (!user) throw Object.assign(new Error('User not found'), { status: 404, code: 'CHAT_002' });
 
-  const regionScope = resolveRegionScope(user);
+  // 必须将原始请求中解析出的 roles 合并到 DB 查询出的 user 对象中
+  const combinedUser = { ...user, roles: reqUser?.roles || ['executive'] };
+  const regionScope = resolveRegionScope(combinedUser);
   const sessionId = nanoid();
   const now = formatNowSqliteLocal();
 
