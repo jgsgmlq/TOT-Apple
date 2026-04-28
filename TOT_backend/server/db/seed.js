@@ -11,7 +11,7 @@
  * STORE_DEFS / generateEmployees() 里」的门店与员工，避免旧版 seed（如 50 店 300 人）残留。
  *
  * 差异化设计目标：
- *   - 区域层：华东 > 华南 > 华北 > 华西 > 东北 梯度完成率
+ *   - 渠道层：Monobrand > Multibrand > Carrier > Education 梯度完成率
  *   - 门店层：优秀 / 良好 / 待改进 / 预警 四档
  *   - 个人层：10 种员工画像，体现完成速度 / 平台进度 / 催办次数差异
  *   - 任务层：Task A（已过期）/ Task B（临近截止）/ Task C（刚下发）三时段
@@ -29,62 +29,64 @@ const ADMIN_PASSWORD   = 'Admin2026!';
 // ─── 10 家门店定义 ─────────────────────────────────────────────────────────────
 // archetype: excellent(优秀) | good(良好) | moderate(待改进) | warning(预警)
 const STORE_DEFS = [
-  // 华东 — 整体最优，1 优秀 + 1 良好
-  { id: 'S001', name: '上海环球港旗舰店', region: '华东', city: '上海',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: null,      archetype: 'excellent' },
-  { id: 'S002', name: '南京新街口体验店', region: '华东', city: '南京',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '鼎盛科技',  archetype: 'good'      },
-  // 华南 — 较优，2 良好
-  { id: 'S003', name: '广州天河城旗舰店', region: '华南', city: '广州',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: null,      archetype: 'good'      },
-  { id: 'S004', name: '深圳万象城体验店', region: '华南', city: '深圳',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '华联商贸',  archetype: 'good'      },
-  // 华北 — 中等，1 良好 + 1 待改进
-  { id: 'S005', name: '北京三里屯旗舰店', region: '华北', city: '北京',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: null,      archetype: 'good'      },
-  { id: 'S006', name: '天津滨江道体验店', region: '华北', city: '天津',   rtm: 'Carrier',    format: 'Mass Merchant',dealer_name: '新时代电子', archetype: 'moderate'  },
-  // 华西 — 偏低，1 待改进 + 1 预警
-  { id: 'S007', name: '成都太古里旗舰店', region: '华西', city: '成都',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: null,      archetype: 'moderate'  },
-  { id: 'S008', name: '重庆观音桥体验店', region: '华西', city: '重庆',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '盛达通讯',  archetype: 'warning'   },
-  // 东北 — 最低，1 待改进 + 1 预警
-  { id: 'S009', name: '沈阳中街体验店',   region: '东北', city: '沈阳',   rtm: 'Carrier',    format: 'Mass Merchant',dealer_name: '新时代电子', archetype: 'moderate'  },
-  { id: 'S010', name: '哈尔滨中央大街店', region: '东北', city: '哈尔滨', rtm: 'Education',  format: 'Campus',       dealer_name: null,      archetype: 'warning'   },
+  // Monobrand — 整体最优，1 优秀 + 1 良好
+  { id: 'S001', name: '上海环球港旗舰店', region: '', city: '上海',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: '恒大通讯',  archetype: 'excellent' },
+  { id: 'S002', name: '南京新街口体验店', region: '', city: '南京',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '鼎盛科技',  archetype: 'good'      },
+  // Multibrand — 较优，2 良好
+  { id: 'S003', name: '广州天河城旗舰店', region: '', city: '广州',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: '远方科技',  archetype: 'good'      },
+  { id: 'S004', name: '深圳万象城体验店', region: '', city: '深圳',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '华联商贸',  archetype: 'good'      },
+  // Carrier & Education — 中等/待改进
+  { id: 'S005', name: '北京三里屯旗舰店', region: '', city: '北京',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: '创世商贸',  archetype: 'good'      },
+  { id: 'S006', name: '天津滨江道体验店', region: '', city: '天津',   rtm: 'Carrier',    format: 'Mass Merchant',dealer_name: '新时代电子', archetype: 'moderate'  },
+  { id: 'S007', name: '成都太古里旗舰店', region: '', city: '成都',   rtm: 'Monobrand',  format: 'MONO',         dealer_name: '蓝天数码',  archetype: 'moderate'  },
+  { id: 'S008', name: '重庆观音桥体验店', region: '', city: '重庆',   rtm: 'Multibrand', format: 'Lifestyle',    dealer_name: '盛达通讯',  archetype: 'warning'   },
+  { id: 'S009', name: '沈阳中街体验店',   region: '', city: '沈阳',   rtm: 'Carrier',    format: 'Mass Merchant',dealer_name: '新时代电子', archetype: 'moderate'  },
+  { id: 'S010', name: '哈尔滨中央大街店', region: '', city: '哈尔滨', rtm: 'Education',  format: 'Campus',       dealer_name: '飞跃科技',  archetype: 'warning'   },
 ];
 
 // ─── 3 个任务定义 ──────────────────────────────────────────────────────────────
-// 基准日期：2026-04-11
-//   Task A：ddl 已过（-21天），历史任务
-//   Task B：ddl 临近（+7天），进行中有预警
-//   Task C：ddl 宽裕（+30天），刚下发
+// 基准日期：动态生成
+//   Task A：ddl 较近（+1~3天），提供相对完整的进度数据
+//   Task B：ddl 适中（+7~14天），进行中
+//   Task C：ddl 宽裕（+20~30天），刚下发
+const now = Date.now();
+const daysToMs = (d) => d * 24 * 3600 * 1000;
+const randomDays = (min, max) => min + Math.random() * (max - min);
+
 const TASKS = [
   {
     id:          'TASK_A',
     title:       'iPhone 17 新品培训',
-    description: 'iPhone 17 系列产品知识、卖点提炼与销售话术。截止日已过，提供历史对比数据。',
+    description: 'iPhone 17 系列产品知识、卖点提炼与销售话术。前期下发任务，已逾期。',
     has_mypal: 1, has_smartsell: 1, has_ai_demo: 1, has_live_broadcast: 0,
     status:    'dispatched',
-    start_at:  '2026-03-01 09:00:00',
-    ddl_at:    '2026-03-21 23:59:59',
-    created_at:'2026-03-01 08:00:00',
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(15, 20)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(1, 3)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(20))),
     pass_score: 80,
     created_by: 'central',
   },
   {
     id:          'TASK_B',
     title:       'AirPods 新品培训',
-    description: 'AirPods 4 全系产品知识，重点 ANC 卖点与 H2 芯片差异化话术。截止日临近。',
+    description: 'AirPods 4 全系产品知识，重点 ANC 卖点与 H2 芯片差异化话术。正常进行中。',
     has_mypal: 1, has_smartsell: 1, has_ai_demo: 0, has_live_broadcast: 1,
     status:    'dispatched',
-    start_at:  '2026-03-20 09:00:00',
-    ddl_at:    '2026-04-18 23:59:59',
-    created_at:'2026-03-20 08:00:00',
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(5, 10)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(7, 14)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(10))),
     pass_score: 80,
     created_by: 'central',
   },
   {
     id:          'TASK_C',
     title:       'Mono 新春系列产品学习',
-    description: 'Mono 新春限定系列配件产品知识培训，含礼盒搭配推荐与陈列规范。刚下发。',
+    description: 'Mono 新春限定系列配件产品知识培训，含礼盒搭配推荐与陈列规范。刚下发，时间宽裕。',
     has_mypal: 1, has_smartsell: 0, has_ai_demo: 1, has_live_broadcast: 1,
     status:    'dispatched',
-    start_at:  '2026-04-08 09:00:00',
-    ddl_at:    '2026-05-11 23:59:59',
-    created_at:'2026-04-08 08:00:00',
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(0, 2)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(20, 30)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(2))),
     pass_score: 80,
     created_by: 'central',
   },
@@ -94,9 +96,9 @@ const TASKS = [
     description: '测试起步异常预警，时间已过半。',
     has_mypal: 1, has_smartsell: 0, has_ai_demo: 1, has_live_broadcast: 0,
     status:    'dispatched',
-    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 5 * 24 * 3600 * 1000)),
-    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 4 * 24 * 3600 * 1000)),
-    created_at:parseDateToSqliteLocal(new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(4, 6)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(3, 5)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(6))),
     pass_score: 80,
     created_by: 'central',
   },
@@ -106,9 +108,9 @@ const TASKS = [
     description: '测试P1临期预警，剩余时间小于48小时。',
     has_mypal: 1, has_smartsell: 1, has_ai_demo: 0, has_live_broadcast: 0,
     status:    'dispatched',
-    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
-    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 1.5 * 24 * 3600 * 1000)),
-    created_at:parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(8, 12)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(1.1, 1.9)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(12))),
     pass_score: 80,
     created_by: 'central',
   },
@@ -118,9 +120,9 @@ const TASKS = [
     description: '测试P0临期预警，剩余时间小于24小时。',
     has_mypal: 1, has_smartsell: 0, has_ai_demo: 0, has_live_broadcast: 1,
     status:    'dispatched',
-    start_at:  parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
-    ddl_at:    parseDateToSqliteLocal(new Date(Date.now() + 0.5 * 24 * 3600 * 1000)),
-    created_at:parseDateToSqliteLocal(new Date(Date.now() - 10 * 24 * 3600 * 1000)),
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(8, 12)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(0.1, 0.9)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(12))),
     pass_score: 80,
     created_by: 'central',
   },
@@ -232,24 +234,50 @@ const DAYS_BEFORE_DDL = [9, 7, 5, 4, 3, 2.5, 1.5, 1, 0.5, 0.2];
 function getTimestamps(task, status, empIndex) {
   const startAtMs  = new Date(task.start_at).getTime();
   const ddlAtMs    = new Date(task.ddl_at).getTime();
+  const now = Date.now();
 
-  // received_at：任务下发后 0.5–2 天（按员工位次错开）
-  const receivedMs = startAtMs + daysMs(0.5 + (empIndex % 4) * 0.4);
+  // received_at：任务下发后 0.5–2 天（按员工位次错开），不能超过当前时间
+  const receivedMs = Math.min(startAtMs + daysMs(0.5 + (empIndex % 4) * 0.4), now - daysMs(1));
 
   if (status === 'pending') {
-    return { received_at: toDbStr(receivedMs), started_at: null, completed_at: null };
+    // pending 状态下，有 30% 概率压根没点开阅读过（收到但没读）
+    const actuallyReceived = Math.random() > 0.3 ? toDbStr(receivedMs) : null;
+    return { received_at: actuallyReceived, started_at: null, completed_at: null };
   }
 
-  // started_at：收到后 1–4 天
-  const startedMs = receivedMs + daysMs(1 + (empIndex % 4));
+  // started_at：收到后 1–4 天，不能超过当前时间
+  const startedMs = Math.min(receivedMs + daysMs(1 + (empIndex % 4)), now - daysMs(0.5));
 
   if (status === 'in_progress') {
     return { received_at: toDbStr(receivedMs), started_at: toDbStr(startedMs), completed_at: null };
   }
 
-  // completed_at：ddl 前若干天（不得早于 started_at）
-  const targetCompletedMs = ddlAtMs - daysMs(DAYS_BEFORE_DDL[empIndex] ?? 1);
-  const completedMs = Math.max(startedMs + daysMs(0.5), targetCompletedMs);
+  // completed_at：合理分布在 startedMs 到 now 之间
+  // 确保昨天和今天都有数据，这样 dashboard 的“较昨天”才会算出差值
+  let completedMs;
+  const timeSpan = now - startedMs;
+  
+  if (timeSpan < daysMs(1)) {
+    completedMs = now - Math.random() * timeSpan;
+  } else {
+    // 按位次有规律分布：20%今天完成，30%昨天完成，其他更早完成
+    if (empIndex % 5 === 0) {
+      // 今天内完成
+      completedMs = now - Math.random() * daysMs(0.8);
+    } else if (empIndex % 5 === 1 || empIndex % 5 === 2) {
+      // 昨天内完成
+      completedMs = now - daysMs(1) - Math.random() * daysMs(0.8);
+    } else {
+      // 更早完成
+      completedMs = startedMs + Math.random() * (timeSpan - daysMs(2));
+      // 确保至少在 startedMs 之后
+      if (completedMs < startedMs) completedMs = startedMs + daysMs(0.1);
+    }
+  }
+
+  // 最终兜底：不能超过当前时间，且至少在开始之后
+  completedMs = Math.min(completedMs, now);
+  completedMs = Math.max(completedMs, startedMs + daysMs(0.1));
 
   return {
     received_at:  toDbStr(receivedMs),
@@ -290,14 +318,8 @@ function generateAssignments(employees) {
       const platforms   = getPlatformCompletion(task, status, emp._empIndex);
       const timestamps  = getTimestamps(task, status, emp._empIndex);
 
-      // nudge_count：滞后/未启动员工有催办记录；预警门店更多
+      // nudge_count：由后续真实的 autoNudge 引擎自动计算和累加，这里不再凭空捏造历史催办次数，保证数据一致性
       let nudge_count = 0;
-      if (status === 'pending' && emp._empIndex >= 7) {
-        nudge_count = emp._archetype === 'warning' ? 2 : 1;
-      }
-      if (status === 'in_progress' && emp._empIndex >= 6) {
-        nudge_count = 1;
-      }
 
       assignments.push({
         id:          nanoid(),
@@ -316,9 +338,9 @@ function generateAssignments(employees) {
   return assignments;
 }
 
-// ─── 生成 notification_events（task_assigned）────────────────────────────────
+// ─── 生成 notification_events ────────────────────────────────
 function generateNotifications(assignments) {
-  return assignments.map(a => ({
+  const events = assignments.map(a => ({
     id:             nanoid(),
     task_id:        a.task_id,
     assignment_id:  a.id,
@@ -331,6 +353,79 @@ function generateNotifications(assignments) {
     initiator_id:   null,
     created_at:     a.received_at || a.created_at,
   }));
+
+  // 为了让预警漏斗符合绝对的物理时间逻辑，我们根据任务真实的 ddl_at 倒推他们经历过的预警。
+  // 坚决杜绝“明明距离截止还有3天，却收到了48小时临期预警”的穿越 Bug。
+  const now = Date.now();
+
+  for (const a of assignments) {
+    const t = TASKS.find(t => t.id === a.task_id);
+    const ddlMs = new Date(t.ddl_at).getTime();
+    const createdMs = new Date(t.created_at).getTime();
+    const hoursLeft = (ddlMs - now) / 3600000;
+    const passedPct = (now - createdMs) / (ddlMs - createdMs) * 100;
+
+    if (a.status === 'completed') {
+      // 已经完成的人，如果当时进度过半了，有 30% 的概率收到过 P2
+      if (passedPct >= 50 && Math.random() < 0.3) {
+        events.push({
+          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
+          event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
+          initiator_id: 1, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
+        });
+        a.nudge_count += 1;
+      }
+    } else {
+      // 未完成的人，必定处于现阶段的某个状态。
+      // 对于他们“已经经历过”的时间节点，我们补齐历史记录，支撑漏斗图显示。
+      // 当前的最高状态，我们留给后面的 autoNudge 引擎去真实触发，不在这里预写。
+
+      // 如果现在距离截止不足 48 小时（意味着目前处于 P1 或 P0），那他历史必然触发过 P2（时间过半）。
+      if (hoursLeft <= 48) {
+        events.push({
+          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
+          event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
+          initiator_id: 1, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
+        });
+        a.nudge_count += 1;
+      }
+
+      // 如果现在距离截止不足 24 小时（意味着目前处于 P0），那他历史必然触发过 P1（48小时预警）。
+      if (hoursLeft <= 24) {
+        events.push({
+          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
+          event_type: 'nudge_orange', severity: 'orange', dedupe_key: `autonudge:deadlineCrisisP1:${a.id}`, content: '历史P1催办',
+          initiator_id: 1, created_at: toDbStr(ddlMs - 48 * 3600000)
+        });
+        a.nudge_count += 1;
+      }
+    }
+  }
+
+  return events;
+}
+
+// ─── 生成 read_receipts ──────────────────────────────────────
+function generateReadReceipts(notifications, assignments) {
+  const receipts = [];
+  notifications.forEach(n => {
+    // 只有推送类通知且具有 task_id 的才生成回执
+    if (n.event_type === 'task_assigned' && n.task_id) {
+      // 找到这个人对应的 task_assignment
+      const a = assignments.find(x => x.task_id === n.task_id && x.user_id === n.target_user_id);
+      // 如果分配记录里有 received_at (或者是 in_progress/completed 状态必然有)，说明他确实点开了任务
+      if (a && a.received_at) {
+        receipts.push({
+          id:         nanoid(),
+          event_id:   n.id,
+          user_id:    n.target_user_id,
+          source:     'task_detail_open',
+          read_at:    a.received_at // 保持时间戳绝对对齐
+        });
+      }
+    }
+  });
+  return receipts;
 }
 
 // ─── 生成 MyPal learning mock（与原逻辑保持兼容）────────────────────────────
@@ -391,7 +486,7 @@ async function generateUsers(employees) {
   const users = [
     { username: 'central',            password_hash: defaultHash, role: 'central',   store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
     { username: 'executive',          password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
-    { username: 'executive_huadong',  password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null, executive_regions: '["华东"]',    executive_rtm: null },
+    { username: 'executive_mono',     password_hash: defaultHash, role: 'executive', store_id: null, employee_id: null, executive_regions: null,          executive_rtm: 'Monobrand' },
     { username: 'admin',              password_hash: adminHash,   role: 'admin',     store_id: null, employee_id: null, executive_regions: null,          executive_rtm: null },
   ];
   for (const emp of employees) {
@@ -408,6 +503,7 @@ async function seed() {
   const users         = await generateUsers(employees);
   const assignments   = generateAssignments(employees);
   const notifications = generateNotifications(assignments);
+  const readReceipts  = generateReadReceipts(notifications, assignments);
   const mypalRows     = generateMypalRows(employees);
 
   db.transaction(() => {
@@ -506,6 +602,16 @@ async function seed() {
     }
     console.log(`  ✓ notification_events: ${notifications.length} 条`);
 
+    // ── read_receipts
+    for (const r of readReceipts) {
+      db.run(
+        `INSERT INTO read_receipts (id, event_id, user_id, source, read_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [r.id, r.event_id, r.user_id, r.source, r.read_at]
+      );
+    }
+    console.log(`  ✓ read_receipts: ${readReceipts.length} 条`);
+
     // ── mypal_learning_mock
     for (const r of mypalRows) {
       db.run(
@@ -546,22 +652,22 @@ async function seed() {
   console.log('\n── 测试账号 ──────────────────────────────────────');
   console.log('  central              / Train2026!  (总部看板)');
   console.log('  executive            / Train2026!  (Executive Chat — 全国)');
-  console.log('  executive_huadong    / Train2026!  (Executive Chat — 华东区总监)');
+  console.log('  executive_mono       / Train2026!  (Executive Chat — Monobrand渠道总监)');
   console.log('  emp_E001    / Train2026!  (上海环球港，优秀门店，画像0：早鸟完成者)');
   console.log('  emp_E010    / Train2026!  (上海环球港，优秀门店，画像9：高风险待催办)');
   console.log('  emp_E091    / Train2026!  (哈尔滨中央大街店，预警门店)');
   console.log('  admin       / Admin2026!  (Admin)');
   console.log('\n── 门店档位 ──────────────────────────────────────');
-  console.log('  S001 上海环球港旗舰店     → 优秀 (华东)  完成率 ~90%/80%');
-  console.log('  S002 南京新街口体验店     → 良好 (华东)  完成率 ~70%/50%');
-  console.log('  S003 广州天河城旗舰店     → 良好 (华南)  完成率 ~70%/50%');
-  console.log('  S004 深圳万象城体验店     → 良好 (华南)  完成率 ~70%/50%');
-  console.log('  S005 北京三里屯旗舰店     → 良好 (华北)  完成率 ~70%/50%');
-  console.log('  S006 天津滨江道体验店     → 待改进 (华北) 完成率 ~50%/30%');
-  console.log('  S007 成都太古里旗舰店     → 待改进 (华西) 完成率 ~50%/30%');
-  console.log('  S008 重庆观音桥体验店     → 预警 (华西)  完成率 ~20%/10%');
-  console.log('  S009 沈阳中街体验店       → 待改进 (东北) 完成率 ~50%/30%');
-  console.log('  S010 哈尔滨中央大街门店   → 预警 (东北)  完成率 ~20%/10%');
+  console.log('  S001 上海环球港旗舰店     → 优秀 (Monobrand)  完成率 ~90%/80%');
+  console.log('  S002 南京新街口体验店     → 良好 (Multibrand) 完成率 ~70%/50%');
+  console.log('  S003 广州天河城旗舰店     → 良好 (Monobrand)  完成率 ~70%/50%');
+  console.log('  S004 深圳万象城体验店     → 良好 (Multibrand) 完成率 ~70%/50%');
+  console.log('  S005 北京三里屯旗舰店     → 良好 (Monobrand)  完成率 ~70%/50%');
+  console.log('  S006 天津滨江道体验店     → 待改进 (Carrier)   完成率 ~50%/30%');
+  console.log('  S007 成都太古里旗舰店     → 待改进 (Monobrand) 完成率 ~50%/30%');
+  console.log('  S008 重庆观音桥体验店     → 预警 (Multibrand) 完成率 ~20%/10%');
+  console.log('  S009 沈阳中街体验店       → 待改进 (Carrier)   完成率 ~50%/30%');
+  console.log('  S010 哈尔滨中央大街门店   → 预警 (Education)  完成率 ~20%/10%');
 }
 
 seed().catch((err) => {

@@ -1,10 +1,12 @@
 <script setup lang="ts">
   import { ref, computed, watch, onMounted, nextTick, onUnmounted, defineComponent, h } from 'vue';
   import * as echarts from 'echarts';
-  import { getTaskList } from '@/api/task';
+  import { getTaskList, updateTask, revokeTask } from '@/api/task';
+  import { useDialog } from 'naive-ui';
   import {
     getDashboardOverview,
     getDashboardWarnings,
+    getDashboardNudgeConversion,
     getDashboardTrend,
     getDashboardHeatmap,
     getDashboardAgentInsight,
@@ -20,7 +22,11 @@
   import { renderInsightMarkdown } from '@/utils/markdownRender';
   import AiAnalyzePopover from './components/AiAnalyzePopover.vue';
 
+  import { useRouter } from 'vue-router';
+
   const message = useMessage();
+  const dialog = useDialog();
+  const router = useRouter();
 
   // ================= AI Insight (Intelligent Analysis) =================
   const diagnosisData = ref<any[]>([]);
@@ -31,24 +37,34 @@
   const loadTasks = async () => {
     try {
       const rawTasks = await getTaskList().send();
-      // 只要已下发的任务
-      const dispatched = (rawTasks || []).filter((t: any) => t.status === 'dispatched');
 
-      allTasks.value = dispatched.map((t: any) => {
+      // 对所有任务进行排序，优先显示已下发任务，其次按创建/更新时间倒序
+      const sortedTasks = (rawTasks || []).sort((a: any, b: any) => {
+        if (a.status !== b.status) {
+          return a.status === 'dispatched' ? -1 : 1;
+        }
+        return new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime();
+      });
+
+      allTasks.value = sortedTasks.map((t: any) => {
         return {
           task_id: t.id,
           task_title: t.title,
           deadline: t.ddlAt ? t.ddlAt.substring(0, 10) : '无截止时间',
           fullDeadline: t.ddlAt,
+          autoNudgeRules: t.autoNudgeRules, // 解析并保存任务的预警规则配置
+          status: t.status, // 增加 status 字段以备渲染区分
           completion_rate: null,
           severity: 'green', // Will be dynamically updated by background fetch
         };
       });
 
-      if (allTasks.value.length > 0) {
-        // Asynchronously fetch and fill completion rates for all tasks
+      const dispatchedTasks = allTasks.value.filter(t => t.status === 'dispatched');
+
+      if (dispatchedTasks.length > 0) {
+        // 仅为已下发的任务获取进度
         Promise.all(
-          allTasks.value.map(async (task) => {
+          dispatchedTasks.map(async (task) => {
             try {
               const res = await getDashboardOverview({ taskId: task.task_id }).send();
               if (res && typeof res.completionRate !== 'undefined') {
@@ -86,10 +102,10 @@
     }
   };
 
-  const loadAgentInsights = async () => {
+  const loadAgentInsights = async (forceRefresh = false) => {
     isAgentLoading.value = true;
     try {
-      const agentRes = await getDashboardAgentInsight().send();
+      const agentRes = await getDashboardAgentInsight({ refresh: forceRefresh }).send();
       if (agentRes && agentRes.topTasks) {
         const newDiag = agentRes.topTasks.map((t: any, index: number) => {
           let sev = 'green';
@@ -168,7 +184,7 @@
     currentAlertsLoading.value = true;
     try {
       const promises = [
-        getDashboardWarnings({ taskId, warningLevel: 'startDelay', pageSize: 100 }).send(),
+        getDashboardWarnings({ taskId, warningLevel: 'p2', pageSize: 100 }).send(),
         getDashboardWarnings({ taskId, warningLevel: 'p1', pageSize: 100 }).send(),
         getDashboardWarnings({ taskId, warningLevel: 'p0', pageSize: 100 }).send(),
         getDashboardHeatmap({ taskId, rtmLevel: 'store' }).send(),
@@ -481,12 +497,37 @@
       const o = currentOverview.value;
       const total = o.totalAssignments || 0;
 
-      // Calculate people count accurately from the percentage returned by the backend
-      const p0 = Math.round(total * (o.crisisP0Rate || 0) / 100);
-      const p1 = Math.round(total * (o.crisisP1Rate || 0) / 100);
-      const p2 = Math.round(total * (o.crisisP2Rate || 0) / 100);
-      
-      const unfinished = o.overdueCount || 0;
+      let p0 = Math.round((total * (o.crisisP0Rate || 0)) / 100);
+      let p1 = Math.round((total * (o.crisisP1Rate || 0)) / 100);
+      let p2 = Math.round((total * (o.crisisP2Rate || 0)) / 100);
+
+      const unfinished = (o.pendingCount || 0) + (o.inProgressCount || 0);
+
+      // 逻辑修复：漏斗逻辑严密化（P2 >= P1 >= P0 >= Unfinished）
+      // 如果未完成有 44 人，那他们必然正处于或已经过 P0, P1, P2。
+      // 我们通过从下往上的最大值约束，确保“转化率”真正体现“被拯救/完成”的人数。
+      const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+      if (task && task.fullDeadline) {
+        const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+        const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
+        const rules = task.autoNudgeRules?.deadlineCrisis || {};
+        const p1Threshold = rules.p1 || 48;
+        const p0Threshold = rules.p0 || 24;
+
+        // 仅当时间已经进入相应阶段，或者已经有历史数据时，才进行下级向上追溯修正
+        // 这样可以避免对“尚未开始”的阶段产生干扰
+        if (hoursLeft <= 0) {
+          // 已过期：最终未完成人数就是底层指标
+          p0 = Math.max(p0, unfinished);
+          p1 = Math.max(p1, p0);
+          p2 = Math.max(p2, p1);
+        } else {
+          // 进行中：按时间窗口修正
+          if (hoursLeft <= p0Threshold) p0 = Math.max(p0, unfinished);
+          if (hoursLeft <= p1Threshold) p1 = Math.max(p1, Math.max(p0, unfinished));
+          p2 = Math.max(p2, Math.max(p1, unfinished));
+        }
+      }
 
       return [
         { stage: 'P2', label: 'P2', count: p2 },
@@ -570,6 +611,33 @@
     rtm: false,
   });
 
+  const handleEditTask = (task: any, e: Event) => {
+    e.stopPropagation();
+    router.push({ path: '/central/task/publish', query: { id: task.task_id } });
+  };
+
+  const handleRevokeTask = (task: any, e: Event) => {
+    e.stopPropagation();
+    dialog.warning({
+      title: '撤销任务',
+      content: `确定要撤销任务「${task.task_title}」吗？撤销后，该任务下的所有学习进度和推送记录将被删除，且对店员不可见。此操作不可恢复。`,
+      positiveText: '确定撤销',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        try {
+          await revokeTask(task.task_id).send();
+          message.success('任务已成功撤销，退回草稿状态');
+          if (currentTaskId.value === task.task_id) {
+            currentTaskId.value = null; // 清除看板数据
+          }
+          await loadTasks();
+        } catch (err: any) {
+          message.error(err.message || '撤销任务失败');
+        }
+      },
+    });
+  };
+
   const handleCopyAiInsight = (text: string, section: string) => {
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(() => {
@@ -649,7 +717,7 @@
     if (!tid) return null;
     const base = { reasoning: globalReasoningEnabled.value };
     if (section === 'northStar') return { ...base, insightType: 'north_star', taskId: tid };
-    if (section === 'funnel') return { ...base, insightType: 'north_star', taskId: tid };
+    if (section === 'funnel') return { ...base, insightType: 'conversion_funnel', taskId: tid };
     if (section === 'warning') return { ...base, insightType: 'funnel_alerts', taskId: tid };
     if (section === 'trend') {
       if (currentDim.value === 'hourly') {
@@ -753,7 +821,72 @@
     }, 250);
   };
 
-  const handleRefresh = () => (lastUpdated.value = new Date());
+  const handleRefresh = async () => {
+    isContentLoading.value = true;
+    lastUpdated.value = new Date();
+    try {
+      // 强制刷新 Agent 诊断数据和基础任务列表
+      await loadAgentInsights(true);
+      await loadTasks();
+      
+      // 如果当前有选中的任务，同步刷新大盘、预警、趋势等数据
+      if (currentTaskId.value) {
+        await Promise.all([
+          fetchOverview(currentTaskId.value),
+          fetchAlerts(currentTaskId.value),
+          fetchRegionRanking(),
+        ]);
+      }
+      message.success('数据已刷新');
+    } catch (error) {
+      message.error('刷新失败，请稍后重试');
+    } finally {
+      isContentLoading.value = false;
+    }
+  };
+
+  // ================= WebSocket Logic =================
+  let hqWs: WebSocket | null = null;
+  const initHqWebSocket = () => {
+    let wsUrl = '';
+    const token = localStorage.getItem('token') || '';
+    if (!token) return;
+
+    if (import.meta.env.VITE_GLOB_API_URL) {
+      wsUrl = import.meta.env.VITE_GLOB_API_URL.replace(/^http/, 'ws') + `/ws?token=${token}`;
+    } else {
+      const loc = window.location;
+      let wsProtocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${wsProtocol}//${loc.host}/ws?token=${token}`;
+    }
+
+    try {
+      hqWs = new WebSocket(wsUrl);
+      hqWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'dashboard_agent_updated') {
+            message.info('AI 诊断数据已更新');
+            // 静默拉取最新诊断结果，不再强制传 true 而是利用现有 loadTasks 的逻辑更新面板
+            loadTasks();
+            lastUpdated.value = new Date();
+          }
+        } catch (e) {
+          console.error('WebSocket message parsing error', e);
+        }
+      };
+      hqWs.onerror = (e) => console.error('HQ WebSocket error', e);
+    } catch (e) {
+      console.error('Failed to init HQ WebSocket', e);
+    }
+  };
+
+  const closeHqWebSocket = () => {
+    if (hqWs) {
+      hqWs.close();
+      hqWs = null;
+    }
+  };
 
   // ... Diagnosis Flow
   const expandedTasks = ref(false);
@@ -791,6 +924,12 @@
   };
 
   const handleTaskSelect = (taskId: string) => {
+    const task = allTasks.value.find(t => t.task_id === taskId);
+    if (task && task.status === 'draft') {
+      message.warning('草稿任务暂无学习数据，请先发布任务或点击右侧「管理」进行编辑');
+      return;
+    }
+
     const hasSpecificDiagnosis = (diagnosisData.value || []).some(
       (d) => d.related_task_id === taskId && d.severity !== 'green'
     );
@@ -827,17 +966,51 @@
     return 0;
   });
 
-  const metricHoursRemaining = computed(() => {
+  // ================= Countdown Logic =================
+  const currentTimeMs = ref(Date.now());
+  let countdownTimer: ReturnType<typeof setInterval> | null = null;
+  onMounted(() => {
+    countdownTimer = setInterval(() => {
+      currentTimeMs.value = Date.now();
+    }, 1000);
+  });
+  onUnmounted(() => {
+    if (countdownTimer) clearInterval(countdownTimer);
+  });
+
+  const metricCountdownFormatted = computed(() => {
     const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-    if (!task || !task.fullDeadline) return 0;
+    if (!task || !task.fullDeadline) return '00:00:00';
     
     // Replace '-' with '/' for safe parsing in all browsers, e.g. "2026/04/20 23:59:59"
     const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-    const nowTime = new Date().getTime();
-    const diffMs = ddlTime - nowTime;
+    const diffMs = ddlTime - currentTimeMs.value;
     
-    if (diffMs <= 0) return 0;
-    return Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffMs <= 0) return '已截止';
+    
+    const h = Math.floor(diffMs / (1000 * 60 * 60));
+    const m = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    const s = Math.floor((diffMs % (1000 * 60)) / 1000);
+    
+    return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+  });
+
+  const metricDeadlineFormatted = computed(() => {
+    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+    if (!task || !task.fullDeadline) return '';
+    const d = new Date(task.fullDeadline.replace(/-/g, '/'));
+    if (isNaN(d.getTime())) return task.fullDeadline;
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${min}`;
+  });
+
+  const metricAvgCompletionTime = computed(() => {
+    return currentOverview.value?.avgCompletionTimeHours 
+      ? currentOverview.value.avgCompletionTimeHours.toFixed(1) 
+      : '-';
   });
 
   const metricReadCount = computed(() => {
@@ -937,7 +1110,7 @@
   // ... Alert Funnel
   const alertFunnelAnimated = ref(false);
   watch(
-    alertFunnelData,
+    [() => currentTaskId.value, () => (alertFunnelData.value || []).map(s => s.count).join(',')],
     () => {
       alertFunnelAnimated.value = false;
       setTimeout(() => (alertFunnelAnimated.value = true), 50);
@@ -950,11 +1123,84 @@
     return max > 0 ? max : 1;
   });
   const getAlertFunnelWidth = (stage: any) => (stage.count / alertFunnelMaxCount.value) * 100;
-  const getAlertConversionRate = (index: number) => {
-    return null as any;
+  const getAlertConversionRate = (index: number): number | null => {
+    if (!alertFunnelData.value || index === 0 || index >= alertFunnelData.value.length) return 0;
+
+    // 级联逻辑：如果上一个阶段的转化率已经是 null（未触发），则本阶段也一定是 null
+    if (index > 1 && getAlertConversionRate(index - 1) === null) {
+      return null;
+    }
+
+    const currentStage = alertFunnelData.value[index].stage;
+    const currentCount = alertFunnelData.value[index].count;
+    const prevCount = alertFunnelData.value[index - 1].count;
+
+    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+
+    // 逻辑优化：只有当本阶段人数为 0，且【确实】还没到该阶段的时间点时，才显示“未触发”。
+    if (currentCount === 0 && task && task.fullDeadline) {
+      const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+      const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
+
+      const rules = task.autoNudgeRules?.deadlineCrisis || {};
+      const p1Threshold = rules.p1 || 48;
+      const p0Threshold = rules.p0 || 24;
+
+      if (currentStage === 'P1' && hoursLeft > p1Threshold) return null;
+      if (currentStage === 'P0' && hoursLeft > p0Threshold) return null;
+      if (currentStage === 'Unfinished' && hoursLeft > 0) return null;
+    }
+
+    if (prevCount === 0) return 0;
+
+    // 预警漏斗的转化含义是：在上一阶段的催办作用下，有多少人“被拯救”了（即没有恶化到当前阶段）
+    // 公式：(上一阶段人数 - 当前阶段人数) / 上一阶段人数 * 100
+    const saved = prevCount - currentCount;
+    if (saved < 0) return 0; // 理论上漏斗不应该出现逆势倒挂，如果有，算作0转化
+    return (saved / prevCount) * 100;
   };
   const getOverallConversionRate = () => {
-    return null as any;
+    if (!alertFunnelData.value || alertFunnelData.value.length < 2) return 0;
+    
+    // 基数：最早进入预警池的人数 (P2)
+    const first = alertFunnelData.value[0].count;
+    if (first === 0) return null; // 连 P2 都还没人，说明预警都还没触发或者没异常，无法计算转化率
+
+    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+    let hoursLeft = 9999;
+    let p1Threshold = 48;
+    let p0Threshold = 24;
+
+    if (task && task.fullDeadline) {
+      const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+      hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
+      
+      const rules = task.autoNudgeRules?.deadlineCrisis || {};
+      p1Threshold = rules.p1 || 48;
+      p0Threshold = rules.p0 || 24;
+    }
+
+    // 寻找当前时间已经跨过了哪个层级，作为总账的计算终点（last）
+    let last = first; // 默认就是 P2 阶段
+
+    if (hoursLeft <= 0) {
+      // 已经完全截止，算最终的未完成
+      last = alertFunnelData.value[3].count; // Unfinished
+    } else if (hoursLeft <= p0Threshold) {
+      // 进入了 P0 阶段，用 P0 算账
+      last = alertFunnelData.value[2].count; // P0
+    } else if (hoursLeft <= p1Threshold) {
+      // 进入了 P1 阶段，用 P1 算账
+      last = alertFunnelData.value[1].count; // P1
+    } else {
+      // 只到了 P2（或者时间还没到 P2 但我们有 P2 数据），其实转化率是 0，但可以视作刚启动
+      // 或者说还没跨入下一阶段，没法检验上一阶段的效果
+      return null;
+    }
+    
+    const saved = first - last;
+    if (saved < 0) return 0;
+    return (saved / first) * 100;
   };
   const getAlertBarColor = (stageId: string) => {
     switch (stageId) {
@@ -1412,58 +1658,55 @@
   });
 
   marked.use({
-    extensions: [
-      {
-        name: 'table',
-        renderer(token) {
-          let html = '';
-          let header = '';
-          for (const h of token.header) {
-            let alignStr = h.align ? ` align="${h.align}"` : '';
-            header += `<th${alignStr}>${this.parser.parseInline(h.tokens)}</th>`;
+    renderer: {
+      table(token) {
+        let html = '';
+        let header = '';
+        for (const h of token.header) {
+          let alignStr = h.align ? ` align="${h.align}"` : '';
+          header += `<th${alignStr}>${this.parser.parseInline(h.tokens)}</th>`;
+        }
+        header = `<thead><tr>${header}</tr></thead>`;
+
+        let body = '';
+        for (const r of token.rows) {
+          let cells = '';
+          for (const c of r) {
+            let alignStr = c.align ? ` align="${c.align}"` : '';
+            cells += `<td${alignStr}>${this.parser.parseInline(c.tokens)}</td>`;
           }
-          header = `<thead><tr>${header}</tr></thead>`;
+          body += `<tr>${cells}</tr>`;
+        }
+        if (body) body = `<tbody>${body}</tbody>`;
 
-          let body = '';
-          for (const r of token.rows) {
-            let cells = '';
-            for (const c of r) {
-              let alignStr = c.align ? ` align="${c.align}"` : '';
-              cells += `<td${alignStr}>${this.parser.parseInline(c.tokens)}</td>`;
-            }
-            body += `<tr>${cells}</tr>`;
-          }
-          if (body) body = `<tbody>${body}</tbody>`;
+        html = `<table>${header}${body}</table>`;
 
-          html = `<table>${header}${body}</table>`;
-
-          // Generate CSV string
-          let csvContent = '';
-          if (token.header && token.header.length > 0) {
+        // Generate CSV string
+        let csvContent = '';
+        if (token.header && token.header.length > 0) {
+          csvContent +=
+            token.header.map((h) => `"${(h.text || '').replace(/"/g, '""')}"`).join(',') + '\n';
+        }
+        if (token.rows && token.rows.length > 0) {
+          token.rows.forEach((row) => {
             csvContent +=
-              token.header.map((h) => `"${(h.text || '').replace(/"/g, '""')}"`).join(',') + '\n';
-          }
-          if (token.rows && token.rows.length > 0) {
-            token.rows.forEach((row) => {
-              csvContent +=
-                row.map((c) => `"${(c.text || '').replace(/"/g, '""')}"`).join(',') + '\n';
-            });
-          }
+              row.map((c) => `"${(c.text || '').replace(/"/g, '""')}"`).join(',') + '\n';
+          });
+        }
 
-          const bom = '\uFEFF';
-          const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(bom + csvContent);
+        const bom = '\uFEFF';
+        const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(bom + csvContent);
 
-          return `<div class="markdown-table-wrapper group" style="position: relative; resize: both; overflow: hidden; min-height: 80px; max-height: 400px; padding: 4px; border: 1px dashed #D1D1D6; border-radius: 8px; margin-top: 12px; margin-bottom: 12px; background: #fff; display: flex; flex-direction: column;">
-        <a href="${encodedUri}" download="table_data.csv" title="导出 CSV" class="absolute top-2 right-2 p-1.5 bg-white/90 backdrop-blur border border-gray-200 rounded-md shadow-sm text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-all opacity-0 group-hover:opacity-100 cursor-pointer z-10">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </a>
-        <div style="flex: 1; overflow: auto; padding-right: 4px;">
-           ${html}
-        </div>
-      </div>`;
-        },
+        return `<div class="markdown-table-wrapper group" style="position: relative; resize: both; overflow: hidden; min-height: 80px; max-height: 400px; padding: 4px; border: 1px dashed #D1D1D6; border-radius: 8px; margin-top: 12px; margin-bottom: 12px; background: #fff; display: flex; flex-direction: column;">
+      <a href="${encodedUri}" download="table_data.csv" title="导出 CSV" class="absolute top-2 right-2 p-1.5 bg-white/90 backdrop-blur border border-gray-200 rounded-md shadow-sm text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-all opacity-0 group-hover:opacity-100 cursor-pointer z-10">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </a>
+      <div style="flex: 1; overflow: auto; padding-right: 4px;">
+         ${html}
+      </div>
+    </div>`;
       },
-    ],
+    },
   });
 
   const parsedAiMessages = computed(() => {
@@ -1549,6 +1792,26 @@
 
   const renderMarkdown = (text: string) => {
     if (!text) return '';
+
+    // 1. Fix missing empty line before a table
+    text = text.replace(/([^\n])\n([ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-:| \t]+\|[ \t]*)/g, '$1\n\n$2');
+
+    // 2. Fix malformed table separators
+    text = text.replace(/\|([-: ]+)\|/g, (match) => {
+      return match.replace(/:+/g, ':');
+    });
+
+    // 3. Fix mismatched column counts between the table header and the separator line
+    const tableRegex = /^([ \t]*\|[^\n]+\|[ \t]*)\n([ \t]*\|[-:| \t]+\|[ \t]*)/gm;
+    text = text.replace(tableRegex, (match, headerLine, sepLine) => {
+      const headerCols = (headerLine.match(/\|/g) || []).length;
+      const sepCols = (sepLine.match(/\|/g) || []).length;
+      if (headerCols > 1 && headerCols !== sepCols) {
+        const newSep = '|' + Array(headerCols - 1).fill('---').join('|') + '|';
+        return headerLine + '\n' + newSep;
+      }
+      return match;
+    });
 
     // 识别并美化大盘统计摘要行
     const summaryRegex =
@@ -2029,7 +2292,6 @@
       } else {
         const params: any = {
           taskId: currentTaskId.value,
-          warningLevel: alertFilter.value.toLowerCase(),
           level: amCurrentDimension.value === 'rtm3' ? 'rtm' : amCurrentDimension.value === 'rtm4' ? 'format' : amCurrentDimension.value,
           pageSize: 100,
         };
@@ -2037,21 +2299,30 @@
         if (amSelectedRTM4.value) params.format = amSelectedRTM4.value;
         if (amSelectedDealer.value) params.dealerName = amSelectedDealer.value;
 
-        const res = await getDashboardWarnings(params).send();
-        let rawList = res?.list || [];
+        const res = await getDashboardNudgeConversion(params).send();
+        const rawList = res?.list || [];
 
-        amTableData.value = rawList.map((a: any) => {
-          const riskCount = (a.totalCount || 0) - (a.completedCount || 0);
-          return {
-            alert_id: a.targetId + '-' + a.warningLevel,
-            level: a.warningLevel ? a.warningLevel.toUpperCase() : 'Unfinished',
-            entity_name: a.targetName,
-            total_employees: a.totalCount,
-            completed_count: a.completedCount,
-            risk_count: riskCount,
-            risk_rate: a.warningRate / 100,
-          };
-        });
+        // Map backend response (red/orange/yellow objects) to table rows based on current alertFilter
+        const levelKey = alertFilter.value === 'P0' ? 'red' : alertFilter.value === 'P1' ? 'orange' : 'yellow';
+
+        amTableData.value = rawList
+          .filter((a: any) => a[levelKey].nudged > 0) // Only show entities that actually have alerts at this level
+          .map((a: any) => {
+            const stats = a[levelKey];
+            return {
+              alert_id: a.targetId + '-' + alertFilter.value,
+              level: alertFilter.value,
+              entity_name: a.targetName,
+              total_employees: a.total?.nudged || 0, // In conversion view, total refers to total nudged or we can fallback
+              completed_count: stats.converted,
+              risk_count: stats.nudged,
+              risk_rate: stats.rate / 100,
+              // Extra metadata for potentially showing more info
+              nudged: stats.nudged,
+              converted: stats.converted,
+              conversion_rate: stats.rate,
+            };
+          });
       }
     } catch (e) {
       console.error('Fetch Alert Modal Data Failed', e);
@@ -2099,12 +2370,14 @@
   });
 
   onMounted(() => {
+    initHqWebSocket();
     loadTasks();
     window.addEventListener('resize', () => {
       if (chartInstance) chartInstance.resize();
     });
   });
   onUnmounted(() => {
+    closeHqWebSocket();
     if (chartInstance) chartInstance.dispose();
   });
 </script>
@@ -2204,7 +2477,6 @@
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   class="text-[#0071E3]"
-                  style="animation: spin 8s linear infinite"
                 >
                   <path
                     d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3Z"
@@ -2420,7 +2692,7 @@
                 >全部任务（{{ allTasks.length }}）</div
               >
             </div>
-            <div class="max-h-[360px] overflow-y-auto">
+            <div class="max-h-[260px] overflow-y-auto">
               <div
                 v-for="task in allTasks"
                 :key="task.task_id"
@@ -2428,28 +2700,56 @@
                 class="px-6 py-4 hover:bg-gray-50 cursor-pointer transition-colors duration-200 flex items-center gap-4 border-b border-gray-100 last:border-b-0"
               >
                 <div
+                  v-if="task.status === 'dispatched'"
                   class="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
                   :style="{ backgroundColor: severityColors[task.severity] }"
                 ></div>
-                <div class="flex-1 text-[14px] text-[#111827] font-medium">{{
-                  task.task_title
-                }}</div>
+                <div v-else class="w-2 h-2 rounded-full flex-shrink-0 bg-gray-300 shadow-sm"></div>
+                
+                <div class="flex-1 text-[14px] text-[#111827] font-medium flex items-center gap-2">
+                  {{ task.task_title }}
+                  <span v-if="task.status === 'draft'" class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                    草稿
+                  </span>
+                </div>
                 <div class="text-[12px] text-[#6B7280] whitespace-nowrap"
                   >截止 {{ task.deadline.slice(5) }}</div
                 >
-                <div class="flex items-center gap-2">
-                  <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      class="h-full rounded-full transition-all duration-300"
-                      :style="{
-                        width: task.completion_rate !== null ? task.completion_rate * 100 + '%' : '0%',
-                        backgroundColor: severityColors[task.severity],
-                      }"
-                    ></div>
-                  </div>
-                  <div class="text-[12px] text-[#6B7280] font-medium w-10 text-right"
-                    >{{ task.completion_rate !== null ? Math.round(task.completion_rate * 100) + '%' : '-' }}</div
+                <div class="flex items-center gap-3 w-[210px] justify-end flex-shrink-0">
+                  <template v-if="task.status === 'dispatched'">
+                    <div class="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden flex-shrink-0">
+                      <div
+                        class="h-full rounded-full transition-all duration-300"
+                        :style="{
+                          width: task.completion_rate !== null ? task.completion_rate * 100 + '%' : '0%',
+                          backgroundColor: severityColors[task.severity],
+                        }"
+                      ></div>
+                    </div>
+                    <div class="text-[12px] text-[#6B7280] font-medium w-10 text-right tabular-nums flex-shrink-0"
+                      >{{ task.completion_rate !== null ? Math.round(task.completion_rate * 100) + '%' : '-' }}</div
+                    >
+                  </template>
+                  <template v-else>
+                    <div class="text-[12px] text-[#86868B] font-medium text-right mr-3 flex-shrink-0">待发布</div>
+                  </template>
+                  
+                  <button 
+                    v-if="task.status === 'draft'"
+                    @click="handleEditTask(task, $event)"
+                    class="ml-1 px-2.5 py-1 text-[11px] font-medium text-[#0071E3] bg-blue-50/50 hover:bg-blue-100 rounded-md transition-colors border border-blue-100 whitespace-nowrap flex-shrink-0"
+                    title="编辑草稿"
                   >
+                    编辑
+                  </button>
+                  <button 
+                    v-else
+                    @click="handleRevokeTask(task, $event)"
+                    class="ml-1 px-2.5 py-1 text-[11px] font-medium text-[#FF3B30] bg-red-50 hover:bg-red-100 rounded-md transition-colors border border-red-100 whitespace-nowrap flex-shrink-0"
+                    title="撤销任务下发，退回草稿状态"
+                  >
+                    撤销
+                  </button>
                 </div>
               </div>
             </div>
@@ -2513,65 +2813,36 @@
                     class="text-[36px] leading-none font-bold text-[#111827] font-outfit tracking-tight mb-3"
                     >{{ safeFormatRate(metricCompletionRate * 100, 2) }}</div
                   >
-                  <div class="flex items-center gap-3">
-                    <div
-                      class="text-[12px] font-semibold flex items-center gap-0.5"
-                      :style="{ color: getTrendColor(metricCompletionRateDelta) }"
-                    >
+                  <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-x-3 gap-y-2 mt-2 w-full px-4 text-[11px]">
+                    <!-- Row 1: Delta | Avg Time -->
+                    <div class="flex items-center justify-end gap-1 font-semibold" :style="{ color: getTrendColor(metricCompletionRateDelta) }">
                       <span>较昨天</span>
-                      <span
-                        >{{ metricCompletionRateDelta > 0 ? '+' : ''
-                        }}{{
-                          safeFormatRate(Math.abs(metricCompletionRateDelta * 100), 1, 'pp')
-                        }}</span
-                      >
-                      <svg
-                        v-if="metricCompletionRateDelta > 0"
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
+                      <span>{{ metricCompletionRateDelta > 0 ? '+' : '' }}{{ safeFormatRate(Math.abs(metricCompletionRateDelta * 100), 1, 'pp') }}</span>
+                      <svg v-if="metricCompletionRateDelta > 0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
                         <polyline points="16 7 22 7 22 13" />
                       </svg>
-                      <svg
-                        v-else-if="metricCompletionRateDelta < 0"
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
+                      <svg v-else-if="metricCompletionRateDelta < 0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
                         <polyline points="16 17 22 17 22 11" />
                       </svg>
-                      <svg
-                        v-else
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
+                      <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="5" y1="12" x2="19" y2="12" />
                       </svg>
                     </div>
                     <div class="w-px h-3 bg-gray-200"></div>
-                    <div class="text-[12px] text-[#6B7280]">剩 {{ metricHoursRemaining }}h</div>
+                    <div class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap">
+                      人均耗时 <span class="font-semibold text-[#111827] ml-1">{{ metricAvgCompletionTime }}h</span>
+                    </div>
+
+                    <!-- Row 2: Deadline | Countdown -->
+                    <div class="text-[#6B7280] flex items-center justify-end text-right whitespace-nowrap">
+                      截止 {{ metricDeadlineFormatted }}
+                    </div>
+                    <div class="w-px h-3 bg-gray-200"></div>
+                    <div class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap">
+                      剩 <span class="font-bold text-[#FF3B30] w-[62px] inline-block text-left tabular-nums ml-1">{{ metricCountdownFormatted }}</span>
+                    </div>
                   </div>
                 </div>
                 <div class="h-px bg-gray-100 mx-6"></div>
@@ -3100,22 +3371,27 @@
                         v-if="index > 0"
                         class="flex justify-end items-center gap-1.5 py-0.5 pr-[52px]"
                       >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="#FF9500"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <path d="m6 9 6 6 6-6" />
-                        </svg>
-                        <span class="text-[11px] font-medium text-[#FF9500]">
-                          转化率 {{ safeFormatRate(getAlertConversionRate(index), 1) }}
-                        </span>
+                        <template v-if="getAlertConversionRate(index) === null">
+                          <span class="text-[11px] font-medium text-[#86868B]">阶段未触发</span>
+                        </template>
+                        <template v-else>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            :stroke="getAlertConversionRate(index) === 0 ? '#FF3B30' : '#34C759'"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                          <span class="text-[11px] font-medium" :class="getAlertConversionRate(index) === 0 ? 'text-[#FF3B30]' : 'text-[#34C759]'">
+                            转化率 {{ safeFormatRate(getAlertConversionRate(index) as number, 1) }}
+                          </span>
+                        </template>
                       </div>
                       <div
                         :class="[
@@ -3219,14 +3495,19 @@
                         <div
                           class="absolute bottom-full mb-2 left-0 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                         >
-                          预警转化率 = (最初进入P2风险人数 - 最终未完成人数) /
-                          最初进入P2风险人数。衡量对风险人员的挽回效率。
+                          总预警转化率 = (最初进入 P2 风险的人数 - 当前最深已触发预警层级的人数) /
+                          最初进入 P2 风险人数。根据时间动态衡量从起点到当前的挽回效率。
                         </div>
                       </div>
                       <div class="flex items-baseline gap-1">
-                        <span class="text-[20px] font-bold font-outfit text-[#0071E3]">{{
-                          safeFormatRate(getOverallConversionRate(), 1)
-                        }}</span>
+                        <template v-if="getOverallConversionRate() === null">
+                          <span class="text-[16px] font-semibold text-[#86868B]">进行中</span>
+                        </template>
+                        <template v-else>
+                          <span class="text-[20px] font-bold font-outfit text-[#0071E3]">{{
+                            safeFormatRate(getOverallConversionRate() as number, 1)
+                          }}</span>
+                        </template>
                       </div>
                     </div>
                   </div>
@@ -4476,30 +4757,30 @@
                       <th
                         class="w-20 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('completed_count')"
-                        ><div class="flex items-center justify-end">已完成</div></th
+                        ><div class="flex items-center justify-end">{{ alertFilter === 'Unfinished' ? '已完成' : '转化人数' }}</div></th
                       >
                       <th
                         class="w-24 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none whitespace-nowrap"
                         @click="amHandleSort('risk_count')"
-                        ><div class="flex items-center justify-end">预警人数</div></th
+                        ><div class="flex items-center justify-end">{{ alertFilter === 'Unfinished' ? '预警人数' : '累计催办' }}</div></th
                       >
                       <th
                         v-if="alertFilter === 'P0'"
                         class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('risk_rate')"
-                        ><div class="flex items-center justify-end">临期危机(P0)率</div></th
+                        ><div class="flex items-center justify-end">P0 转化率</div></th
                       >
                       <th
                         v-else-if="alertFilter === 'P1'"
                         class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('risk_rate')"
-                        ><div class="flex items-center justify-end">临期危机(P1)率</div></th
+                        ><div class="flex items-center justify-end">P1 转化率</div></th
                       >
                       <th
                         v-else-if="alertFilter === 'P2'"
                         class="w-36 whitespace-nowrap text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('risk_rate')"
-                        ><div class="flex items-center justify-end">起步异常率</div></th
+                        ><div class="flex items-center justify-end">P2 转化率</div></th
                       >
                       <th
                         v-else

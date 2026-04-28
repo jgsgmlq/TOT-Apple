@@ -295,8 +295,8 @@ router.patch('/:id', authenticate, requireRole('central'), (req, res, next) => {
     const {
       title, description,
       hasMypal, hasSmartSell, hasAiDemo, hasLiveBroadcast,
-      rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,  // 保留 autoNudgeRules
-      mypalTaskWeek, mypalProductName,
+      rtmFilter, storeScope, autoNudgeRules, startAt, passScore, ddlAt,
+      mypalTaskWeek, mypalProductName, subTasksConfig,
     } = req.body;
 
     // dispatched 后只允许改 ddl_at
