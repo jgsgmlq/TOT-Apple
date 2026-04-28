@@ -344,8 +344,12 @@ const fc_ExecuteTool = async (state, config) => {
   // T3: Scope 硬校验保护
   if (state.regionScope.type === "store" && internalToolName.includes("national")) {
     console.log(`[fc_ExecuteTool] 越权拦截：门店级用户无法调用全局层级工具 (${toolName})`);
+    const finalResult = JSON.stringify({ 
+      error: { code: 'PERMISSION_DENIED', message: `User role 'store' cannot access '${toolName}'` } 
+    });
+    if (emitter && typeof emitter.handleToolEnd === 'function') emitter.handleToolEnd(finalResult);
     return { 
-      toolResults: { [toolCall.id]: { data: `Permission Denied: User role 'store' cannot access '${toolName}'` } }
+      toolResults: { [toolCall.id]: { data: finalResult } }
     };
   }
   
@@ -364,18 +368,31 @@ const fc_ExecuteTool = async (state, config) => {
     
     // T3 错误码语义对齐 (legacy registry mapping)
     if (rawResult && rawResult.error) {
-      if (rawResult.error.code === 'TOOL_NOT_FOUND') {
+      const code = rawResult.error.code;
+      if (code === 'TOOL_NOT_FOUND') {
         console.error(`[fc_ExecuteTool] 工具未找到:`, internalToolName);
-      } else if (rawResult.error.code === 'EXECUTION_ERROR') {
-        console.error(`[fc_ExecuteTool] 工具执行失败:`, rawResult.error.message);
+      } else if (code === 'PERMISSION_DENIED') {
+        console.error(`[fc_ExecuteTool] 工具无权限访问:`, internalToolName);
+      } else if (code === 'INVALID_PARAMETERS') {
+        console.error(`[fc_ExecuteTool] 工具参数不合法:`, rawResult.error.message);
+      } else if (code === 'TIMEOUT_ERROR') {
+        console.error(`[fc_ExecuteTool] 工具执行超时:`, rawResult.error.message);
+      } else if (code === 'EXECUTION_ERROR') {
+        console.error(`[fc_ExecuteTool] 工具执行异常:`, rawResult.error.message);
       }
     }
     
     // Legacy 约定：即使出错，也通常包含在返回对象的 error 字段或直接作为字符串返回
     finalResult = typeof rawResult === 'object' ? JSON.stringify(rawResult) : String(rawResult);
   } catch (err) {
-    console.error(`[fc_ExecuteTool] 执行工具 ${internalToolName} 内部异常:`, err);
-    finalResult = JSON.stringify({ error: { code: 'EXECUTION_ERROR', message: err.message || "内部工具执行异常" }});
+    console.error(`[fc_ExecuteTool] 执行工具 ${internalToolName} 内部抛出异常:`, err);
+    // 捕获不可预知的崩溃，封装为标准的 EXECUTION_ERROR
+    finalResult = JSON.stringify({ 
+      error: { 
+        code: 'EXECUTION_ERROR', 
+        message: err.message || "内部工具执行异常" 
+      }
+    });
   }
 
   if (emitter && typeof emitter.handleToolEnd === 'function') {

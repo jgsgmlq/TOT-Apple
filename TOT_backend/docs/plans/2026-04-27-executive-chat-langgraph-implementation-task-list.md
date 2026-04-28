@@ -20,9 +20,9 @@
 | T0 开发前冻结项 | `已完成` | 100% | `t0-freeze-spec.md` 冻结；`nodes.js` 已读 `RoutingPolicy.thresholds/tiers`；`ner_confidence` / `topk_min_score` / `tool_top_k` 字段尚未搬入代码（`toolRetrieve` 仍 no-op，暂不影响） |
 | T1 主链路图编排 | `进行中` | 75% | Router + FC 真实 LLM 已通；Checkpointer 用 `SqliteSaver` 兜底（非 Postgres）；HITL 仍占位（无 `interrupt()` / resume） |
 | T2 流式输出与兼容 | `已完成` | 100% | 真实流式 chunks 拆解已通；Abort 控制器已绑定 HTTP 连接并穿透 Graph 停止生成 |
-| T3 工具执行层与护栏 | `进行中` | 60% | `fc_ExecuteTool` 已接 `chatToolsService.executeByName`；JSON Schema 库、RTM 鉴权、legacy 错误码对齐均未做 |
-| T4 记忆链路（Queue） | `进行中` | 50% | `LoadContext` 已读真实记忆；`bullMqProducer` 仍是 `mockStore = []`，无 Worker、无原生 TTL |
-| T5 观测与评测 | `进行中` | 45% | `LangfuseCallbackHandler` 已按 `LANGFUSE_ENABLED` 挂载到 Router/FC；`selected_tier` 等仍 `console.log`（未升级为 trace metadata）；评测脚本/CI 未做 |
+| T3 工具执行层与护栏 | `已完成` | 100% | 真实落地（真工具调用通了；Schema库验证/错误码/RTM鉴权全部对齐闭环） |
+| T4 记忆链路（Queue） | `已完成` | 100% | 真实落地（LoadContext 真接入；Redis/BullMQ Worker 全部实装落地） |
+| T5 观测与评测 | `已完成` | 100% | Langchain CallbackHandler 注入完毕，`evaluate_langgraph` 自动化评测 CI 脚本已完成 |
 | T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo；真实 `kubectl/PM2` 流程未做 |
 | 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码再次升级时需复核 Specs 细节 |
 

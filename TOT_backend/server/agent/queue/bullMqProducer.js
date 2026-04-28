@@ -20,7 +20,10 @@ class MemoryQueueProducer {
     try {
       // 默认尝试连接本地 Redis，真实生产环境可通过环境变量覆盖
       const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-      this.redisClient = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+      this.redisClient = new IORedis(redisUrl, { 
+        maxRetriesPerRequest: 1, 
+        retryStrategy: () => null // 失败不重试，直接丢弃，防止 CI 被刷屏 
+      });
       this.bullQueue = new Queue(this.queueName, { connection: this.redisClient });
       this.isConnected = true;
       console.log(`[Queue] Connected to BullMQ (${this.queueName})`);

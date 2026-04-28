@@ -21,7 +21,10 @@ const getMemoryLLM = () => new ChatOpenAI({
 async function startMemoryWorker() {
   const queueName = "MemoryIngestionQueue";
   const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-  const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = new IORedis(redisUrl, { 
+    maxRetriesPerRequest: 1, 
+    retryStrategy: () => null 
+  });
 
   console.log(`[Queue Worker] 正在启动记忆消费集群，监听队列: ${queueName}`);
 
