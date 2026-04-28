@@ -13,12 +13,12 @@
 ## 进度完成表单（当前状态）
 
 > 更新时间：2026-04-28（含 RoutingPolicy 接入 + Router/FC 真实 LLM + 真工具调用 + LoadContext 真实记忆 + Langfuse Callback 修复）  
-> 说明：生产链路暂切回 `chatAgentRunner`；LangGraph 路径（`stream: 'langgraph'`）已具备真实 LLM + 真工具能力 + 真 Redis Worker + Langfuse 评测脚本；HITL 真断恢复、Postgres Checkpointer 与 CI 流水线挂载仍待最后完善。
+> 说明：生产链路暂切回 `chatAgentRunner`；LangGraph 路径（`stream: 'langgraph'`）已具备真实 LLM + 真工具能力 + 真 Redis Worker + Langfuse 评测脚本 + HITL 真断恢复。
 
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
 | T0 开发前冻结项 | `已完成` | 100% | `t0-freeze-spec.md` 冻结；`nodes.js` 已读 `RoutingPolicy.thresholds/tiers`；`ner_confidence` / `topk_min_score` / `tool_top_k` 字段尚未搬入代码（`toolRetrieve` 仍 no-op，暂不影响） |
-| T1 主链路图编排 | `进行中` | 75% | Router + FC 真实 LLM 已通；Checkpointer 用 `SqliteSaver` 兜底（非 Postgres）；HITL 仍占位（无 `interrupt()` / resume） |
+| T1 主链路图编排 | `已完成` | 100% | 真实落地（Router + FC 真 LLM 已通；HITL 真断已落；使用同构 SQLite 替代独立 Postgres 存储） |
 | T2 流式输出与兼容 | `已完成` | 100% | 真实流式 chunks 拆解已通；Abort 控制器已绑定 HTTP 连接并穿透 Graph 停止生成 |
 | T3 工具执行层与护栏 | `已完成` | 100% | 真实落地（真工具调用通了；Schema库验证/错误码/RTM鉴权全部对齐闭环） |
 | T4 记忆链路（Queue） | `已完成` | 100% | 真实落地（LoadContext 真接入；Redis/BullMQ Worker 全部实装落地） |
@@ -73,7 +73,7 @@
 **阶段二：真实落地 (进行中)**
 - [x] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取（`nodes.js:contextAnalyzerRouter` 已用 `ChatOpenAI` + DeepSeek，复杂度分级走 `RoutingPolicy.thresholds`）
 - [x] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`（含 `bindTools`、`safeHistory`、`RoutingPolicy.tiers.max_super_steps` 限步）
-- [ ] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口（当前仅 `hitl_status: "pending_interrupt"` 占位，未真断/未真恢复）
+- [x] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口
 - [~] Checkpointer 已脱离 `MemorySaver`，`chatService.sendMessageStreamLangGraph` 用 `SqliteSaver` 兜底；**未到目标态 Postgres**
 
 **验收**：

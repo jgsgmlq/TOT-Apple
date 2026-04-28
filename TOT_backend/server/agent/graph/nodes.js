@@ -293,6 +293,24 @@ const fc_ValidateParams = async (state) => {
   let hasError = false;
   let errorMessage = "";
 
+  // == T1 阶段二: HITL (消歧挂起) 真实判断逻辑 ==
+  // 按照 RoutingPolicy.thresholds.ner_confidence 进行置信度拦阻
+  const confidenceThreshold = RoutingPolicy.thresholds.ner_confidence ?? 0.85;
+  const isConfidenceTooLow = Object.values(state.entities || {}).some(e => e.confidence < confidenceThreshold);
+  
+  if (isConfidenceTooLow || toolName === "clarify_intent") {
+    console.log(`[T1 护栏] 发现实体置信度低于 ${confidenceThreshold}，触发 HITL (Human In The Loop) 挂起`);
+    return {
+      hitl_status: "pending_interrupt",
+      hitl_payload: {
+        type: "select",
+        prompt: `我需要您确认具体的意图/选项`, 
+        options: [{ id: "O1", label: "选项一" }, { id: "O2", label: "选项二" }], 
+        resume_token: toolCall.id
+      }
+    };
+  }
+
   const schema = ToolValidationSchemas[toolName];
   if (schema) {
     const parseResult = schema.safeParse(toolCall.args);
@@ -437,8 +455,31 @@ const fc_MergeToolResults = async (state) => {
   };
 };
 
+const { interrupt } = require("@langchain/langgraph");
+
 const humanInTheLoopGate = async (state) => {
-  return { hitl_status: "pending_interrupt" };
+  // T1 阶段二: 真断 (LangGraph `interrupt`)
+  console.log(`[HITL] 图执行流挂起，等待客户端发送 resume。 payload:`, state.hitl_payload);
+  
+  // 向外抛出 Interrupt
+  // 注意：在 LangGraph 中，当被 interrupt 挂起后，该节点的 promise 会处于 suspend 状态并抛出
+  // 当从外部用 Command / stream() 重新发送 resume 值时，interrupt 会返回用户传来的值
+  const userResponse = interrupt(state.hitl_payload);
+  
+  console.log(`[HITL] 已收到用户选择/确认:`, userResponse);
+  
+  // 收到用户的明确答复后，将状态从 pending 恢复，并将其包装为 ToolMessage 继续循环
+  return { 
+    hitl_status: "resumed",
+    hitl_payload: null, // 清空
+    messages: [
+      new ToolMessage({
+        tool_call_id: state.hitl_payload.resume_token,
+        name: "clarify_intent", // 或者是被挂起的具体工具
+        content: `用户选择了: ${JSON.stringify(userResponse)}`
+      })
+    ]
+  };
 };
 
 const finalResponseStep = async (state) => {
