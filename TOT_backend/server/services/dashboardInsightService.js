@@ -127,11 +127,12 @@ function buildFunnelFacts(body) {
       [taskId, ...drill.params]
     );
     push = pr && pr.c ? pr.c : 0;
+    
     const rr = db.get(
       `SELECT COUNT(DISTINCT rr.user_id) AS c FROM read_receipts rr
        JOIN notification_events ne ON ne.id = rr.event_id
        JOIN stores s ON s.id = ne.store_id
-       WHERE ne.task_id = ? AND rr.source = 'task_detail_open' ${drill.sql}`,
+       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
       [taskId, ...drill.params]
     );
     reads = rr && rr.c ? rr.c : 0;
@@ -142,10 +143,11 @@ function buildFunnelFacts(body) {
       [taskId]
     );
     push = pr && pr.c ? pr.c : 0;
+    
     const rr = db.get(
       `SELECT COUNT(DISTINCT rr.user_id) AS c FROM read_receipts rr
        JOIN notification_events ne ON ne.id = rr.event_id
-       WHERE ne.task_id = ? AND rr.source = 'task_detail_open'`,
+       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'`,
       [taskId]
     );
     reads = rr && rr.c ? rr.c : 0;
@@ -185,10 +187,7 @@ function buildFunnelFacts(body) {
   const wr = computeAssignmentWarningRates(assignRateRows, total, Date.now());
 
   return {
-    scope: baseFacts.scope,
-    taskId: baseFacts.taskId,
-    taskName: baseFacts.taskName,
-    drill: baseFacts.drill,
+    ...baseFacts,
     totalAssignments: total,
     taskReachRate: toPct((reachRow && reachRow.reached_count) || 0, total),
     taskReadRate: toPct(reads, total),

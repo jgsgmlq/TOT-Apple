@@ -239,20 +239,27 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         ? parseFloat(((100 * nudgeRow.converted_nudged) / nudgeRow.total_nudged).toFixed(2))
         : 0;
 
-    // 起步异常 / 临期 P0/P1：与 autoNudge 规则一致，按 assignment 计数 ÷ total（与 GET /dashboard/warnings 下钻门店率同口径）
-    const assignRateRows = db.all(
-      `SELECT ta.status, ta.progress, t.created_at, t.ddl_at, t.auto_nudge_rules
-       FROM task_assignments ta
-       JOIN tasks t ON t.id = ta.task_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-      allParams
-    );
-    const {
-      crisisP2Rate,
-      crisisP0Rate,
-      crisisP1Rate,
-    } = computeAssignmentWarningRates(assignRateRows, total, nowMs);
+    // 预警漏斗数据（使用历史真实的预警发送记录，以体现 P2->P1->P0 的漏斗转化情况）
+    const eventStats = db.all(`
+      SELECT ne.severity, COUNT(DISTINCT ne.target_user_id) as cnt
+      FROM notification_events ne
+      JOIN task_assignments ta ON ne.assignment_id = ta.id
+      ${joinStore}
+      WHERE ${taConditions.join(' AND ')} ${storeWhere} 
+        AND ne.event_type LIKE 'nudge_%'
+      GROUP BY ne.severity
+    `, allParams);
+    
+    let p0N = 0, p1N = 0, p2N = 0;
+    for (const st of eventStats) {
+      if (st.severity === 'red') p0N += st.cnt;
+      if (st.severity === 'orange') p1N += st.cnt;
+      if (st.severity === 'yellow') p2N += st.cnt;
+    }
+    
+    const crisisP2Rate = total > 0 ? parseFloat(((100 * p2N) / total).toFixed(2)) : 0;
+    const crisisP1Rate = total > 0 ? parseFloat(((100 * p1N) / total).toFixed(2)) : 0;
+    const crisisP0Rate = total > 0 ? parseFloat(((100 * p0N) / total).toFixed(2)) : 0;
 
     // 任务触达率：晚于下发时间(ta.created_at)登录就算触达，或者任务已经收到（ta.received_at有值），或者通过websocket收到了通知
     const reachRow = db.get(
@@ -499,9 +506,9 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       selectName = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'(未知)\') AS target_name';
       groupByDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'\')';
     } else {
-      selectId = 'ta.store_id AS target_id';
+      selectId = 's.id AS target_id';
       selectName = 's.name AS target_name';
-      groupByDim = 'ta.store_id';
+      groupByDim = 's.id';
     }
 
     const mainSql = `
@@ -525,13 +532,32 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       GROUP BY ${groupByDim}, ta.task_id
     `;
     const rawRows = db.all(mainSql, [nowIso, ...params]);
+
+    // 预警明细下钻：如果指定了 warningLevel，我们除了实时计算，还要结合历史催办事件
+    // 这样即便任务过期了，漏斗图点进来依然能看到当时被预警的门店
+    const severityMap = { p0: 'red', p1: 'orange', p2: 'yellow' };
+    const targetSeverity = severityMap[warningLevel];
+
+    // 获取该任务下所有收到过对应级别催办的实体及其人数
+    const historicalStats = {};
+    if (targetSeverity) {
+      const eventRows = db.all(`
+        SELECT ${groupByDim} as target_id, COUNT(DISTINCT ne.target_user_id) as cnt
+        FROM notification_events ne
+        JOIN stores s ON s.id = ne.store_id
+        WHERE ne.task_id = ? AND ne.severity = ?
+        GROUP BY ${groupByDim}
+      `, [taskId, targetSeverity]);
+      for (const row of eventRows) {
+        historicalStats[row.target_id] = row.cnt;
+      }
+    }
+
     const matched = [];
     for (const r of rawRows) {
-      if (!r.uncompleted_count) continue;
       const createdAtMs = new Date(r.task_created_at).getTime();
       const ddlMs = new Date(r.ddl_at).getTime();
       const hoursLeft = (ddlMs - nowMs) / (1000 * 60 * 60);
-      if (hoursLeft <= 0) continue; // 已过期不计入预警
       
       const passedMs = nowMs - createdAtMs;
       const totalDur = ddlMs - createdAtMs;
@@ -539,11 +565,19 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
 
       const rules = parseAutoNudgeRules(r.auto_nudge_rules);
       const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
-      if (!band) continue;
-      if (warningLevel && warningLevel !== band) continue;
+      
+      // 逻辑：如果实时处于该预警带，或者历史上产生过该级别的预警事件，都认为命中
+      const histCount = historicalStats[r.target_id] || 0;
+      const isRealTimeMatch = band && (!warningLevel || warningLevel === band);
+      const isHistoryMatch = warningLevel && histCount > 0;
 
-      r._band = band;
-      r._warningRate = ruleBasedStoreWarningRate(band, r);
+      if (!isRealTimeMatch && !isHistoryMatch) continue;
+
+      // 确定显示的 band（优先显示实时的，实时没有则显示历史请求的那个）
+      r._band = isRealTimeMatch ? band : warningLevel;
+      // 确定风险人数：优先使用历史精确计数，如果没有（比如刚触发还没发通知）则用未完成人数兜底
+      r._riskCount = histCount > 0 ? histCount : r.uncompleted_count;
+      r._warningRate = (r._riskCount / r.total_count) * 100;
       matched.push(r);
     }
 
@@ -577,6 +611,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         storeName:      r.target_name,
         warningLevel:   band,
         warningRate,
+        riskCount:      r._riskCount,
         completionRate,
         completedCount: r.completed_count,
         totalCount:     r.total_count,

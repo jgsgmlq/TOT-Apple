@@ -87,6 +87,13 @@ export const dispatchTask = (id: string) => {
 };
 
 /**
+ * 撤销已下发的培训任务
+ */
+export const revokeTask = (id: string) => {
+  return Alova.Post<{ message: string; revokedCount: number }>(`/tasks/${id}/revoke`);
+};
+
+/**
  * 获取任务列表
  */
 export const getTaskList = () => {
