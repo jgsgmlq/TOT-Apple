@@ -129,7 +129,10 @@ ${state.memoryContext || ''}
   try {
     // 注入 T5 Langfuse 的 LLM 层 Callback
     const lfCallback = getLangfuseCallback(config);
-    const invokeConfig = lfCallback ? { callbacks: [lfCallback] } : {};
+    const invokeConfig = { 
+      callbacks: lfCallback ? [lfCallback] : [],
+      signal: config?.signal 
+    };
 
     const res = await getRouterModel().invoke(messages, invokeConfig);
     rawJson = res.content.trim();
@@ -238,11 +241,18 @@ ${state.memoryContext || ''}`),
   // 根据步数决定是否绑定工具
   const llm = currentStep >= maxSteps ? getFcModel() : getLlmWithTools();
   
+  // 获取前端传进来的 Abort Signal 以支持随时中断
+  const signal = config?.signal;
+
   try {
-    const aiMessage = await llm.invoke(messagesToSend, { callbacks });
+    const aiMessage = await llm.invoke(messagesToSend, { callbacks, signal });
     // 将 LangChain 产生的 Tool Calls 打回 state，确保带有正确的 ID 和参数
     return { messages: [aiMessage] };
   } catch (err) {
+    if (err.name === 'AbortError' || err.message?.includes('abort')) {
+      console.log("[fc_LlmToolCallStep] 客户端中止了流式生成");
+      return { messages: [new AIMessage({ content: "\n[已中止生成]" })] };
+    }
     console.error("[fc_LlmToolCallStep] 大模型调用失败:", err);
     return { messages: [new AIMessage({ content: `系统异常: 大模型响应失败 ${err.message}` })] };
   }

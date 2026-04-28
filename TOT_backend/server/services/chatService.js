@@ -386,6 +386,12 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
   let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
   
   const wrappedSend = (event, payload) => send(event, payload);
+  let sseClientAborted = false;
+  req.on('close', () => {
+    sseClientAborted = true;
+    abortController.abort();
+  });
+
   const sseEmitter = {
     handleLLMNewToken: (token, info = {}) => {
       const phase = info.isReasoning ? 'reasoning' : 'content';
@@ -467,6 +473,27 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     return result;
 
   } catch (err) {
+    if (err.name === 'AbortError' || err.message?.includes('abort')) {
+      logger.info('chat_stream_langgraph_aborted', { sessionId });
+      endSpan(sseSpan, {
+        output: null,
+        level: 'WARNING',
+        metadata: {
+          status: 'aborted',
+          deltaCount: sseDeltaCount,
+          deltaBytes: sseDeltaBytes,
+          reasoningCount: sseReasoningCount,
+        },
+      });
+      if (trace && trace !== NOOP_TRACE) {
+        trace.update({
+          output: null,
+          metadata: { status: 'aborted', reason: 'client_abort' },
+        });
+      }
+      return;
+    }
+    
     logger.error('chat_langgraph_stream_error', { sessionId, error: err.stack });
     endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
     wrappedSend('error', { message: 'Agent LangGraph 执行出错' });

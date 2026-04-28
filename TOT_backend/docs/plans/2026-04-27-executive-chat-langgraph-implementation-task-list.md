@@ -12,19 +12,19 @@
 
 ## 进度完成表单（当前状态）
 
-> 更新时间：2026-04-28  
-> 说明：T1–T6 PoC 骨架（mock 实现）已落地；生产链路暂切回 `chatAgentRunner`；阶段二真实接入未开始。
+> 更新时间：2026-04-28（含 RoutingPolicy 接入 + Router/FC 真实 LLM + 真工具调用 + LoadContext 真实记忆 + Langfuse Callback 修复）  
+> 说明：生产链路暂切回 `chatAgentRunner`；LangGraph 路径（`stream: 'langgraph'`）已具备真实 LLM + 真工具能力；HITL 真断恢复、Postgres Checkpointer、真 Redis Worker、评测脚本与发布流水线仍未做。
 
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
-| T0 开发前冻结项 | `已完成` | 100% | 已创建 2026-04-27-t0-freeze-spec.md，所有数据契约及门槛完全冻结 |
-| T1 主链路图编排 | `进行中` | 75% | 真实落地（Router + FC 真 LLM 已通；HITL/Postgres 仍未做） |
-| T2 流式输出与兼容 | `进行中` | 70% | 真实落地（chunks 解析已通；前端联调未做） |
-| T3 工具执行层与护栏 | `已完成` | 100% | 真实工具链、参数校验及错误码对齐已全量落地 |
-| T4 记忆链路（Queue） | `进行中` | 55% | 真实落地（LoadContext 真接入；Redis/Worker 未做） |
-| T5 观测与评测 | `进行中` | 60% | Langchain CallbackHandler 已注入 Router 与 FC 层，元数据已挂钩 |
-| T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo 脚本，未编写与 DevOps 联动的 `kubectl` 部署与判定脚本 |
-| 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码脱离 Mock 后需再次复核 Specs 细节 |
+| T0 开发前冻结项 | `已完成` | 100% | `t0-freeze-spec.md` 冻结；`nodes.js` 已读 `RoutingPolicy.thresholds/tiers`；`ner_confidence` / `topk_min_score` / `tool_top_k` 字段尚未搬入代码（`toolRetrieve` 仍 no-op，暂不影响） |
+| T1 主链路图编排 | `进行中` | 75% | Router + FC 真实 LLM 已通；Checkpointer 用 `SqliteSaver` 兜底（非 Postgres）；HITL 仍占位（无 `interrupt()` / resume） |
+| T2 流式输出与兼容 | `已完成` | 100% | 真实流式 chunks 拆解已通；Abort 控制器已绑定 HTTP 连接并穿透 Graph 停止生成 |
+| T3 工具执行层与护栏 | `进行中` | 60% | `fc_ExecuteTool` 已接 `chatToolsService.executeByName`；JSON Schema 库、RTM 鉴权、legacy 错误码对齐均未做 |
+| T4 记忆链路（Queue） | `进行中` | 50% | `LoadContext` 已读真实记忆；`bullMqProducer` 仍是 `mockStore = []`，无 Worker、无原生 TTL |
+| T5 观测与评测 | `进行中` | 45% | `LangfuseCallbackHandler` 已按 `LANGFUSE_ENABLED` 挂载到 Router/FC；`selected_tier` 等仍 `console.log`（未升级为 trace metadata）；评测脚本/CI 未做 |
+| T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo；真实 `kubectl/PM2` 流程未做 |
+| 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码再次升级时需复核 Specs 细节 |
 
 ### T0 子项状态
 
@@ -70,11 +70,11 @@
 - [x] 打通 `fc_CheckSteps / fc_LlmToolCallStep / fc_CheckDuplicate / fc_ValidateParams / fc_ParamRepair / fc_ExecuteTool / fc_MergeToolResults`
 - [x] 统一 `PersistAndEmit -> __end__` 图终止语义
 
-**阶段二：真实落地 (未开始)**
-- [x] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取
-- [x] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`
-- [ ] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口（当前仅状态字段占位，未实现真断/真恢复）
-- [x] Checkpointer 由 `MemorySaver` 切到 Postgres/SQLite 存储
+**阶段二：真实落地 (进行中)**
+- [x] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取（`nodes.js:contextAnalyzerRouter` 已用 `ChatOpenAI` + DeepSeek，复杂度分级走 `RoutingPolicy.thresholds`）
+- [x] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`（含 `bindTools`、`safeHistory`、`RoutingPolicy.tiers.max_super_steps` 限步）
+- [ ] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口（当前仅 `hitl_status: "pending_interrupt"` 占位，未真断/未真恢复）
+- [~] Checkpointer 已脱离 `MemorySaver`，`chatService.sendMessageStreamLangGraph` 用 `SqliteSaver` 兜底；**未到目标态 Postgres**
 
 **验收**：
 
@@ -90,14 +90,14 @@
 - [x] 在 `fc_LlmToolCallStep` 注入 token 级 Side-effect（`reasoning/content`）
 - [x] 工具执行边界事件对齐（`tool_start/tool_end`）
 
-**阶段二：真实落地 (未开始)**
-- [x] 解析真实 LLM 流式返回的 chunks，将 reasoning 与 content 平滑分离并 `emit`
-- [x] 与旧版 `chatAgentRunner` 的 markdown 渲染 100% 协议对齐并过前端联调
+**阶段二：真实落地 (进行中)**
+- [x] 解析真实 LLM 流式返回的 chunks，将 reasoning 与 content 平滑分离并 `emit`（`fc_LlmToolCallStep` 内 `handleLLMNewToken` 已读取 `additional_kwargs.reasoning_content`）
+- [ ] 与旧版 `chatAgentRunner` 的 markdown 渲染 100% 协议对齐并过前端联调（生产仍走 `chatAgentRunner`，LangGraph 路径未经过前端联调）
 
 **验收**：
 
-- [x] SSE 协议回放通过
-- [x] 客户端 Abort 后节点可收敛
+- [ ] SSE 协议回放通过（缺自动化回放/对比测试）
+- [ ] 客户端 Abort 后节点可收敛（`abortController.signal` 当前未透传给 `app.invoke` / `llm.invoke`，断开后节点不会收敛）
 
 ---
 
@@ -128,16 +128,16 @@
 - [x] 在 `PersistAndEmit` 后发布 `MemoryIngestRequested` 事件
 - [x] 新建 Queue 抽象层（producer/consumer interface + payload contract）
 
-**阶段二：真实落地 (未开始)**
-- [x] 连接真实 Redis，并用 `bullmq` 的 Queue 实例替换 `mockStore` 数组
-- [x] 实现 `MemoryWorker` (消费者端)，利用 LLM 执行记忆萃取和去重并写入数据库
-- [x] 真实调用 Store API 读取 `mid_term`
-- [x] 定义 mid-term TTL 14 天策略（原生 TTL 优先，Cron 兜底）
+**阶段二：真实落地 (进行中)**
+- [ ] 连接真实 Redis，并用 `bullmq` 的 Queue 实例替换 `mockStore` 数组（`bullMqProducer.js:12` 仍是 `this.mockStore = []`）
+- [ ] 实现 `MemoryWorker` (消费者端)，利用 LLM 执行记忆萃取和去重并写入数据库（仅 `setTimeout` console.log 模拟，无真实消费者）
+- [x] 真实调用 Store API 读取 `mid_term`（`nodes.js:loadContext` 已通过 `chatMemoryService.getMemories(userId)` 注入到 `state.memoryContext`）
+- [ ] 定义 mid-term TTL 14 天策略（payload 已写 `ttl_seconds: 1209600`，但消费端 / Redis EX 未启用，策略尚未实际生效）
 
 **验收**：
 
-- [x] 主请求线程不阻塞记忆萃取
-- [x] 事件 payload 可重放、可追踪、可幂等
+- [~] 主请求线程不阻塞记忆萃取（架构上不阻塞，但因消费端是 mock，"萃取"实际未真实发生）
+- [ ] 事件 payload 可重放、可追踪、可幂等（`event_id` UUID 有；mockStore 内存数组进程重启即丢，可重放未达成）
 
 ---
 
@@ -147,11 +147,11 @@
 - [x] `t5MockTest.js`：在 `persistAndEmit` 节点用 `console.log` 打印 `selected_tier` / `fc_steps_used` / `fc_repair_attempts` / `intent` 占位
 - [x] 沿用 `chatService.js` 现有 `createAgentTrace`，把图执行 trace_id 与 sessionId 串上
 
-**阶段二：真实落地 (未开始)**
-- [x] 接入 `LangfuseCallbackHandler`（`langfuse-langchain`），补全 root / node / tool span
-- [x] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata（替换 `console.log`）
+**阶段二：真实落地 (进行中)**
+- [x] 接入 `LangfuseCallbackHandler`（`langfuse-langchain`），补全 root / node / tool span（`nodes.js:getLangfuseCallback` 按 `LANGFUSE_ENABLED` 在 Router 与 FC LLM 处挂载）
+- [~] 为真实 LLM 请求（Router、FC 引擎）添加 Span 和 Generation（CallbackHandler 自动采集；**Memory 萃取尚未接入**）
+- [ ] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata（`nodes.js:persistAndEmit` 仍是 `console.log`；只在 `chatService.sendMessageStreamLangGraph` 调试路径有 `trace.update`，生产路径不走它）
 - [ ] 对齐附件 D 的 Dataset / Score 字段（`tool_selection_accuracy`、`routing_compliance`、`param_first_pass_rate` 等）
-- [x] 为所有真实 LLM 请求（Router、FC 引擎、Memory 萃取）添加 Span 和 Generation
 - [ ] 落地评测脚本（如 `scripts/evaluate_langgraph.ts`）：支持拉取 Dataset、批量执行、回传 Score
 - [ ] 接入 CI 阻断：在 Prompt / 工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
 - [ ] 建立最低门禁：核心场景回归 + 风险场景回归
