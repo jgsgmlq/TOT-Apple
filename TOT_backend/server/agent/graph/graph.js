@@ -10,9 +10,11 @@ const routeAfterRouter = (state) => {
   return "chat_only"; // default
 };
 
+const RoutingPolicy = require('./routingPolicy');
+
 const routeAfterFcCheckSteps = (state) => {
   // 根据阈值决定是继续还是终止循环
-  const maxSteps = 3; // Mock value
+  const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
   if (state.fc_super_step_count >= maxSteps) return "PersistAndEmit";
   return "fc_LlmToolCallStep";
 };

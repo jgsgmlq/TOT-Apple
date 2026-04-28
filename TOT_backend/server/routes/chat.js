@@ -60,6 +60,27 @@ async function handlePostMessage(req, res, next) {
   }
 }
 
+async function handleResume(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    const { resumePayload, stream } = req.body;
+
+    if (!resumePayload) {
+      throw createError(400, 'resumePayload 不能为空', 'CHAT_006');
+    }
+
+    if (stream === 'langgraph') {
+      await chatService.resumeMessageStreamLangGraph(sessionId, resumePayload, req.user.id, req, res);
+      return;
+    }
+
+    // 默认回退逻辑
+    throw createError(400, '仅支持 LangGraph 模式下的流式 resume 操作', 'CHAT_007');
+  } catch (err) {
+    next(err);
+  }
+}
+
 function handleFeedback(req, res, next) {
   try {
     const { sessionId, messageId } = req.params;
@@ -161,6 +182,14 @@ function mountChatRoutes(prefix, roles) {
     requireRole(roles),
     requireSessionOwnership,
     handlePostMessage
+  );
+
+  router.post(
+    `${base}/:sessionId/resume`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleResume
   );
 
   router.post(

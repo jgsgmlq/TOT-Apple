@@ -359,6 +359,147 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
   };
 }
 
+// ─── resumeMessageStreamLangGraph (T1 Phase 2 HITL 恢复专用) ─────────────────────
+async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, req, res) {
+  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!session) {
+    res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
+    return;
+  }
+  if (Number(session.user_id) !== Number(userId)) {
+    res.status(403).json({ code: 403, message: '无权访问此会话', errorCode: 'CHAT_004', requestId: req.requestId });
+    return;
+  }
+
+  const regionScope = {
+    type: session.role_scope,
+    regions: parseSessionRegionsStored(session.regions, sessionId),
+    rtm: session.rtm || null,
+    userRoles: req?.user?.roles
+  };
+
+  if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
+  }
+
+  const trace = createAgentTrace({
+    sessionId,
+    userId: session.user_id,
+    userMessage: "<resume_payload>",
+    scopeType: regionScope.type,
+    agentMode: AGENT_MODE,
+    entryKind: 'resumeMessageStreamLangGraph',
+  });
+
+  writeSseHeaders(res);
+  const send = createSseSender(res);
+  const abortController = new AbortController();
+
+  const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, resumePayload } });
+  let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
+  
+  const wrappedSend = (event, payload) => send(event, payload);
+  let sseClientAborted = false;
+  req.on('close', () => {
+    sseClientAborted = true;
+    abortController.abort();
+  });
+
+  const sseEmitter = {
+    handleLLMNewToken: (token, info = {}) => {
+      const phase = info.isReasoning ? 'reasoning' : 'content';
+      if (phase === 'reasoning') sseReasoningCount += 1;
+      if (typeof token === 'string' && token) {
+        sseDeltaCount += 1;
+        sseDeltaBytes += token.length;
+      }
+      wrappedSend('delta', { text: token, phase });
+    },
+    handleToolStart: (toolInfo) => {
+      sseToolStartCount += 1;
+      wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
+    },
+    handleToolEnd: (result) => {
+      wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+    }
+  };
+
+  try {
+    const dbPath = path.join(__dirname, '..', 'database.db');
+    const sqliteDb = new Database(dbPath);
+    const checkpointer = new SqliteSaver(sqliteDb);
+    checkpointer.setup(); 
+    
+    const app = buildGraph().compile({ checkpointer }); 
+
+    const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
+    
+    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+       trace.update({
+         name: `ExecutiveChat-LangGraph-[${currentDeveloper}]`,
+         tags: ["executive_chat", "langgraph_prod", "hitl_resume", `dev:${currentDeveloper}`]
+       });
+    }
+
+    const thread = { 
+      configurable: { 
+        thread_id: sessionId,
+        sseEmitter,
+        traceId: trace ? trace.id : undefined 
+      },
+      signal: abortController.signal
+    };
+
+    // T1: 这里不再是传递 inputState 重新开始，而是使用 Command/Command 形式向状态机发送 resume 值
+    // 传递 null 作为 inputState 代表我们继续图里已有的执行
+    const finalState = await app.invoke(
+      new (require("@langchain/langgraph").Command)({ resume: resumePayload }), 
+      thread
+    );
+    
+    if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+      trace.update({
+        output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+        metadata: {
+          selected_tier: finalState.selected_tier,
+          fc_steps_used: finalState.fc_super_step_count,
+          repair_attempts: finalState.fc_repair_attempts,
+          intent: finalState.intent
+        }
+      });
+    }
+
+    const result = {
+      _intentType: finalState.intent,
+      _formatVersion: "v4.0.0",
+      _safetyCheck: finalState.safety,
+      markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+      _toolMeta: { toolCalls: [] } 
+    };
+
+    endSpan(sseSpan, { output: 'success' });
+    wrappedSend('done', '[DONE]');
+    return result;
+
+  } catch (err) {
+    if (err.name === 'AbortError' || err.message?.includes('abort')) {
+      logger.info('chat_stream_langgraph_aborted', { sessionId });
+      endSpan(sseSpan, {
+        output: null,
+        level: 'WARNING',
+        metadata: { status: 'aborted', deltaCount: sseDeltaCount, deltaBytes: sseDeltaBytes, reasoningCount: sseReasoningCount }
+      });
+      if (trace && trace !== NOOP_TRACE) trace.update({ output: null, metadata: { status: 'aborted', reason: 'client_abort' } });
+      return;
+    }
+    
+    logger.error('chat_langgraph_resume_error', { sessionId, error: err.stack });
+    endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
+    wrappedSend('error', { message: 'Agent LangGraph 唤醒出错' });
+    throw err;
+  }
+}
+
 // ─── sendMessageStreamLangGraph (T1 Phase 2 调试专用) ────────────────────────────────
 async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
@@ -1197,4 +1338,4 @@ function deleteSessionById(sessionId) {
   chatSessionStateService.clearSession(sessionId);
 }
 
-module.exports = { createSession, sendMessage, sendMessageStream, sendMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream };
+module.exports = { createSession, sendMessage, sendMessageStream, sendMessageStreamLangGraph, resumeMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream };
