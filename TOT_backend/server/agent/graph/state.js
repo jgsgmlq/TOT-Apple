@@ -33,6 +33,7 @@ const ExecChatGraphState = Annotation.Root({
   fc_super_step_count: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
   fc_current_step: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
   fc_repair_attempts: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
+  repair_error_reason: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   
   // 错误或终止信息
   finalResponse: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),

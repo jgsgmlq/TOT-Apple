@@ -3,6 +3,19 @@ const IORedis = require('ioredis');
 const { db } = require('../../db');
 const { ChatOpenAI } = require("@langchain/openai");
 const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
+// T5 阶段二: 点亮后台盲区，注入官方 CallbackHandler 捕获后台 Worker 消耗 Token 数量
+const CallbackHandler = require("langfuse-langchain").default;
+
+const getLangfuseCallback = (sessionId) => {
+  if (process.env.LANGFUSE_ENABLED !== 'true') return null;
+  return new CallbackHandler({
+    publicKey: process.env.LANGFUSE_PUBLIC_KEY,
+    secretKey: process.env.LANGFUSE_SECRET_KEY,
+    baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST,
+    sessionId: sessionId,
+    tags: ["langchain_node", "memory_worker"]
+  });
+};
 
 // 确保能拿到 LLM 客户端用来做记忆抽取
 const getMemoryLLM = () => new ChatOpenAI({
@@ -43,9 +56,17 @@ User Message: "${userMessage}"
 Bot Response: "${finalResponse}"`;
 
       const llm = getMemoryLLM();
+      const lfCallback = getLangfuseCallback(event.payload.sessionId);
+      const invokeConfig = lfCallback ? { callbacks: [lfCallback] } : {};
+
       const res = await llm.invoke([
         new SystemMessage(prompt)
-      ]);
+      ], invokeConfig);
+
+      if (lfCallback) {
+        // 由于 Worker 进程会一直挂起，手动 flush 确保实时上报
+        await lfCallback.flushAsync().catch(() => {});
+      }
 
       const fact = res.content.trim();
       
