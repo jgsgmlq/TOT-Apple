@@ -1049,7 +1049,6 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       content: m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles };
   if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
     throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
   }
@@ -1274,7 +1273,6 @@ async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
         m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
     }));
 
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles };
   if (!regionScope.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
     throw Object.assign(new Error('User roles missing from request context'), { status: 403, code: 'AUTH_005' });
   }
