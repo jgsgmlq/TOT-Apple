@@ -18,9 +18,9 @@
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
 | T0 开发前冻结项 | `已完成` | 100% | 已创建 2026-04-27-t0-freeze-spec.md，所有数据契约及门槛完全冻结 |
-| T1 主链路图编排 | `骨架完成` | 40% | 已搭建图流转骨架，`nodes.js` 仍为 Mock，尚未接入真实 LLM 工具调用 |
+| T1 主链路图编排 | `进行中` | 80% | 已接入真实 DeepSeek ChatOpenAI 模型，跑通了路由与 FC 流程 |
 | T2 流式输出与兼容 | `骨架完成` | 40% | Emitter 接口与副作用已打通，待真实 `fc_LlmToolCallStep` 接入 OpenAI |
-| T3 工具执行层与护栏 | `骨架完成` | 40% | 鉴权护栏闭环在 Graph 中已预埋，未与真实 `chatToolsService.js` 打通 |
+| T3 工具执行层与护栏 | `进行中` | 80% | 已经打通真实工具链 `executeByName` 并触发 `sqlite` 执行 |
 | T4 记忆链路（Queue） | `骨架完成` | 40% | 建立了 Fire&Forget 抽象层和 `MemoryQueueProducer`，暂为内存数组并非真实 BullMQ/Redis |
 | T5 观测与评测 | `骨架完成` | 25% | 仅 `t5MockTest.js` 跑通本地打点；**未接入 LangfuseCallbackHandler**、未对齐附件 D Dataset/Score |
 | T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo 脚本，未编写与 DevOps 联动的 `kubectl` 部署与判定脚本 |
@@ -71,10 +71,10 @@
 - [x] 统一 `PersistAndEmit -> __end__` 图终止语义
 
 **阶段二：真实落地 (未开始)**
-- [ ] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取
-- [ ] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`
+- [x] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取
+- [x] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`
 - [ ] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口（当前仅状态字段占位，未实现真断/真恢复）
-- [ ] Checkpointer 由 `MemorySaver` 切到 Postgres 存储
+- [x] Checkpointer 由 `MemorySaver` 切到 Postgres/SQLite 存储
 
 **验收**：
 
