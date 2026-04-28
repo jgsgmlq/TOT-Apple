@@ -267,6 +267,20 @@ const fc_CheckDuplicate = async (state) => {
 // 然后动态转换为 Ajv 验证，或者如果是 Zod 定义的则直接执行 z.parse()
 // 在这里为了 PoC，我们对核心工具（例如 queryExecutiveMetrics）应用明确的 Zod 约束
 
+const { z } = require('zod');
+
+// 这里抽取一个真实业务的 Zod Schema 映射表，作为 T3 阶段二的真实落地验证。
+// 未来可以像 chatToolsService 那样将其和 Schema 动态绑定，这里我们先对核心的 queryExecutiveMetrics 使用强类型校验
+const ToolValidationSchemas = {
+  "executive_chat.queryExecutiveMetrics": z.object({
+    dimensions: z.array(z.string()).min(1, { message: "必须指定至少一个维度，如 ['all']" }),
+    metrics: z.array(z.string()).min(1, { message: "必须包含需要查询的 metrics" }),
+  }),
+  "executive_chat.getWarnings": z.object({
+    warning_type: z.string().min(1, { message: "warning_type 不能缺失" })
+  })
+};
+
 const fc_ValidateParams = async (state) => {
   const lastMsg = state.messages[state.messages.length - 1];
   if (!lastMsg || !lastMsg.tool_calls || lastMsg.tool_calls.length === 0) return { ...state };
@@ -274,26 +288,19 @@ const fc_ValidateParams = async (state) => {
   const toolCall = lastMsg.tool_calls[0];
   const toolName = toolCall.name;
   
-  console.log(`[T3 护栏] 开始校验 ${toolName} 的参数:`, toolCall.args);
+  console.log(`[T3 护栏] 开始使用 Zod 校验 ${toolName} 的参数:`, toolCall.args);
 
   let hasError = false;
-  let missingParam = "";
+  let errorMessage = "";
 
-  // 针对看板度量查询工具的专用校验逻辑（真实落地）
-  if (toolName.includes("queryExecutiveMetrics")) {
-     // 业务规则: 如果没指定度量数组(metrics)或维度(dimensions)，则不合法
-     if (!toolCall.args.dimensions || !Array.isArray(toolCall.args.dimensions)) {
-        hasError = true;
-        missingParam = "dimensions";
-     } else if (!toolCall.args.metrics || !Array.isArray(toolCall.args.metrics)) {
-        hasError = true;
-        missingParam = "metrics";
-     }
-  } else if (toolName.includes("getWarnings")) {
-     if (!toolCall.args.warning_type) {
-        hasError = true;
-        missingParam = "warning_type";
-     }
+  const schema = ToolValidationSchemas[toolName];
+  if (schema) {
+    const parseResult = schema.safeParse(toolCall.args);
+    if (!parseResult.success) {
+       hasError = true;
+       // 将 Zod 的格式错误提取为文本
+       errorMessage = parseResult.error.errors.map(e => e.message).join('; ');
+    }
   }
 
   const maxRepairAttempts = RoutingPolicy.tiers[state.selected_tier]?.max_repair_attempts ?? 2;
@@ -303,12 +310,18 @@ const fc_ValidateParams = async (state) => {
       console.log("[T3 护栏] 参数修复超限，执行 Fail Fast 中止");
       return { 
         intent: "chat_only", 
-        finalResponse: `SYSTEM_ERROR: 工具参数校验失败。缺少必填项：${missingParam}`,
-        messages: [new AIMessage({ content: `很抱歉，我缺少查询所需的关键信息 [${missingParam}]，且自动补充失败，请重新提供。` })]
+        finalResponse: `SYSTEM_ERROR: 工具参数校验失败。${errorMessage}`,
+        messages: [new AIMessage({ content: `很抱歉，我缺少查询所需的关键信息 [${errorMessage}]，且自动补充失败，请重新提供。` })]
       };
     }
     console.log(`[T3 护栏] 参数校验失败 (尝试 ${state.fc_repair_attempts + 1})，触发修复循环...`);
-    return { fc_repair_attempts: state.fc_repair_attempts + 1 };
+    // 把错误原因记在 state 里传给 fc_ParamRepair
+    return { 
+      fc_repair_attempts: state.fc_repair_attempts + 1,
+      // 注意 ExecChatGraphState 是单层拍平结构，如果在 state.js 中没定义 errorMessage 字段可能写不进，
+      // 我们依赖 messages 追加 ToolMessage 机制进行流转 (见 fc_ParamRepair)
+      repair_error_reason: errorMessage 
+    };
   }
   
   return { ...state };
@@ -319,7 +332,7 @@ const fc_ParamRepair = async (state) => {
   const lastMsg = state.messages[state.messages.length - 1];
   const toolCall = lastMsg.tool_calls[0];
   
-  const errorMessage = `Tool execution failed: Missing required parameter 'dimensions'. Please provide it or ask the user to clarify.`;
+  const errorMessage = `Tool execution failed: ${state.repair_error_reason || "Missing or invalid parameters."} Please correct it.`;
   
   return { 
     messages: [new ToolMessage({
