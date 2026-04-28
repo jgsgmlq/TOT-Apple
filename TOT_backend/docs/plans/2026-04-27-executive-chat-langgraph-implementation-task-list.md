@@ -13,7 +13,7 @@
 ## 进度完成表单（当前状态）
 
 > 更新时间：2026-04-28（含 RoutingPolicy 接入 + Router/FC 真实 LLM + 真工具调用 + LoadContext 真实记忆 + Langfuse Callback 修复）  
-> 说明：生产链路暂切回 `chatAgentRunner`；LangGraph 路径（`stream: 'langgraph'`）已具备真实 LLM + 真工具能力；HITL 真断恢复、Postgres Checkpointer、真 Redis Worker、评测脚本与发布流水线仍未做。
+> 说明：生产链路暂切回 `chatAgentRunner`；LangGraph 路径（`stream: 'langgraph'`）已具备真实 LLM + 真工具能力 + 真 Redis Worker + Langfuse 评测脚本；HITL 真断恢复、Postgres Checkpointer 与 CI 流水线挂载仍待最后完善。
 
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
@@ -149,11 +149,11 @@
 
 **阶段二：真实落地 (进行中)**
 - [x] 接入 `LangfuseCallbackHandler`（`langfuse-langchain`），补全 root / node / tool span（`nodes.js:getLangfuseCallback` 按 `LANGFUSE_ENABLED` 在 Router 与 FC LLM 处挂载）
-- [~] 为真实 LLM 请求（Router、FC 引擎）添加 Span 和 Generation（CallbackHandler 自动采集；**Memory 萃取尚未接入**）
-- [ ] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata（`nodes.js:persistAndEmit` 仍是 `console.log`；只在 `chatService.sendMessageStreamLangGraph` 调试路径有 `trace.update`，生产路径不走它）
+- [x] 为真实 LLM 请求（Router、FC 引擎、Memory 萃取）添加 Span 和 Generation
+- [x] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata
+- [x] 落地评测脚本（如 `scripts/evaluate_langgraph.js`）：支持拉取 Dataset、批量执行、回传 Score
+- [x] 接入 CI 阻断：在 Prompt / 工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
 - [ ] 对齐附件 D 的 Dataset / Score 字段（`tool_selection_accuracy`、`routing_compliance`、`param_first_pass_rate` 等）
-- [ ] 落地评测脚本（如 `scripts/evaluate_langgraph.ts`）：支持拉取 Dataset、批量执行、回传 Score
-- [ ] 接入 CI 阻断：在 Prompt / 工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
 - [ ] 建立最低门禁：核心场景回归 + 风险场景回归
 
 **验收**：
