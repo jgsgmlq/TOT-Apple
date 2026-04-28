@@ -11,122 +11,115 @@
 |------|------|
 | 路由 | `TOT_backend/server/routes/chat.js` |
 | 会话与持久化 | `TOT_backend/server/services/chatService.js` |
-| Agent 编排 | `TOT_backend/server/services/chatAgentRunner.js` |
+| Agent 编排 (Legacy) | `TOT_backend/server/services/chatAgentRunner.js` (即将废弃) |
+| Agent 编排 (LangGraph) | `TOT_backend/server/agent/graph/` (包含 state.js, nodes.js, graph.js) |
 | 工具注册与执行 | `TOT_backend/server/services/chatToolsService.js`、`TOT_backend/server/chat_tools/*.js` |
+| 异步记忆队列 (Queue) | `TOT_backend/server/agent/queue/bullMqProducer.js` |
 | Code Interpreter | `TOT_backend/server/chat_tools/tool_executeCode.js` (沙盒分析) |
 | 模型与流式 FC | `TOT_backend/server/utils/ai.js`（`chatWithToolsStream`、`simpleChat`） |
-| 意图分类（routing 模式） | `TOT_backend/server/services/chatIntentService.js` |
-| 回答格式化（routing 模式） | `TOT_backend/server/services/chatAnswerService.js` |
-| 会话工具结果缓存 | `TOT_backend/server/services/chatSessionStateService.js` |
-| 长期记忆（异步） | `TOT_backend/server/services/chatMemoryService.js` |
+| 会话图持久化 | `Postgres Checkpointer` (在 LangGraph compile 时注入) |
+| 观测与打点 | `TOT_backend/server/utils/tracer.js` 及 LangfuseCallbackHandler |
 
 ---
 
-## 1. 环境开关（与代码一致）
+## 1. 环境开关与动态路由 (LangGraph)
 
-| 变量 | 默认 / 说明 | 影响 |
+在 4.0 之前的版本中，系统依赖环境变量（如 `CHAT_AGENT_MODE`）来进程级切换路由。
+在 4.0 的 LangGraph 重构后，请求将被动态路由 `RoutingPolicy` 接管。
+
+| 策略/参数 | 默认门限 / 说明 | 影响 |
 |------|----------------|------|
-| `CHAT_AGENT_MODE` | 未设置时等同 `function_calling` | `function_calling`：主路径为 `runFunctionCalling`；否则走 `runIntentRouting`（意图 LLM + 单次工具 + 格式化 LLM）。 |
-| `CHAT_SESSION_STATE_ENABLED` | 设为 `0` 时关闭 | 非 `0` 且存在 `sessionId` 时：`runFunctionCalling` / `runIntentRouting` 会按签名读写会话内工具结果缓存（`getLatestBySignature` / `addRecord`），减少重复查库。 |
+| `RoutingPolicy` | 在 `t0-freeze-spec.md` 冻结 | 根据 Router 输出的 `complexity_score` 动态将请求分流至 `L2_intent_fastpath`、`L3_fc_guarded` 或 `L4_heavy_fc`，以分配不同的模型预算与尝试次数。 |
+| `Checkpointer` 持久化 | Postgres Checkpointer | 负责管理整个 Executive Chat 会话的图状态（包含工具调用的堆栈、拦截历史等），通过 `thread_id` 自动管理生命周期。 |
+| 异步记忆 (Queue) | Fire & Forget (BullMQ) | 不再在主请求链路阻塞式提取记忆。在响应结束后抛出 `MemoryIngestRequested`，后台定时 Worker 负责落库。 |
 | `CHAT_SESSION_STATE_TTL_MS` / `CHAT_SESSION_STATE_CAPACITY` | 可选 | 控制 `chatSessionStateService` 内存条目的 TTL 与条数上限（默认见 `chatSessionStateService.js`）。 |
 
-**会话缓存与 Redis：** `hydrateIfNeeded` 仅在 **`redisAdapter` 可用**（`redisAdapter.isAvailable()`）且会话在内存中尚无记录时，尝试从 Redis 拉取快照；未配 Redis 时仍可使用**当前进程内存**中的缓存。`addRecord` 成功后在有 Redis 时异步 `persistSessionToRedis`。
+
 
 ---
 
-## 2. 总览时序
+## 2. 总览时序 (LangGraph v4.0)
 
 ```mermaid
 flowchart TD
-  A[HTTP POST 聊天接口] --> B[chatService.sendMessage / sendMessageStream]
-  B --> C[handleIncomingMessage 写入 user / tool 等]
-  C --> D[loadFormattedHistory + regionScope]
-  D --> E[chatAgentRunner.run]
-  E --> F{classifyExecutionMode}
-  F -->|chat_only| G[固定文案，不调工具]
-  F -->|tool_action| H[checkIntentSafety 语义监工]
-  H -->|deny| I[拒绝话术]
-  H -->|allow| J{CHAT_AGENT_MODE}
-  J -->|function_calling| K[runFunctionCalling 包含 System Prompt 注入全局记忆]
-  J -->|其他| L[runIntentRouting]
+  A[HTTP POST 聊天接口] --> B[chatService.js]
+  B --> C[构造 `ExecChatGraphState` 初始化状态]
+  C --> D[LangGraph `app.invoke()` + SSE Emitter]
+  D --> E[LoadContext 节点 (异步注入短期记忆)]
+  E --> F[ContextAnalyzerRouter 节点]
+  F --> G{Router 意图判断}
+  G -->|chat_only| H[FinalResponseStep: 闲聊回复]
+  G -->|deny| I[FinalResponseStep: 拒绝危险操作]
+  G -->|tool_action| J[fc_CheckSteps (FC主循环)]
   
-  K --> M{工具调用}
-  M -->|常规工具| N[查 SQLite / 内存缓存]
-  M -->|executeCode| O[@e2b/code-interpreter 云端沙盒 Python 执行]
-  N --> P
-  O --> P
+  J --> K[fc_LlmToolCallStep (流出 Reasoning/正在思考)]
+  K --> L{是否存在 Tool Call?}
+  L -->|No| H
+  L -->|Yes| M[fc_ValidateParams (JSON+业务规则)]
   
-  P[写入 assistant] --> Q[返回 HTTP/SSE 结果]
-  Q --> R((异步: memory.extract 萃取写入 user_memories))
-  L --> P
-  G --> P
-  I --> P
+  M --> N{参数校验结果}
+  N -->|Fail & < 2次| O[fc_ParamRepair 修参闭环] --> M
+  N -->|Fail & >= 2次| P[Fail Fast: 中止并通知用户补充] --> H
+  N -->|Pass| Q[fc_ExecuteTool (硬性权限+白名单)]
+  
+  Q -->|SSE tool_start| R[执行底层工具函数 / Code Interpreter]
+  R -->|SSE tool_end| S[fc_MergeToolResults]
+  S --> J
+  
+  H --> T[PersistAndEmit 节点]
+  T --> U[图外异步: MemoryQueueProducer 发送记忆队列]
+  T --> V[结束流转, Emitter 结束]
 ```
 
 ---
 
 ## 3. 入口层：`chatService`
 
-### 3.1 会话校验与消息入库
+### 3.1 会话校验与 Graph Invocation
 
 1. 校验 `chat_sessions` 存在且 `user_id` 与当前用户一致。
 2. **`handleIncomingMessage`**（`chatService.js`）  
-   - 可选 **`messageId` 幂等**：针对前端传来的 `client_message_id` 做去重校验。若已存在，则抛出 `409` 防止高管重复点击。
-   - **Stateful Resume (状态恢复)**：若 `req.body` 包含 `clarificationResponse.toolCallId`（说明用户处理了之前的消岐弹窗），则系统会先将选项结果插入一条 `role = tool` 行，再插入一条用于 UI 展示的普通 `user` 行。
-   - 若是常规提问：直接插入普通 `user` 行。  
+   - 可选 **`messageId` 幂等**：针对前端传来的 `client_message_id` 做去重校验。
+   - **LangGraph Checkpointer Resume (状态恢复)**：利用 `Postgres Checkpointer` 及图状态的 `hitl_status` 标识，当带有 `clarificationResponse` 时，直接 `app.invoke()` 并传入 `resume_token`。不再像 Legacy 系统那样向数据库强插“伪造的 Tool 角色消息”。
 3. 从会话行构造 **`regionScope`**：`type`（`national` / `regional` / `rtm`）、`regions` JSON、`rtm` 字符串。后续所有工具必须在此范围内查询。
 
-### 3.2 历史上下文
+### 3.2 SSE 构建与注入
 
-- **`loadFormattedHistory`**：按 `created_at, rowid` 升序取该会话**最近 10 条** `chat_messages`；返回的每条含 `role`、`content`、`tool_calls`、`tool_call_id`、`client_message_id`。  
-- `role === 'assistant'` 时，`content` 经 **`compressAssistantContent`** 压缩后再进入模型上下文。  
-- **当前实现的局限（需要注意）**：`runFunctionCalling` 在构造模型 `messages` 时仅保留 `{ role, content }`（见 `chatAgentRunner.js`：`...history.map((m) => ({ role: m.role, content: m.content }))`），**`tool_calls` / `tool_call_id` 不会从历史回灌到下一轮 FC 请求**。`regenerateLastAssistant` 也在路径上显式过滤掉历史 `tool` 行（代码注释：「DeepSeek/OpenAI 要求 tool 角色消息携带 `tool_call_id`；runFunctionCalling 仅转发 content，会触发 400」）。因此：  
-  - 本轮澄清的 `tool` 行虽写入 DB，但**真正被模型连贯使用**的是**当次循环**内 `runFunctionCalling` 追加的 `assistant`(含 `tool_calls`) + `tool`(含 `tool_call_id`) 序列（§5.2 第 6 步）。  
-  - 跨请求读回历史时，消岐行的协议连贯性需要在未来扩展 `history.map` 或做过滤兜底；当前代码依赖本轮 FC 重新触发工具获得结果，而不是回放旧的 `tool_call_id`。
+- 创建 `sseEmitter` 实例并包裹 `res.write` 逻辑。
+- 将其注入图 `configurable` 配置中，图网络中的节点如 `fc_LlmToolCallStep` 和 `fc_ExecuteTool` 可通过 `config.configurable.sseEmitter.handleLLMNewToken()` 等接口产生实时副作用。
 
-### 3.3 调用 Agent
-
-```text
-chatAgentRunner.run(userMessage, history, regionScope, options)
-```
-
-`options` 常见字段：`sessionId`、`userId`、`signal`（SSE 断开中止）、`streamFormatCallbacks.onDelta`（流式增量）。
-
-### 3.4 助手消息持久化
-
-- **`storageContentFromAgentResult`**：若结果含非空 `markdownContent`，则整段 Markdown 写入 `chat_messages.content`；否则将结构化对象 `JSON.stringify` 写入（兼容 legacy）。  
-- `intent_type` ← `result._intentType`；`tool_calls` ← 仅当 `result._toolMeta.toolCalls` 存在时序列化写入（当前 FC 主路径的 `_toolMeta` 以摘要字段为主，该列可能为 `null`，以代码为准）。  
-- **`setImmediate`**：异步调用 **`chatMemoryService.extract(sessionId)`**，不阻塞本次 HTTP 响应；记忆在**后续轮次**通过 `getMemories(userId)` 注入 FC 的 system prompt。
+- **`loadFormattedHistory`**：由图 `messages` 状态自动管理（LangGraph Checkpointer 会原样恢复 `BaseMessage` 实例，包含 `tool_calls` 和 `tool_call_id`，天然避免 OpenAI API 400 错误）。
 
 ---
 
-## 4. 编排层：`chatAgentRunner.run`
+## 4. 编排层：`AgentGraph` 流转与执行
 
-### 4.1 执行模式：`classifyExecutionMode`
+核心逻辑位于 `TOT_backend/server/agent/graph/nodes.js` 及 `graph.js`。
 
-- **`message` 缺失或非字符串** → **`tool_action`**（与「trim 后空串」分支不同）。  
-- **trim 后为空串** → **`chat_only`**。  
-- 与 **`CHIT_CHAT_RE`** 匹配的寒暄（如你好、谢谢、help 等）→ **`chat_only`**：直接返回固定介绍文案，`_intentType: 'chat_only'`，**不调用**语义监工与主模型工具链路。  
-- 其余 → **`tool_action`**。
+### 4.1 `ContextAnalyzerRouter` (智能路由与门控)
+- **输入**: 用户文本与 `LoadContext` 注入的近期记忆。
+- **职责**:
+  1. **安全拦截**：如果是危险操作（发邮件/改库），直接返回 `safety: "deny"`，图分流至 `FinalResponseStep` 退出。
+  2. **意图分类**：区分为 `chat_only` 或 `tool_action`。
+  3. **实体提取**：预提取 `region`, `store`, `metric` 等槽位，输出结构化数据。
 
-### 4.2 语义监工：`checkIntentSafety`（仅 `tool_action`）
+### 4.2 `fc_CheckSteps` & `fc_LlmToolCallStep` (FC 循环引擎)
+- 替代了旧版的 `runFunctionCalling`。
+- `fc_LlmToolCallStep` 发起大模型请求，通过传入的 `sseEmitter` 直接吐出 reasoning token（"正在思考..." 等）。
+- 产出 `tool_calls` 列表进入校验环节。
 
-- 使用 **`simpleChat`**（内部为 DeepSeek 非流式补全）判断用户是否在要求「发邮件 / 催办 / 改库」等危险操作。  
-- 返回 **`deny`**：固定拒绝话术，`_intentType: 'deny'`，`_intentResolvedBy: 'semantic_supervisor'`。  
-- 调用失败：记录 warn，**默认 `allow`**，交给主 Agent。
+### 4.3 护栏与执行 (`fc_ValidateParams`, `fc_ParamRepair`, `fc_ExecuteTool`)
+- `fc_ValidateParams`: 校验提取参数，如果不满足必须业务规则，且 `fc_repair_attempts < 2`，则触发 `fc_ParamRepair` 节点要求 LLM 自我纠错。
+- **Fail Fast**: 若修参次数超限，强行终止（降级为 `chat_only` 意图）并向前端返回报错要求补充信息。
+- **执行** (`fc_ExecuteTool`):
+  - **白名单校验**: 确保调用的 `toolName` 属于 `executive_chat` 命名空间。
+  - **越权拦截**: `regionScope` 是 `store` 的用户不允许调用 `national` 的工具。
+  - 执行 `chatToolsService.js` 的原生代码，抛出 `tool_start` 和 `tool_end` SSE 事件。
 
-### 4.3 去重本轮 user
+### 4.4 结束与异步落库 (`PersistAndEmit`)
+- 当模型完成多轮工具调用，不再产生新 `tool_calls`，图流转进入 `FinalResponseStep` 格式化后，通过 `PersistAndEmit` 向 `MemoryQueueProducer` 发布异步记忆事件。
+- 不阻塞 SSE 的 `[DONE]` 终止符。
 
-- **`historyExcludingPendingUserTurn`**：若 `history` 最后一条为 `user` 且内容与当前 `userMessage` trim 后一致，则去掉该条，避免「DB 已插入 user + messages 再带同句 user」重复。
-
-### 4.4 模式分流
-
-- **`CHAT_AGENT_MODE === 'function_calling'`**（默认）→ **`runFunctionCalling`**。  
-- 否则 → **`runIntentRouting`**。
-
----
-
-## 5. 主路径：`runFunctionCalling`（Function Calling 循环）
 
 ### 5.1 消息构造
 
