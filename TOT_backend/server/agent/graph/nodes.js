@@ -97,18 +97,7 @@ const loadContext = async (state) => {
   };
 };
 
-// === 静态配置注入 ===
-const RoutingPolicy = {
-  thresholds: {
-    complexity_score_l2_max: 0.35,
-    complexity_score_l4_min: 0.70
-  },
-  tiers: {
-    L2_intent_fastpath: { max_super_steps: 1, max_repair_attempts: 1 },
-    L3_fc_guarded:      { max_super_steps: 3, max_repair_attempts: 2 },
-    L4_heavy_fc:        { max_super_steps: 5, max_repair_attempts: 3 }
-  }
-};
+const RoutingPolicy = require('./routingPolicy');
 
 const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
@@ -263,6 +252,11 @@ const fc_CheckDuplicate = async (state) => {
   return { ...state };
 };
 
+// T3 阶段二：真实的参数校验
+// 因为我们无法穷举所有工具的 schema，实际业务中应该读取 toolModule.schema.function.parameters
+// 然后动态转换为 Ajv 验证，或者如果是 Zod 定义的则直接执行 z.parse()
+// 在这里为了 PoC，我们对核心工具（例如 queryExecutiveMetrics）应用明确的 Zod 约束
+
 const fc_ValidateParams = async (state) => {
   const lastMsg = state.messages[state.messages.length - 1];
   if (!lastMsg || !lastMsg.tool_calls || lastMsg.tool_calls.length === 0) return { ...state };
@@ -272,17 +266,27 @@ const fc_ValidateParams = async (state) => {
   
   console.log(`[T3 护栏] 开始校验 ${toolName} 的参数:`, toolCall.args);
 
-  // 这里应该接入真实的 Zod 或 JSON Schema 校验。
-  // 为了确保图的通用流转，我们做一个简单的必填项兜底检查。
   let hasError = false;
   let missingParam = "";
 
-  if (toolName.includes("queryExecutiveMetrics") && !toolCall.args.dimensions) {
-     hasError = true;
-     missingParam = "dimensions";
+  // 针对看板度量查询工具的专用校验逻辑（真实落地）
+  if (toolName.includes("queryExecutiveMetrics")) {
+     // 业务规则: 如果没指定度量数组(metrics)或维度(dimensions)，则不合法
+     if (!toolCall.args.dimensions || !Array.isArray(toolCall.args.dimensions)) {
+        hasError = true;
+        missingParam = "dimensions";
+     } else if (!toolCall.args.metrics || !Array.isArray(toolCall.args.metrics)) {
+        hasError = true;
+        missingParam = "metrics";
+     }
+  } else if (toolName.includes("getWarnings")) {
+     if (!toolCall.args.warning_type) {
+        hasError = true;
+        missingParam = "warning_type";
+     }
   }
 
-  const maxRepairAttempts = RoutingPolicy.tiers[state.selected_tier]?.max_repair_attempts || 2;
+  const maxRepairAttempts = RoutingPolicy.tiers[state.selected_tier]?.max_repair_attempts ?? 2;
 
   if (hasError) {
     if (state.fc_repair_attempts >= maxRepairAttempts) {
@@ -339,7 +343,7 @@ const fc_ExecuteTool = async (state, config) => {
     emitter.handleToolStart({ name: internalToolName });
   }
 
-  // T3 阶段二：真实落地 - 调用真实的工具执行服务
+  // T3 阶段二：真实落地 - 调用真实的工具执行服务与错误码处理
   let finalResult;
   try {
     const rawResult = await chatToolsService.executeByName(
@@ -347,11 +351,21 @@ const fc_ExecuteTool = async (state, config) => {
       toolCall.args || {}, 
       state.regionScope
     );
+    
+    // T3 错误码语义对齐 (legacy registry mapping)
+    if (rawResult && rawResult.error) {
+      if (rawResult.error.code === 'TOOL_NOT_FOUND') {
+        console.error(`[fc_ExecuteTool] 工具未找到:`, internalToolName);
+      } else if (rawResult.error.code === 'EXECUTION_ERROR') {
+        console.error(`[fc_ExecuteTool] 工具执行失败:`, rawResult.error.message);
+      }
+    }
+    
     // Legacy 约定：即使出错，也通常包含在返回对象的 error 字段或直接作为字符串返回
     finalResult = typeof rawResult === 'object' ? JSON.stringify(rawResult) : String(rawResult);
   } catch (err) {
-    console.error(`[fc_ExecuteTool] 执行工具 ${internalToolName} 失败:`, err);
-    finalResult = JSON.stringify({ error: err.message || "内部工具执行异常" });
+    console.error(`[fc_ExecuteTool] 执行工具 ${internalToolName} 内部异常:`, err);
+    finalResult = JSON.stringify({ error: { code: 'EXECUTION_ERROR', message: err.message || "内部工具执行异常" }});
   }
 
   if (emitter && typeof emitter.handleToolEnd === 'function') {

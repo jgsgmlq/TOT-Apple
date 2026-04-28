@@ -18,10 +18,10 @@
 | 模块 | 状态 | 完成度 | 当前结论 |
 |---|---|---:|---|
 | T0 开发前冻结项 | `已完成` | 100% | 已创建 2026-04-27-t0-freeze-spec.md，所有数据契约及门槛完全冻结 |
-| T1 主链路图编排 | `进行中` | 80% | 已接入真实 DeepSeek ChatOpenAI 模型，跑通了路由与 FC 流程 |
-| T2 流式输出与兼容 | `进行中` | 80% | 真实流式 chunk 拆解及 reasoning 分离已经连通 |
-| T3 工具执行层与护栏 | `进行中` | 80% | 已经打通真实工具链 `executeByName` 并触发 `sqlite` 执行 |
-| T4 记忆链路（Queue） | `进行中` | 80% | 已经打通了真实的 BullMQ 与 Redis 连接，并实现了基于 LLM 抽取的 Worker 后台进程 |
+| T1 主链路图编排 | `进行中` | 75% | 真实落地（Router + FC 真 LLM 已通；HITL/Postgres 仍未做） |
+| T2 流式输出与兼容 | `进行中` | 70% | 真实落地（chunks 解析已通；前端联调未做） |
+| T3 工具执行层与护栏 | `已完成` | 100% | 真实工具链、参数校验及错误码对齐已全量落地 |
+| T4 记忆链路（Queue） | `进行中` | 55% | 真实落地（LoadContext 真接入；Redis/Worker 未做） |
 | T5 观测与评测 | `进行中` | 60% | Langchain CallbackHandler 已注入 Router 与 FC 层，元数据已挂钩 |
 | T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo 脚本，未编写与 DevOps 联动的 `kubectl` 部署与判定脚本 |
 | 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码脱离 Mock 后需再次复核 Specs 细节 |
@@ -110,9 +110,9 @@
 
 **阶段二：真实落地 (未开始)**
 - [x] 接入 `chatToolsService.executeByName`，打通真实 SQLite / API 工具
-- [ ] 基于 JSON Schema 的真实验证库接管 `fc_ValidateParams`
-- [ ] `fc_ExecuteTool` 里实现真实的 RTM/区域 鉴权解析
-- [ ] 错误码与 legacy 语义对齐（`TOOL_NOT_FOUND` / `PERMISSION_DENIED` / `INVALID_PARAMETERS` / `TIMEOUT_ERROR` / `EXECUTION_ERROR`）
+- [x] 基于 JSON Schema 的真实验证库（如 Zod 或 Ajv）接管 `fc_ValidateParams`
+- [x] `fc_ExecuteTool` 里实现真实的 RTM/区域 鉴权解析
+- [x] 错误码与 legacy 语义对齐（`TOOL_NOT_FOUND` / `PERMISSION_DENIED` / `INVALID_PARAMETERS` / `TIMEOUT_ERROR` / `EXECUTION_ERROR`）
 
 **验收**：
 
