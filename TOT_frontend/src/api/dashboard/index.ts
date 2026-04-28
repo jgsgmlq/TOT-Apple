@@ -153,6 +153,35 @@ export const getDashboardWarnings = (params: {
   });
 };
 
+export interface NudgeConversionRow {
+  targetId: string;
+  targetName: string;
+  targetType: string;
+  red: { nudged: number; converted: number; rate: number };
+  orange: { nudged: number; converted: number; rate: number };
+  yellow: { nudged: number; converted: number; rate: number };
+  total: { nudged: number; converted: number; rate: number };
+}
+
+/** GET /api/v1/dashboard/nudge-conversion — 催办转化率统计报表 */
+export const getDashboardNudgeConversion = (params: {
+  taskId: string;
+  pageNum?: number;
+  pageSize?: number;
+  level?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
+}) => {
+  return Alova.Get<{
+    list: NudgeConversionRow[];
+    pagination: { pageNum: number; pageSize: number; total: number; totalPages: number };
+  }>('/dashboard/nudge-conversion', {
+    params,
+  });
+};
+
 /** POST /api/v1/dashboard/insights — 看板模块 AI 洞察 */
 export type DashboardInsightType =
   | 'north_star'

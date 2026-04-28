@@ -48,6 +48,7 @@ async function executeDashboardTool(name, args, context) {
   const agentType = context.agentType || 'dashboard';
 
   if (name === 'query_active_tasks') {
+    console.log('context.tasks', context.tasks);
     return context.tasks || [];
   }
   
