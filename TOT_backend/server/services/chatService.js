@@ -922,6 +922,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
   const startMs = Date.now();
   let result;
   try {
+    // Emergency fix: keep production behavior on legacy chatAgentRunner.
     result = await chatAgentRunner.run(userMessage, history, regionScope, {
       sessionId,
       userId: session.user_id,
