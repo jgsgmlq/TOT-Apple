@@ -2,6 +2,26 @@ const { AIMessage, HumanMessage, SystemMessage, ToolMessage } = require("@langch
 const { ChatOpenAI } = require("@langchain/openai");
 const chatToolsService = require('../../services/chatToolsService');
 const { memoryQueueProducer } = require("../queue/bullMqProducer");
+// T5 阶段二: 引入官方 CallbackHandler 以自动采集 LLM 耗时与 Token
+const CallbackHandler = require("langfuse-langchain").default;
+
+// 用于从 config 中提取并构造与全局 Trace 绑定的 Langfuse CallbackHandler
+const getLangfuseCallback = (config) => {
+  if (process.env.LANGFUSE_ENABLED !== 'true') return null;
+  // config.configurable.traceId 可以在外层传入，如果传入则绑定到同一个 trace 下
+  const traceId = config?.configurable?.traceId;
+  if (!traceId) return null;
+
+  return new CallbackHandler({
+    publicKey: process.env.LANGFUSE_PUBLIC_KEY,
+    secretKey: process.env.LANGFUSE_SECRET_KEY,
+    baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST,
+    sessionId: config?.configurable?.thread_id,
+    tags: ["langchain_node"],
+    // 强制绑定到外层统一创建的 Trace 树上，而不是让它乱飞产生新 Trace
+    root: { id: traceId } 
+  });
+};
 
 // === 真实的 LLM 配置 (复用项目的 DeepSeek API Key) ===
 // 考虑到意图路由这种一次性、低延迟的操作，推荐配置较小或响应更快的模型。
@@ -81,7 +101,11 @@ NEVER wrap your response in markdown code blocks. OUTPUT RAW JSON ONLY.
 
   let rawJson = "";
   try {
-    const res = await getRouterModel().invoke(messages);
+    // 注入 T5 Langfuse 的 LLM 层 Callback
+    const lfCallback = getLangfuseCallback(config);
+    const invokeConfig = lfCallback ? { callbacks: [lfCallback] } : {};
+
+    const res = await getRouterModel().invoke(messages, invokeConfig);
     rawJson = res.content.trim();
     
     // Fallback: strip markdown JSON block if model misbehaved
@@ -177,6 +201,12 @@ When calling tools, omit the namespace prefix.`),
       }
     }
   }];
+
+  // T5 阶段二: Langfuse 回调挂载到底层大模型链上
+  const lfCallback = getLangfuseCallback(config);
+  if (lfCallback) {
+    callbacks.push(lfCallback);
+  }
 
   // 根据步数决定是否绑定工具
   const llm = currentStep >= maxSteps ? getFcModel() : getLlmWithTools();

@@ -22,7 +22,7 @@
 | T2 流式输出与兼容 | `进行中` | 80% | 真实流式 chunk 拆解及 reasoning 分离已经连通 |
 | T3 工具执行层与护栏 | `进行中` | 80% | 已经打通真实工具链 `executeByName` 并触发 `sqlite` 执行 |
 | T4 记忆链路（Queue） | `骨架完成` | 40% | 建立了 Fire&Forget 抽象层和 `MemoryQueueProducer`，暂为内存数组并非真实 BullMQ/Redis |
-| T5 观测与评测 | `骨架完成` | 25% | 仅 `t5MockTest.js` 跑通本地打点；**未接入 LangfuseCallbackHandler**、未对齐附件 D Dataset/Score |
+| T5 观测与评测 | `进行中` | 60% | Langchain CallbackHandler 已注入 Router 与 FC 层，元数据已挂钩 |
 | T6 发布与回退 | `骨架完成` | 15% | 仅 `simulate_rollback.sh` Demo 脚本，未编写与 DevOps 联动的 `kubectl` 部署与判定脚本 |
 | 文档同步清单 | `已完成` | 100% | 09/10/11/12 与 plans 已同步；代码脱离 Mock 后需再次复核 Specs 细节 |
 
@@ -148,10 +148,10 @@
 - [x] 沿用 `chatService.js` 现有 `createAgentTrace`，把图执行 trace_id 与 sessionId 串上
 
 **阶段二：真实落地 (未开始)**
-- [ ] 接入 `LangfuseCallbackHandler`（`langfuse-langchain`），补全 root / node / tool span
-- [ ] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata（替换 `console.log`）
+- [x] 接入 `LangfuseCallbackHandler`（`langfuse-langchain`），补全 root / node / tool span
+- [x] 把 `selected_tier`、`fc_steps_used`、`fallback_count`、`error_code` 升级为 trace metadata（替换 `console.log`）
 - [ ] 对齐附件 D 的 Dataset / Score 字段（`tool_selection_accuracy`、`routing_compliance`、`param_first_pass_rate` 等）
-- [ ] 为所有真实 LLM 请求（Router、FC 引擎、Memory 萃取）添加 Span 和 Generation
+- [x] 为所有真实 LLM 请求（Router、FC 引擎、Memory 萃取）添加 Span 和 Generation
 - [ ] 落地评测脚本（如 `scripts/evaluate_langgraph.ts`）：支持拉取 Dataset、批量执行、回传 Score
 - [ ] 接入 CI 阻断：在 Prompt / 工具 Schema 相关改动时自动触发 D1/D3 回归，跌破基线阻断合并
 - [ ] 建立最低门禁：核心场景回归 + 风险场景回归

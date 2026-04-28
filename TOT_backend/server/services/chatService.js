@@ -432,7 +432,9 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     const thread = { 
       configurable: { 
         thread_id: sessionId,
-        sseEmitter 
+        sseEmitter,
+        // 将外层建好的 root TraceId 注入，好让子节点（Router 和 FC模型）生成的 Span 都挂在这棵树下
+        traceId: trace ? trace.id : undefined 
       },
       signal: abortController.signal
     };
