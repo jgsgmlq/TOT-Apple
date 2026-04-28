@@ -36,7 +36,7 @@ const routeAfterValidateParams = (state) => {
   
   // mock logic based on attempts 
   const lastMsg = state.messages[state.messages.length - 1];
-  const needsRepair = lastMsg?.tool_calls?.[0]?.name === "executive_chat.query_analytics" && !lastMsg.tool_calls[0].args.region_id;
+  const needsRepair = lastMsg?.tool_calls?.[0]?.name === "executive_chat.query_progress" && !lastMsg.tool_calls[0].args.region_id && state.userMessage.includes("无地点");
 
   if (needsRepair) {
     return "fc_ParamRepair"; 

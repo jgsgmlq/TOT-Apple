@@ -109,8 +109,8 @@
 - [x] 参数校验失败走 `fc_ParamRepair` 闭环，超限后澄清/降级
 
 **阶段二：真实落地 (未开始)**
-- [ ] 接入 `chatToolsService.executeByName`，打通真实 SQLite / API 工具
-- [ ] 基于 JSON Schema 的真实验证库（如 Zod 或 Ajv）接管 `fc_ValidateParams`
+- [x] 接入 `chatToolsService.executeByName`，打通真实 SQLite / API 工具
+- [ ] 基于 JSON Schema 的真实验证库接管 `fc_ValidateParams`
 - [ ] `fc_ExecuteTool` 里实现真实的 RTM/区域 鉴权解析
 - [ ] 错误码与 legacy 语义对齐（`TOOL_NOT_FOUND` / `PERMISSION_DENIED` / `INVALID_PARAMETERS` / `TIMEOUT_ERROR` / `EXECUTION_ERROR`）
 

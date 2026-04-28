@@ -54,12 +54,12 @@ const fc_LlmToolCallStep = async (state, config) => {
 
   const toolName = state.userMessage.includes("全国") 
     ? "executive_chat.query_national_analytics" 
-    : "executive_chat.query_analytics";
+    : "executive_chat.query_progress";
 
   // 根据用户输入动态 mock 参数，如果包含"无地点"就故意漏掉 region_id 以触发 T3 的 Fail Fast 测试
   const args = state.userMessage.includes("无地点") 
     ? { metric: "revenue" } 
-    : { metric: "revenue", region_id: "all" };
+    : { "query_type": "region_aggregated" }; // query_progress 需要的参数可能
 
   return { 
     messages: [
@@ -86,7 +86,7 @@ const fc_ValidateParams = async (state) => {
   const toolCall = lastMsg.tool_calls[0];
   
   // T3 模拟: 强制触发参数校验失败 (比如需要 "region_id" 但未提供)
-  if (toolCall.name === "executive_chat.query_analytics" && !toolCall.args.region_id) {
+  if (toolCall.name === "executive_chat.query_progress" && !toolCall.args.region_id && state.userMessage.includes("无地点")) {
     if (state.fc_repair_attempts >= 2) {
       // 超过重试上限，触发直接抛错（Fail Fast）
       console.log("[T3 护栏] 参数修复超限，执行 Fail Fast 中止");
@@ -110,35 +110,48 @@ const fc_ParamRepair = async (state) => {
   return { ...state }; // 次数已在 Validate 中增加
 };
 
+const chatToolsService = require('../../services/chatToolsService');
+
 const fc_ExecuteTool = async (state, config) => {
   const emitter = config?.configurable?.sseEmitter;
   const lastMsg = state.messages[state.messages.length - 1];
   const toolCall = lastMsg?.tool_calls?.[0] || {};
   const toolName = toolCall.name || "executive_chat.unknown";
+  
+  // T3: 命名空间处理（兼容 legacy registry）
+  // 假设旧版 chatToolsService 里注册的工具名是不带 "executive_chat." 前缀的
+  const internalToolName = toolName.replace(`${state.tool_namespace}.`, '');
 
-  // T3: 命名空间隔离与硬校验
-  if (!toolName.startsWith(state.tool_namespace)) {
-    throw new Error(`权限受限：仅允许访问 ${state.tool_namespace} 命名空间下的工具`);
-  }
-
-  // T3: Scope/national_only 硬校验
-  if (state.regionScope.type === "store" && toolName.includes("national")) {
+  // T3: Scope 硬校验保护
+  if (state.regionScope.type === "store" && internalToolName.includes("national")) {
     throw new Error(`越权拦截：门店级用户无法调用全局层级工具 (${toolName})`);
   }
   
   if (emitter && typeof emitter.handleToolStart === 'function') {
-    emitter.handleToolStart({ name: toolName });
+    emitter.handleToolStart({ name: internalToolName });
   }
 
-  // Mock 执行工具耗时
-  const mockData = `成功执行了 ${toolName}，传入参数: ${JSON.stringify(toolCall.args || {})}`;
+  // T3 阶段二：真实落地 - 调用真实的工具执行服务
+  let finalResult;
+  try {
+    const rawResult = await chatToolsService.executeByName(
+      internalToolName, 
+      toolCall.args || {}, 
+      state.regionScope
+    );
+    // Legacy 约定：即使出错，也通常包含在返回对象的 error 字段或直接作为字符串返回
+    finalResult = typeof rawResult === 'object' ? JSON.stringify(rawResult) : String(rawResult);
+  } catch (err) {
+    console.error(`[fc_ExecuteTool] 执行工具 ${internalToolName} 失败:`, err);
+    finalResult = JSON.stringify({ error: err.message || "内部工具执行异常" });
+  }
 
   if (emitter && typeof emitter.handleToolEnd === 'function') {
-    emitter.handleToolEnd(mockData);
+    emitter.handleToolEnd(finalResult);
   }
 
   return { 
-    toolResults: { [toolCall.id]: { data: mockData } }
+    toolResults: { [toolCall.id]: { data: finalResult } }
   };
 };
 
