@@ -93,7 +93,9 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const completedOnTimeCnt = base.completed_on_time_count || 0;
     const onTimeCompletionRate =
       total > 0 ? parseFloat(((100 * completedOnTimeCnt) / total).toFixed(2)) : 0;
-    const avgCompletionTimeHours = base.avg_completion_time_hours ? parseFloat(base.avg_completion_time_hours.toFixed(1)) : 0;
+    const avgCompletionTimeHours = base.avg_completion_time_hours !== null && base.avg_completion_time_hours !== undefined 
+      ? parseFloat(base.avg_completion_time_hours) 
+      : 0;
 
     // ─ 逾期数（未完成 AND 当前时间 > ddl_at）──
     const overdueRow = db.get(
@@ -374,7 +376,9 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     const heatmapData = rows.map(r => ({
       rtmValue:       r.rtm_value || '(未知)',
       completionRate: r.completion_rate || 0,
-      avgCompletionTimeHours: r.avg_completion_time_hours ? parseFloat(r.avg_completion_time_hours.toFixed(1)) : 0,
+      avgCompletionTimeHours: r.avg_completion_time_hours !== null && r.avg_completion_time_hours !== undefined 
+        ? parseFloat(r.avg_completion_time_hours) 
+        : 0,
       color:          heatmapColor(r.completion_rate || 0),
       assignmentCount: r.assignment_count,
       completedCount:  r.completed_count,

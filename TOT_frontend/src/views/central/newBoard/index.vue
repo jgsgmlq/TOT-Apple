@@ -1,8 +1,9 @@
 <script setup lang="ts">
   import { ref, computed, watch, onMounted, nextTick, onUnmounted, defineComponent, h } from 'vue';
   import * as echarts from 'echarts';
-  import { getTaskList, updateTask, revokeTask } from '@/api/task';
+  import { getTaskList, updateTask, revokeTask, triggerTaskAutoNudge } from '@/api/task';
   import { useDialog } from 'naive-ui';
+  import { useUserStore } from '@/store/modules/user';
   import {
     getDashboardOverview,
     getDashboardWarnings,
@@ -38,12 +39,11 @@
     try {
       const rawTasks = await getTaskList().send();
 
-      // 对所有任务进行排序，优先显示已下发任务，其次按创建/更新时间倒序
+      // 对所有任务进行排序：按截止时间 (ddlAt) 升序排列，即最早截止的排在最前；没有截止时间的排在最后
       const sortedTasks = (rawTasks || []).sort((a: any, b: any) => {
-        if (a.status !== b.status) {
-          return a.status === 'dispatched' ? -1 : 1;
-        }
-        return new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime();
+        const timeA = a.ddlAt ? new Date(a.ddlAt).getTime() : Infinity;
+        const timeB = b.ddlAt ? new Date(b.ddlAt).getTime() : Infinity;
+        return timeA - timeB;
       });
 
       allTasks.value = sortedTasks.map((t: any) => {
@@ -63,18 +63,13 @@
 
       if (dispatchedTasks.length > 0) {
         // 仅为已下发的任务获取进度
-        Promise.all(
+        await Promise.all(
           dispatchedTasks.map(async (task) => {
             try {
               const res = await getDashboardOverview({ taskId: task.task_id }).send();
               if (res && typeof res.completionRate !== 'undefined') {
                 const rate = res.completionRate / 100;
                 task.completion_rate = rate;
-                
-                // Dynamically update severity based on fetched rate
-                if (rate < 0.5) task.severity = 'red';
-                else if (rate < 0.8) task.severity = 'yellow';
-                else task.severity = 'green';
               }
             } catch (err) {
               console.warn(`Failed to fetch overview for task ${task.task_id}`, err);
@@ -84,6 +79,22 @@
       }
 
       await loadAgentInsights();
+
+      // IMPORTANT: Sync task severity with actual Agent Diagnosis results
+      // rather than just completion rates.
+      allTasks.value.forEach((task) => {
+        if (task.status === 'dispatched') {
+          // Find if there is a diagnosis for this specific task
+          const diag = diagnosisData.value.find((d) => d.related_task_id === task.task_id);
+          if (diag) {
+            task.severity = diag.severity;
+          } else {
+            // Default to green if no specific anomaly found by Agent
+            task.severity = 'green';
+          }
+        }
+      });
+
       if (allTasks.value.length > 0 && !currentTaskId.value) {
         // Pick the very first actionable diagnosis task from the agent's flow
         const firstActionableDiag = diagnosisData.value?.find(
@@ -99,6 +110,37 @@
       }
     } catch (err) {
       console.error('获取任务列表失败', err);
+    }
+  };
+
+  const autoNudgeLoading = ref(false);
+  const handleTriggerAutoNudge = async () => {
+    if (!currentTaskId.value) {
+      message.warning('请先选择一个任务');
+      return;
+    }
+    autoNudgeLoading.value = true;
+    try {
+      const data = await triggerTaskAutoNudge(currentTaskId.value).send();
+      const n = data?.nudgedCount ?? data?.nudgedUsers ?? 0;
+      const rules = data?.evaluatedRules?.length
+        ? `（规则键：${data.evaluatedRules.join(', ')}）`
+        : '';
+      const hint = data?.reason ? ` ${data.reason}` : '';
+      if (n > 0) {
+        message.success(`扫描完成，本次触发 ${n} 人次催办${rules}`);
+      } else {
+        message.warning(
+          `本次触发 0 人次催办。${
+            hint || '请检查任务截止时间与预警规则是否命中，或是否已被去重。'
+          }${rules}`
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      message.error('触发预警扫描失败');
+    } finally {
+      autoNudgeLoading.value = false;
     }
   };
 
@@ -849,8 +891,12 @@
   let hqWs: WebSocket | null = null;
   const initHqWebSocket = () => {
     let wsUrl = '';
-    const token = localStorage.getItem('token') || '';
-    if (!token) return;
+    const userStore = useUserStore();
+    const token = userStore.getToken;
+    if (!token) {
+      console.warn('initHqWebSocket: No token found, skipping WS connection.');
+      return;
+    }
 
     if (import.meta.env.VITE_GLOB_API_URL) {
       wsUrl = import.meta.env.VITE_GLOB_API_URL.replace(/^http/, 'ws') + `/ws?token=${token}`;
@@ -865,9 +911,18 @@
       hqWs.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'dashboard_agent_updated') {
+          
+          if (msg.type === 'dashboard_agent_updated' || msg.event === 'dashboard_agent_updated') {
             message.info('AI 诊断数据已更新');
-            // 静默拉取最新诊断结果，不再强制传 true 而是利用现有 loadTasks 的逻辑更新面板
+            loadTasks();
+            lastUpdated.value = new Date();
+          } else if (msg.event === 'dashboard_updated') {
+            // 当收到店员端操作导致的大盘数据更新时，静默刷新
+            // 如果选中了某个任务，但店员操作的不是当前任务，理论上单任务大盘不变，为了安全起见我们刷新选中的任务或全盘
+            const targetTaskId = currentTaskId.value || undefined;
+            fetchOverview(targetTaskId as any);
+            fetchRegionRanking(); // Also update heatmaps/rankings
+            // 还需要更新左侧任务列表的 completion_rate 等信息
             loadTasks();
             lastUpdated.value = new Date();
           }
@@ -1008,11 +1063,12 @@
   });
 
   const metricAvgCompletionTime = computed(() => {
-    return currentOverview.value?.avgCompletionTimeHours 
-      ? currentOverview.value.avgCompletionTimeHours.toFixed(1) 
-      : '-';
+    const hours = currentOverview.value?.avgCompletionTimeHours;
+    if (hours === undefined || hours === null) return '-';
+    // 如果已有完成数据（即使是0），正常格式化
+    if (hours > 0 && hours < 0.1) return '< 0.1';
+    return hours.toFixed(1);
   });
-
   const metricReadCount = computed(() => {
     return (
       (currentOverview.value?.inProgressCount || 0) + (currentOverview.value?.completedCount || 0)
@@ -1431,7 +1487,11 @@
         completion_rate: h.completionRate ? h.completionRate / 100 : 0,
         completed_count: h.completedCount || 0,
         employee_count: h.assignmentCount || 0,
-        avg_time: h.avgCompletionTimeHours ? `${h.avgCompletionTimeHours.toFixed(1)}h` : '-',
+        avg_time: (h.avgCompletionTimeHours !== undefined && h.avgCompletionTimeHours !== null)
+          ? (h.avgCompletionTimeHours > 0 && h.avgCompletionTimeHours < 0.1 
+              ? '< 0.1h' 
+              : `${h.avgCompletionTimeHours.toFixed(1)}h`) 
+          : '-',
       }));
     } catch (e) {
       console.error('Fetch RTM Ranking Failed', e);
@@ -2449,6 +2509,41 @@
               class="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-[#F9FAFB]"
             ></div>
           </button>
+
+          <!-- 一键催办扫描按钮 -->
+          <button
+            @click="handleTriggerAutoNudge"
+            :disabled="autoNudgeLoading"
+            class="px-4 py-2 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-600 transition-colors duration-200 relative group flex items-center gap-2 border border-orange-200 shadow-sm"
+            title="运行预警扫描"
+          >
+            <svg
+              v-if="autoNudgeLoading"
+              class="animate-spin h-4 w-4 text-orange-600"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <svg
+              v-else
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+            </svg>
+            <span class="text-[13px] font-semibold">一键催办扫描</span>
+          </button>
         </div>
       </div>
     </div>
@@ -2586,7 +2681,6 @@
               ]"
             >
               <div
-                v-if="diagnosis.severity !== 'green'"
                 class="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full ml-1 transition-colors duration-300"
                 :class="
                   diagnosis.severity === 'red'
@@ -2598,25 +2692,14 @@
               >
                 <div
                   class="w-2.5 h-2.5 rounded-full"
-                  :class="
-                    diagnosis.severity === 'red'
-                      ? 'animate-alert-pulse-red'
-                      : diagnosis.severity === 'yellow'
-                      ? 'animate-alert-pulse-yellow'
-                      : ''
-                  "
+                  :class="{
+                    'animate-alert-pulse-red': diagnosis.severity === 'red',
+                    'animate-alert-pulse-yellow': diagnosis.severity === 'yellow',
+                    'animate-alert-pulse-green': diagnosis.severity === 'green',
+                  }"
                   :style="{ backgroundColor: severityColors[diagnosis.severity] }"
                 ></div>
               </div>
-              <div
-                v-else
-                class="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full ml-1 bg-green-50"
-              >
-                <div
-                  class="w-2.5 h-2.5 rounded-full bg-[#34C759] shadow-[0_0_8px_rgba(52,199,89,0.4)]"
-                ></div>
-              </div>
-
               <div class="flex-1 ml-1">
                 <div class="text-[15px] leading-[1.5] font-semibold font-outfit text-[#111827]">
                   <span v-if="diagnosis.severity === 'green'"
@@ -2702,6 +2785,11 @@
                 <div
                   v-if="task.status === 'dispatched'"
                   class="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
+                  :class="{
+                    'animate-alert-pulse-red': task.severity === 'red',
+                    'animate-alert-pulse-yellow': task.severity === 'yellow',
+                    'animate-alert-pulse-green': task.severity === 'green',
+                  }"
                   :style="{ backgroundColor: severityColors[task.severity] }"
                 ></div>
                 <div v-else class="w-2 h-2 rounded-full flex-shrink-0 bg-gray-300 shadow-sm"></div>
@@ -5293,12 +5381,30 @@
       box-shadow: 0 0 0 0 rgba(255, 149, 0, 0);
     }
   }
+  @keyframes alert-pulse-green {
+    0% {
+      transform: scale(0.85);
+      box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.8);
+    }
+    70% {
+      transform: scale(1);
+      box-shadow: 0 0 0 8px rgba(52, 199, 89, 0);
+    }
+    100% {
+      transform: scale(0.85);
+      box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
+    }
+  }
   .animate-alert-pulse-red {
     animation: alert-pulse 1.5s infinite;
   }
   .animate-alert-pulse-yellow {
     animation: alert-pulse-yellow 1.5s infinite;
     animation-delay: 0.2s;
+  }
+  .animate-alert-pulse-green {
+    animation: alert-pulse-green 1.5s infinite;
+    animation-delay: 0.4s;
   }
 
   /* Hide scrollbar for Chrome, Safari and Opera */

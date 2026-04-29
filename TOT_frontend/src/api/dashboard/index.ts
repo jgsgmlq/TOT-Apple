@@ -41,6 +41,7 @@ export const getDashboardOverview = (params: {
 }) => {
   return Alova.Get<DashboardOverview>('/dashboard/overview', {
     params,
+    localCache: 0,
   });
 };
 
@@ -70,6 +71,7 @@ export const getDashboardHeatmap = (params: {
     updatedAt: string;
   }>('/dashboard/heatmap', {
     params: { ...params, rtmLevel: params.rtmLevel ?? 'rtm' },
+    localCache: 0,
   });
 };
 
@@ -91,7 +93,7 @@ export const getDashboardTrend = (params: {
 }) => {
   return Alova.Get<{ taskId: string; type: string; date: string; trendData: TrendPoint[] }>(
     '/dashboard/trend',
-    { params }
+    { params, localCache: 0 }
   );
 };
 
@@ -115,6 +117,7 @@ export const getDashboardStoreRank = (params: {
 }) => {
   return Alova.Get<{ rankList: StoreRankRow[] }>('/dashboard/store-rank', {
     params,
+    localCache: 0,
   });
 };
 
@@ -150,6 +153,7 @@ export const getDashboardWarnings = (params: {
     pagination: { pageNum: number; pageSize: number; total: number; totalPages: number };
   }>('/dashboard/warnings', {
     params,
+    localCache: 0,
   });
 };
 

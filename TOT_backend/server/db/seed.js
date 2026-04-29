@@ -92,7 +92,7 @@ const TASKS = [
   },
   {
     id:          'TASK_WARN_START',
-    title:       'MacBook 销售技巧起步异常',
+    title:       'MacBook 销售技巧培训',
     description: '测试起步异常预警，时间已过半。',
     has_mypal: 1, has_smartsell: 0, has_ai_demo: 1, has_live_broadcast: 0,
     status:    'dispatched',
@@ -104,7 +104,7 @@ const TASKS = [
   },
   {
     id:          'TASK_WARN_P1',
-    title:       'iPad Pro P1临期预警',
+    title:       'iPad Pro 销售技巧培训',
     description: '测试P1临期预警，剩余时间小于48小时。',
     has_mypal: 1, has_smartsell: 1, has_ai_demo: 0, has_live_broadcast: 0,
     status:    'dispatched',
@@ -116,7 +116,7 @@ const TASKS = [
   },
   {
     id:          'TASK_WARN_P0',
-    title:       'Apple Watch P0临期预警',
+    title:       'Apple Watch销售话术培训',
     description: '测试P0临期预警，剩余时间小于24小时。',
     has_mypal: 1, has_smartsell: 0, has_ai_demo: 0, has_live_broadcast: 1,
     status:    'dispatched',

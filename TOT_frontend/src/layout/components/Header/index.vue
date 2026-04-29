@@ -281,13 +281,7 @@
             click: () => window.open('https://github.com/jekip/naive-ui-admin'),
           },
         },
-        {
-          icon: 'LockOutlined',
-          tips: '锁屏',
-          eventObject: {
-            click: () => useLockscreen.setLock(true),
-          },
-        },
+        // 移除手动锁屏按钮
       ];
       const avatarOptions = [
         {
