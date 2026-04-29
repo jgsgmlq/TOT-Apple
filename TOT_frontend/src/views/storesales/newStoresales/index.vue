@@ -696,22 +696,34 @@
         const safeDdlAt = (t.ddlAt || '').replace(/-/g, '/');
         const ddlTime = new Date(safeDdlAt).getTime();
 
+        const assignTimeStr = assign.createdAt || assign.created_at || t.createdAt || t.created_at || t.updatedAt;
+        const assignTime = new Date((assignTimeStr || '').replace(/-/g, '/')).getTime();
+        const timeSinceAssigned = nowTime - (assignTime || nowTime);
+        const isAssignedWithin24h = timeSinceAssigned < 24 * 60 * 60 * 1000;
+        const hasBeenNudged = assign.nudgeCount > 0 || assign.nudge_count > 0;
+
         let status = 'normal';
         let isOverdue = false;
         let isCompleted = false;
 
-        if (assign.status === 'completed') {
+        if (assign.status === 'completed' || assign.completedAt || assign.completed_at) {
           status = 'completed';
           isCompleted = true;
         } else if (ddlTime < nowTime) {
           status = 'overdue';
           isOverdue = true;
-        } else if (ddlTime - nowTime < 24 * 60 * 60 * 1000) {
+        } else if (hasBeenNudged && ddlTime - nowTime < 24 * 60 * 60 * 1000) {
+          // 如果已经被预警触发(催办过)，且距离截止时间不足24小时，升级为“紧急”
           status = 'urgent';
-        } else if (assign.nudgeCount > 0 || assign.nudge_count > 0) {
+        } else if (hasBeenNudged) {
+          // 如果已经被预警触发，但距离截止时间还有>24小时，显示为“催办中”
           status = 'nudging';
-        } else if (!assign.startedAt && !assign.started_at) {
+        } else if (isAssignedWithin24h) {
+          // 如果还没有被预警触发过，且下发不足24小时，才安稳地显示为“新任务”
           status = 'new';
+        } else if (ddlTime - nowTime < 24 * 60 * 60 * 1000) {
+          // 如果下发超过24小时，且距离截止不足24小时(纯时间流逝导致)，也变为“紧急”
+          status = 'urgent';
         }
 
         const activePlatforms: string[] = [];
@@ -1008,6 +1020,8 @@
   const handleLearn = async (task: any, subTask?: any) => {
     if (!task || !task.assignmentId) return;
 
+    markAsViewedIfPending(task); // Ensure it's marked as viewed even if they click "Learn Now" directly
+
     // 跳转到微信小程序 (MyPAL 专用)
     const targetPlatform = subTask ? subTask.rawPlatform : task.platformName;
     if (targetPlatform === 'MyPAL') {
@@ -1044,19 +1058,23 @@
         { meta: { skipGlobalErrorMessage: true } }
       ).send();
 
-      celebrate();
-      showToast('状态更新成功！');
+      if (opType === 'start_task') {
+        showToast('正在跳转平台并开始学习...');
+      } else {
+        celebrate();
+        showToast(`已完成该平台任务：${subTask ? subTask.platformName : task.title}`);
+      }
+      
       fetchTasks();
     } catch (e: any) {
       const errMsg = e?.message || '';
       // If we tried to start but it was already started (backend throws "当前状态不可开始任务")
       if (errMsg.includes('当前状态不可开始任务') && (!task.startedAt || task.status === 'new')) {
         // Optimistically mark as started locally to prevent further 'start_task' attempts
-        task.status = 'normal'; 
+        // We do NOT change task.status here to preserve its 'new', 'urgent', or 'nudging' visual state
         task.startedAt = new Date().toISOString(); 
         
-        // Friendly reminder since actual learning platform callback integration is pending
-        showToast('任务已开启。由于暂未联调学习平台，暂时无法自动同步完成状态，请等待后续版本更新。');
+        showToast('正在跳转平台并开始学习...');
       } else {
         console.error('Failed to update task status', e);
         showToast(errMsg || '操作失败，请重试');
@@ -1064,15 +1082,27 @@
     }
   };
 
+  const markAsViewedIfPending = async (task: any) => {
+    if (task && task.assignmentId && !task.viewedReported) {
+      try {
+        await Alova.Post(`/assignments/${task.assignmentId}/viewed`, {}, { meta: { skipGlobalErrorMessage: true } }).send();
+        task.viewedReported = true; // prevent duplicate calls in one session
+      } catch (e) {
+        // ignore
+      }
+    }
+  };
+
   const startTaskIfPending = async (task: any) => {
     if (task && (!task.startedAt || task.status === 'new') && task.assignmentId) {
       try {
+        markAsViewedIfPending(task); // Also report viewed when starting
         await Alova.Put(
           `/assignments/${task.assignmentId}/status`,
           { operationType: 'start_task' },
           { meta: { skipGlobalErrorMessage: true } }
         ).send();
-        task.status = 'normal'; // Optimistically update local status so it doesn't fire again
+        // REMOVED: task.status = 'normal'; We should NOT break its current valid state (new, urgent, nudging)
         task.startedAt = new Date().toISOString(); // Mark as started
         fetchTasks();
       } catch (e) {
@@ -1087,8 +1117,12 @@
       const parentTask =
         tasks.value.find((t) => t.assignmentId === parentAssignmentId) ||
         overdueTasks.value.find((t) => t.assignmentId === parentAssignmentId);
-      if (parentTask) startTaskIfPending(parentTask);
+      if (parentTask) {
+        markAsViewedIfPending(parentTask);
+        startTaskIfPending(parentTask);
+      }
     } else {
+      markAsViewedIfPending(task);
       startTaskIfPending(task);
     }
     selectedTask.value = task;
