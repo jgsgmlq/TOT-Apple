@@ -384,7 +384,7 @@ CREATE UNIQUE INDEX idx_ne_dedupe ON notification_events(dedupe_key)
 
 ## 7. read_receipts（已读回执表）
 
-**业务含义：** 记录员工何时、以何种方式「已读」某条通知事件。主路径为员工打开任务详情时 **`POST /assignments/:id/viewed`** 写入（`task_detail_open`）。一条 `notification_events` 行只有对应回执存在才算对该用户已读；`GET /events/unread-count` 等随之减少未读。`UNIQUE(event_id, user_id)` 保证幂等。
+**业务含义：** 记录员工何时、以何种方式「已读」某条通知事件。主路径为员工打开任务详情时 **`POST /assignments/:id/viewed`** 写入：**`source = task_detail_open`**（未指定平台）或 **`task_detail_open:{平台标签}`**（如 `task_detail_open:MyPAL`，与 **`server/utils/platforms.js`** 的 `sourceLabel` 一致）。一条 `notification_events` 行在列表/未读聚合上按 **`(event_id, user_id)`** 合并多条 `read_receipts`（多 `source` 取最早 **`read_at`**）；看板按平台下钻时则与对应 **`source`** 对齐。`UNIQUE(event_id, user_id, source)` 保证同一用户、同一事件、同一来源幂等。
 
 ```sql
 CREATE TABLE IF NOT EXISTS read_receipts (
@@ -392,11 +392,15 @@ CREATE TABLE IF NOT EXISTS read_receipts (
   event_id TEXT NOT NULL REFERENCES notification_events(id),
   user_id  TEXT NOT NULL REFERENCES employees(id),
   read_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
+  source   TEXT NOT NULL CHECK (
+    source = 'notification_click'
+    OR source = 'task_detail_open'
+    OR source LIKE 'task_detail_open:%'
+  )
 );
 
-CREATE UNIQUE INDEX idx_rr_event_user ON read_receipts(event_id, user_id);
-CREATE INDEX        idx_rr_user_id    ON read_receipts(user_id);
+CREATE UNIQUE INDEX idx_rr_event_user_source ON read_receipts(event_id, user_id, source);
+CREATE INDEX        idx_rr_user_id           ON read_receipts(user_id);
 ```
 
 **字段说明:**
@@ -404,17 +408,18 @@ CREATE INDEX        idx_rr_user_id    ON read_receipts(user_id);
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | id | Y | nanoid，回执唯一标识 |
-| event_id | Y | 关联的通知事件；UNIQUE(event_id, user_id) 防止重复已读 |
+| event_id | Y | 关联的通知事件；与 `user_id`、`source` 组成唯一约束 |
 | user_id | Y | 已读的员工（引用 employees.id）|
 | read_at | Y | 已读时间，DEFAULT 当前时间 |
-| source | Y | 已读来源：**主路径** `task_detail_open`（`POST /assignments/:id/viewed`）；`notification_click` 仅历史数据（原铃铛接口已移除）|
+| source | Y | **`task_detail_open`** / **`task_detail_open:MyPAL`** 等（**`POST /assignments/:id/viewed`**）；**`notification_click`** 仅历史数据 |
 
 **source 说明:**
 
 | 值 | 含义 |
 |----|------|
 | `notification_click` | 历史：原 `POST /events/:eventId/read`；新写入不再使用 |
-| `task_detail_open` | 打开任务详情（`POST /assignments/:id/viewed`；同时写入 assignment.received_at）|
+| `task_detail_open` | 打开任务详情且未传 `platform` 参数 |
+| `task_detail_open:{标签}` | 打开任务详情并指定合集平台（`MyPAL` / `SmartSales` / `AiDemo` / `LiveBroadcast`） |
 
 ---
 

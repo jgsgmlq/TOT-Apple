@@ -18,7 +18,7 @@
 | 表 | 职责 |
 |----|------|
 | `notification_events` | 每条通知一行（1 行 = 某员工 1 次触达）；含任务下发、任务更新、黄/红提醒等 |
-| `read_receipts` | 已读回执（主路径 `task_detail_open`；历史数据可有 `notification_click`） |
+| `read_receipts` | 已读回执（主路径 **`task_detail_open`** / **`task_detail_open:{平台}`**；历史数据可有 `notification_click`） |
 | `nudge_records` | 与「催办/触达」相关的审计行（总部主动路径与自动预警路径均可能写入，见下文） |
 
 **接口与字段细节以 `04-API-SPEC.md` 为准。**
@@ -32,7 +32,7 @@
 | 创建系统事件（内部） | `POST /api/v1/events` | `routes/notifications.js`；仅 `task_assigned` / `task_updated`，**禁止**经此创建 `nudge_*`（须走 nudges 或自动预警逻辑） |
 | 通知列表 | `GET /api/v1/events` | 含 `isActive`、`readStatus`、`ruleType`（自动预警且 `dedupe_key` 形如 `autonudge:…` 时解析） |
 | 未读数 | `GET /api/v1/events/unread-count` | 店员 `employeeId`；无则返回 0 |
-| 任务详情已读（主路径） | `POST /api/v1/assignments/:assignmentId/viewed` | `task_detail_open` + `received_at`；必要时补建 `task_assigned` 后写 `read_receipts` |
+| 任务详情已读（主路径） | `POST /api/v1/assignments/:assignmentId/viewed` | 可选 **`platform`**：`task_detail_open` 或 `task_detail_open:{标签}` + `received_at`；必要时补建 `task_assigned` 后写 `read_receipts` |
 | 总部主动催办 | `POST /api/v1/nudges` | `routes/nudge.js`；**仅 `central`** |
 | 催办记录列表 | `GET /api/v1/nudges` | **仅 `central`**；`taskId` 必填 |
 | AI 辅助催办文案 | `POST /api/v1/nudges/ai-generate` | **`central` / `admin`** |
@@ -132,7 +132,7 @@
 
 | KPI | 计算方式（与 PRD §5.6 / 看板一致时） |
 |-----|--------------------------------------|
-| 店员已读（任务详情打开） | `read_receipts` 中 `source='task_detail_open'` 等与 `notification_events.task_id` 关联去重 |
+| 店员已读（任务详情打开） | **看板未传 `platform`**：`read_receipts.source = 'task_detail_open'` 精确匹配；**传 `platform`**：`source = task_detail_open:{标签}`。铃铛 **列表/未读**：按 **`(event_id,user_id)`** 聚合多 `source`，任一回执即已读 |
 
 **已读条件：**
 
