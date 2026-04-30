@@ -111,7 +111,7 @@ export const sendChatMessage = (
 export const streamExecutiveChatMessage = async (
   sessionId: string,
   content: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
@@ -119,7 +119,7 @@ export const streamExecutiveChatMessage = async (
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
     body: { content, stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
@@ -176,7 +176,7 @@ export const submitChatFeedback = (
 export const streamRegenerateChatMessage = async (
   sessionId: string,
   messageId: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
@@ -184,7 +184,7 @@ export const streamRegenerateChatMessage = async (
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`,
     body: { stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: 'Executive Chat 重新生成处理失败',
@@ -224,7 +224,7 @@ export const sendDashboardChatMessage = (
 export const streamDashboardChatMessage = async (
   sessionId: string,
   content: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
@@ -232,7 +232,7 @@ export const streamDashboardChatMessage = async (
   return streamSsePostJson({
     path: `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages`,
     body: { content, stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onError,
     fallbackErrorMessage: '看板机器人对话处理失败',
