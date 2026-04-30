@@ -420,6 +420,10 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
             text,
             phase,
             reasoningLevel: meta?.reasoningLevel || undefined,
+            toolName:
+              phase === 'tool_start' || phase === 'tool_end'
+                ? meta?.text || undefined
+                : undefined,
           });
         },
       },
@@ -731,6 +735,10 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
             text,
             phase,
             reasoningLevel: meta?.reasoningLevel || undefined,
+            toolName:
+              phase === 'tool_start' || phase === 'tool_end'
+                ? meta?.text || undefined
+                : undefined,
           });
         },
       },

@@ -200,7 +200,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ne_dedupe         ON notification_events(d
 
 ## 7. read_receipts 表
 
-当前写入以 **`source = 'task_detail_open'`** 为主（`POST /assignments/:id/viewed`）。**`notification_click`** 仅历史行保留；DB `CHECK` 仍允许两值。
+当前写入以 **`source = 'task_detail_open'`** 或 **`source LIKE 'task_detail_open:%'`** 为主（**`POST /assignments/:id/viewed`**，可选 **`platform`**）。**`notification_click`** 仅历史行保留。`CHECK` 允许：`notification_click`、`task_detail_open`、或以 **`task_detail_open:`** 为前缀的平台分源值。**`UNIQUE(event_id, user_id, source)`** 允许同一用户对同一事件按平台各一条回执。
 
 ```sql
 CREATE TABLE IF NOT EXISTS read_receipts (
@@ -208,11 +208,17 @@ CREATE TABLE IF NOT EXISTS read_receipts (
   event_id TEXT NOT NULL REFERENCES notification_events(id),
   user_id  TEXT NOT NULL REFERENCES employees(id),
   read_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
+  source   TEXT NOT NULL CHECK (
+    source = 'notification_click'
+    OR source = 'task_detail_open'
+    OR source LIKE 'task_detail_open:%'
+  )
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user ON read_receipts(event_id, user_id);
-CREATE INDEX        IF NOT EXISTS idx_rr_user_id    ON read_receipts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user_source ON read_receipts(event_id, user_id, source);
+CREATE INDEX        IF NOT EXISTS idx_rr_user_id           ON read_receipts(user_id);
 ```
+
+**迁移说明：** 由 `server/db/index.js` 的 **`migrateReadReceiptsPlatformSources`** 等迁移：放宽 `CHECK`、重建唯一索引、历史 **`task_detail_open`** 行保持不变。
 
 ---
 

@@ -5,6 +5,7 @@
 import type { ReplyContent, SendMessageResult } from '@/api/chat';
 import { formatReplyContentText } from '@/api/chat';
 import { speechTextForSendResult } from '@/utils/execStreamReply';
+import { sanitizeExecutiveSpeechText } from '@/utils/execSpeechSanitizer';
 
 const LS_KEY = 'tot_executive_voice_enabled';
 
@@ -155,7 +156,7 @@ export class ExecutiveTtsSession {
 
   /** 与气泡展示一致：使用结构化 partialReply 格式化后的全文，只追加新增后缀 */
   pushPartialReply(partial: ReplyContent | null | undefined) {
-    const full = formatReplyContentText(partial ?? null);
+    const full = sanitizeExecutiveSpeechText(formatReplyContentText(partial ?? null));
     this.pushTextIncremental(full);
   }
 
@@ -164,7 +165,7 @@ export class ExecutiveTtsSession {
    * （`pushPartialReply` 在 FC 模式下 partialReply 为空时不会收到任何文本，导致 TTS 全程静音。）
    */
   pushSpokenPlainText(full: string) {
-    this.pushTextIncremental(full);
+    this.pushTextIncremental(sanitizeExecutiveSpeechText(full));
   }
 
   private pushTextIncremental(full: string) {
@@ -234,7 +235,7 @@ export async function speakReplyContent(
   getToken: () => string,
   result: SendMessageResult
 ): Promise<void> {
-  const full = speechTextForSendResult(result);
+  const full = sanitizeExecutiveSpeechText(speechTextForSendResult(result));
   if (!full) return;
   const s = new ExecutiveTtsSession();
   try {
