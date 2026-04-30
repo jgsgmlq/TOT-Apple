@@ -290,3 +290,69 @@ To-Be 图里强调的是**单层拍平状态**，这点在当前代码里已经�
 3. `fc_CheckDuplicate`
 4. `PersistAndEmit` 与外层 `chatService` 的职责再收口
 
+---
+
+## 11. 执行链路事实表 (Execution Link Fact Table)
+
+用于快速定位不同请求模式下的代码执行深度与编排引擎。
+
+| 模式 / 路径 | 触发条件 (Request Body/URL) | 后端 Service 入口 | 编排引擎 | SSE Phases |
+|---|---|---|---|---|
+| **LangGraph 流式 (默认)** | `stream: true` 或 `stream: 'langgraph'` | `sendMessageStreamLangGraph` | LangGraph (graph.js) | `reasoning`, `content`, `tool_start`, `tool_end`, `clarify` |
+| **Legacy 流式** | `stream: 'legacy_stream'` | `sendMessageStream` | AgentRunner (run) | `reasoning`, `content`, `tool_start`, `tool_end`, `clarify` |
+| **非流式 (Sync)** | 不带 `stream` 字段 | `sendMessage` | AgentRunner (run) | N/A (JSON Response) |
+| **Resume (HITL)** | `POST /sessions/:id/resume` | `resumeMessageStreamLangGraph` | LangGraph (Command resume) | `reasoning`, `content`, `tool_start`, `tool_end` |
+| **Regenerate (LG)** | `POST /messages/:id/regenerate` + 历史 LG | `regenerateLastAssistantStreamLangGraph` | LangGraph (Invoke) | 同 LangGraph 流式 |
+| **Regenerate (Legacy)** | `POST /messages/:id/regenerate` + 历史 Legacy | `sendMessageStream` (fallback) | AgentRunner | 同 Legacy 流式 |
+
+---
+
+## 12. Langfuse 观测字段对照（工具调用链）
+
+用于快速回答三个问题：
+
+1. 本轮是否真的执行了工具？
+2. LLM 决策要调的工具，和实际执行工具是否一致？
+3. 失败发生在哪个工具、带了哪些参数字段？
+
+### 10.1 Root Trace（`Executive_Chat_Request`）
+
+| 字段 | 来源 | 含义 |
+|---|---|---|
+| `metadata.intent` | `finalState.intent` | 本轮最终意图 |
+| `metadata.selected_tier` | `finalState.selected_tier` | 路由层级（L2/L3/L4） |
+| `metadata.fc_steps_used` | `finalState.fc_super_step_count` | FC 超步数计数 |
+| `metadata.repair_attempts` | `finalState.fc_repair_attempts` | 参数修复次数 |
+| `metadata.tool_names` | `finalState.calledTools` 去重 | 本轮实际执行过的工具名列表 |
+| `metadata.tool_call_count` | `max(calledTools.length, toolResults.length)` | 本轮工具调用规模 |
+
+### 10.2 LLM 决策 Span（`LLM_Decide_Tools`）
+
+| 字段 | 含义 |
+|---|---|
+| `input.candidateTools` | `ToolRetrieve` 提供给 LLM 的候选工具 |
+| `input.selectedTier` | 当前路由 tier |
+| `output.toolCallNames` | LLM 实际产出的工具调用名称 |
+| `output.toolCallCount` | LLM 本轮决策调用数 |
+| `metadata.step` / `metadata.maxSteps` | 当前 FC 步数与上限 |
+
+### 10.3 工具执行 Span（`Tool_Call:<toolName>`）
+
+| 字段 | 含义 |
+|---|---|
+| `input.toolCallId` | tool call 唯一 ID（用于跨节点关联） |
+| `input.toolName` | 执行的内部工具名 |
+| `input.argsHash` | 参数哈希（避免明文参数泄漏） |
+| `input.argFields` | 参数字段名列表（不上报值） |
+| `metadata.namespace` | 工具命名空间（默认 `executive_chat`） |
+| `metadata.selectedTier` | 调用时 tier |
+| `metadata.status` | `success` / `error` |
+| `metadata.errorCode` | 失败时错误码 |
+| `output` | 执行结果预览（脱敏 + 截断） |
+
+### 10.4 快速排障操作建议
+
+- 先看 root trace：`tool_names` 和 `tool_call_count`，确认是否发生工具调用。
+- 再看 `LLM_Decide_Tools`：确认模型当时想调用哪些工具。
+- 最后看 `Tool_Call:*`：确认每个工具的执行状态、错误码、参数字段集合。
+

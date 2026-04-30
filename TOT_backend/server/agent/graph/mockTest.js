@@ -27,7 +27,7 @@ async function runMockTests() {
     
     const finalState = await app.invoke(tc.input, thread);
     
-    console.log("[State Router]:", { intent: finalState.intent, safety: finalState.safety });
+    console.log("[State Router]:", { intent: finalState.intent, mode: finalState.mode });
     console.log("[Final Response]:", finalState.finalResponse || finalState.messages[finalState.messages.length - 1].content);
     if (tc.input.userMessage.includes("查数据") || finalState.intent === "tool_action") {
       console.log("[FC 循环次数]:", finalState.fc_super_step_count);

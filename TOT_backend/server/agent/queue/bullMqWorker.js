@@ -1,10 +1,12 @@
 const { Worker } = require('bullmq');
 const IORedis = require('ioredis');
+const crypto = require('crypto');
+const { nanoid } = require('nanoid');
 const { db } = require('../../db');
 const { ChatOpenAI } = require("@langchain/openai");
-const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
+const { SystemMessage } = require("@langchain/core/messages");
 // T5 阶段二: 点亮后台盲区，注入官方 CallbackHandler 捕获后台 Worker 消耗 Token 数量
-const CallbackHandler = require("langfuse-langchain").default;
+const { CallbackHandler } = require("langfuse-langchain");
 
 const getLangfuseCallback = (sessionId) => {
   if (process.env.LANGFUSE_ENABLED !== 'true') return null;
@@ -34,10 +36,21 @@ const getMemoryLLM = () => new ChatOpenAI({
 async function startMemoryWorker() {
   const queueName = "MemoryIngestionQueue";
   const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-  const connection = new IORedis(redisUrl, { 
-    maxRetriesPerRequest: 1, 
-    retryStrategy: () => null 
+  const connection = new IORedis(redisUrl, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    lazyConnect: true,
+    retryStrategy: () => null,
   });
+  // 静默 ioredis 自身的 'error' 事件，否则它会抛 Unhandled error 把日志刷爆
+  connection.on('error', () => undefined);
+  try {
+    await connection.connect();
+  } catch (err) {
+    console.warn(`[Queue Worker] Redis unavailable (${err?.code || err?.message || 'unknown'}); memory worker disabled`);
+    try { connection.disconnect(); } catch (_) {}
+    return null;
+  }
 
   console.log(`[Queue Worker] 正在启动记忆消费集群，监听队列: ${queueName}`);
 
@@ -73,19 +86,26 @@ Bot Response: "${finalResponse}"`;
       // 如果大模型觉得有必要记下来
       if (fact && fact !== "NONE") {
         console.log(`[Queue Worker] 萃取到新事实: ${fact}`);
-        
+
         // 2. 真实落库 (向现有的 user_memories 表写入)
-        // 按照 T4 的 TTL 要求，由于 SQLite 原生不支持 TTL，我们在内存中存储时间戳，后续 CronJob 清理
-        // 这里只是插入业务数据库做持久化
+        // 表 schema：id (PK NOT NULL) / user_id / memory_hash (NOT NULL, UNIQUE(user_id, memory_hash))
+        // / memory_type (default 'bias') / content (NOT NULL) / confidence_score (default 0.5)
+        // / created_at / updated_at（DB 默认）。
+        const memoryHash = crypto
+          .createHash('sha256')
+          .update(`${userId}|${fact}`)
+          .digest('hex');
         db.run(
-          `INSERT INTO user_memories (user_id, memory_type, content, status) 
-           VALUES (?, 'mid_term', ?, 'active')`,
-          [userId, fact]
+          `INSERT INTO user_memories (id, user_id, memory_hash, memory_type, content, confidence_score)
+           VALUES (?, ?, ?, 'fact', ?, 0.7)
+           ON CONFLICT(user_id, memory_hash) DO UPDATE SET
+             content = excluded.content,
+             confidence_score = excluded.confidence_score,
+             updated_at = datetime('now', 'localtime')`,
+          [nanoid(), userId, memoryHash, fact]
         );
-        console.log(`[Queue Worker] 已成功将 ${userId} 的 mid_term 记忆写入 SQLite.`);
-        
-        // 这里如果是用 Redis 存储短期记忆，可以同时向 Redis 写入带 EX 的 KV，这更符合 14 天 TTL 原生要求。
-        // await connection.setex(`memory:mid_term:${userId}`, 14 * 24 * 60 * 60, fact);
+        console.log(`[Queue Worker] 已成功将 ${userId} 的 fact 记忆写入 SQLite.`);
+
       } else {
         console.log(`[Queue Worker] 对话无长尾价值，跳过。`);
       }

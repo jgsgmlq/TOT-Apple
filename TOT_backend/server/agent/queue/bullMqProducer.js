@@ -12,24 +12,42 @@ class MemoryQueueProducer {
     this.isConnected = false;
     this.bullQueue = null;
     this.redisClient = null;
+    // Redis 连不上时，只在第一次警告，避免每次请求都吐三段 stack 淹没日志
+    this._unavailableWarned = false;
+    this._connectPromise = null;
   }
 
   async connect() {
     if (this.isConnected) return;
-    
-    try {
-      // 默认尝试连接本地 Redis，真实生产环境可通过环境变量覆盖
-      const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-      this.redisClient = new IORedis(redisUrl, { 
-        maxRetriesPerRequest: 1, 
-        retryStrategy: () => null // 失败不重试，直接丢弃，防止 CI 被刷屏 
-      });
-      this.bullQueue = new Queue(this.queueName, { connection: this.redisClient });
-      this.isConnected = true;
-      console.log(`[Queue] Connected to BullMQ (${this.queueName})`);
-    } catch (err) {
-      console.error(`[Queue] Failed to connect to BullMQ:`, err);
-    }
+    if (this._connectPromise) return this._connectPromise;
+
+    this._connectPromise = (async () => {
+      try {
+        const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+        this.redisClient = new IORedis(redisUrl, {
+          maxRetriesPerRequest: 1,
+          enableOfflineQueue: false,
+          lazyConnect: true,
+          retryStrategy: () => null,
+        });
+        // 静默 ioredis 自身的 'error' 事件，否则它会 process-wide 抛 Unhandled error
+        this.redisClient.on('error', () => undefined);
+        await this.redisClient.connect();
+        this.bullQueue = new Queue(this.queueName, { connection: this.redisClient });
+        this.isConnected = true;
+        console.log(`[Queue] Connected to BullMQ (${this.queueName})`);
+      } catch (err) {
+        if (!this._unavailableWarned) {
+          console.warn(`[Queue] Redis unavailable (${err?.code || err?.message || 'unknown'}); memory ingestion will be silently dropped`);
+          this._unavailableWarned = true;
+        }
+        try { this.redisClient?.disconnect(); } catch (_) {}
+        this.redisClient = null;
+      } finally {
+        this._connectPromise = null;
+      }
+    })();
+    return this._connectPromise;
   }
 
   /**
@@ -64,15 +82,19 @@ class MemoryQueueProducer {
 
     // 生产环境中 Fire & Forget：将任务加入真正的 BullMQ 队列
     try {
-      await this.bullQueue.add('ingest', event, { 
-        removeOnComplete: true, // 完成后清理
-        removeOnFail: false,    // 失败保留以便排查死信
-        attempts: 3,            // 失败重试次数
-        backoff: { type: 'exponential', delay: 2000 } // 退避策略
+      await this.bullQueue.add('ingest', event, {
+        removeOnComplete: true,
+        removeOnFail: false,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 }
       });
       console.log(`[Queue Producer] 成功发布异步记忆任务: ${event.event_id}`);
     } catch (e) {
-      console.error(`[Queue Producer] 发布记忆任务失败:`, e);
+      // 同样静默：连接已断开 / Redis 暂不可用，不再吐 stack
+      if (!this._unavailableWarned) {
+        console.warn(`[Queue Producer] publish failed (${e?.code || e?.message || 'unknown'}); subsequent failures silenced`);
+        this._unavailableWarned = true;
+      }
     }
 
     return event.event_id;

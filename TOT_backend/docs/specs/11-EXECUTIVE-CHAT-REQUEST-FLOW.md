@@ -1,148 +1,80 @@
-# Executive Chat 请求处理流程（实现对照）
+# Executive Chat 请求流转与代码路径说明 (Request Flow)
 
-**版本:** 4.0.2 | **更新日期:** 2026-04-28 | **状态:** Current
-
-**本文定位：** 以当前后端代码为准，描述「用户发送一条消息 -> 助手回复落库」的完整调用链。  
-**字段级 HTTP 契约：** 见 [04-API-SPEC.md](./04-API-SPEC.md) §6。  
-**意图与工具：** 见 [10-EXECUTIVE-CHAT-INTENTS-TOOLS.md](./10-EXECUTIVE-CHAT-INTENTS-TOOLS.md)。
+**最后更新：** 2026-04-30  
+**适用范围：** `TOT_backend/server/services/chatService.js`, `server/agent/graph/*`, `server/services/chatAgentRunner.js` (Legacy)  
+**文档目的：** 为后端开发者提供一幅高清的“请求处理地图”，从 Express 路由接收到 HTTP 请求开始，一步步追踪消息如何流经各种安全校验、持久化逻辑、大模型调度引擎（LangGraph），并最终通过 SSE 返回给前端。
 
 ---
 
-## 1. 当前生效链路（代码事实）
+## 1. 宏观请求入口：`chatService` 的分发策略
 
-当前线上请求主链路仍为：
+所有的前端 Chat 请求首先进入 `server/routes/chat.js`，然后分发给 `chatService.js`。系统根据 `stream` 参数的值，决定请求流入哪个编排引擎：
 
-`routes/chat.js` -> `chatService.js` -> `chatAgentRunner.js` -> `chatToolsService.js` -> `chat_tools/*.js`
-
-对应实现文件：
-
-| 层级 | 路径 |
-|---|---|
-| 路由 | `TOT_backend/server/routes/chat.js` |
-| 会话/落库/SSE | `TOT_backend/server/services/chatService.js` |
-| Agent 编排（当前生效） | `TOT_backend/server/services/chatAgentRunner.js` |
-| 意图分类 | `TOT_backend/server/services/chatIntentService.js` |
-| 工具注册与执行 | `TOT_backend/server/services/chatToolsService.js` |
-| LLM 与流式 | `TOT_backend/server/utils/ai.js` |
-
-### 1.1 LangGraph 目录现状（尚未接入主链）
-
-仓库中存在 `TOT_backend/server/agent/graph/` 与 `TOT_backend/server/agent/queue/` 原型实现（含 `state.js`、`nodes.js`、`graph.js`、`bullMqProducer.js`），但 `chatService.js` 当前并未调用 `buildGraph()` 或 `app.invoke()`。  
-因此，本文件「Current」口径以 `chatAgentRunner.js` 实际行为为准。
+| 前端 `stream` 参数 | 后端进入方法 | 实际使用的编排引擎 | 说明 |
+|---|---|---|---|
+| `true` 或 `'langgraph'` | `sendMessageStreamLangGraph` | **LangGraph** (`graph.js`) | **当前默认主链路**，支持 HITL 打断恢复和全功能调用。 |
+| `'legacy_stream'` | `sendMessageStream` | `chatAgentRunner.run()` | 旧版流式链路（回退/遗留）。 |
+| `false` 或 未传 | `sendMessage` | `chatAgentRunner.run()` | 非流式同步 JSON 返回。 |
+| `/resume` 路由 | `resumeMessageStreamLangGraph` | **LangGraph** (Command resume) | 专用于处理澄清（HITL）后的恢复请求。 |
 
 ---
 
-## 2. 入口与会话处理（`chatService.js`）
+## 2. 默认主链路：LangGraph (StateGraph) 执行流
 
-1. 校验会话存在且归属用户。
-2. `handleIncomingMessage()`：
-   - 支持 `client_message_id` 幂等检查；
-   - 若包含 `clarificationResponse.toolCallId`，会先写一条 `tool` 角色消息，再写本轮 `user` 消息（用于澄清恢复）。
-3. 从 `chat_sessions` 构造 `regionScope`（`national` / `regional` / `rtm`）。
-4. 加载历史 `loadFormattedHistory()`（当前限制 `LIMIT 10`）。
-5. 调用 `chatAgentRunner.run(...)`。
-6. 写入 assistant 消息并更新 `chat_sessions.last_active`。
-7. 返回非流式 JSON，或在流式模式下发送 SSE `delta` / `done` / `error`。
+当请求进入 `sendMessageStreamLangGraph` 时，系统的工作流如下：
 
----
+### 2.1 准备期 (Prep & Init)
+1. **鉴权与权限构建**：读取 `chat_sessions` 确认归属，基于 `session.regions` 构建 `regionScope`（数据越权护栏）。
+2. **幂等校验与历史拼装**：调用 `handleIncomingMessage` 拦截重复 `messageId`，调用 `loadFormattedHistory` 从 SQLite 提取最近十条聊天记忆。
+3. **SSE 通道初始化**：写入 `text/event-stream` 头部，并挂载 `sseEmitter` 监听器，用于将 LangGraph 的生命周期事件映射为 SSE 的 `delta` 数据块。
 
-## 3. 编排模式与分支（`chatAgentRunner.js`）
+### 2.2 LangGraph 图执行 (Graph Invocation)
+图（Graph）由 `buildGraph()` 编译，状态模型为 `ExecChatGraphState`。图的节点（Nodes）依次如下：
 
-### 3.1 执行模式
+1. **LoadContext (记忆注入)**：查询 BullMQ 产生的 `user_memories`，将长期偏好写入上下文。
+2. **ContextAnalyzerRouter (意图路由)**：调用 LLM 对 `userMessage` 判定 `intent`（如 `query_metrics`）、安全状态（`risk_flags`）和实体置信度。若意图为纯聊天 (`chat_only`)，则直接结束。
+3. **ToolRetrieve (工具召回)**：根据 `intent` 去查 `INTENT_TOOL_MAP`，得到当前候选工具。
+4. **fc_LlmToolCallStep (模型决策)**：把工具 Schema 发给 DeepSeek。若模型输出 `tool_calls`，则继续向下；若输出纯文本，则转最终输出。
+5. **fc_ValidateParams (参数校验 & HITL 触发)**：
+   - 校验 `tool_calls` 的必填参数和枚举。
+   - 评估实体置信度（如重名门店 `low_confidence_entity`）。
+   - **若需打断**：挂起图状态，发送 `phase: clarify` 的 SSE 给前端，并停止响应。
+6. **fc_ParamRepair (参数修复)**：若校验不通过，尝试让模型自行修参，受最大修复次数保护。
+7. **fc_ExecuteTool (工具执行)**：通过 `chatToolsService.executeByName` 运行真实代码（如查库），携带 `regionScope` 护栏。
+8. **fc_MergeToolResults (合并递回)**：将结果组装为 `ToolMessage` 压入历史，路由回 `fc_LlmToolCallStep` 进行下一轮 FC (循环)。
+9. **FinalResponseStep (输出汇总)**：无工具可调，或步数超限时，生成面向用户的 Markdown。
+10. **PersistAndEmit (异步发射)**：触发 BullMQ 异步抽取长期记忆。
 
-- 默认 `CHAT_AGENT_MODE=function_calling`（未设置时即此值）。
-- 其它值走 `intent_routing` 兜底路径。
-
-### 3.2 前置判断
-
-1. `classifyExecutionMode()`：`chat_only` 或 `tool_action`。
-2. `checkIntentSafety()`：语义监工，命中危险操作返回 `deny`。
-3. 若 `chat_only` 或 `deny`，直接返回不调工具。
-
-### 3.3 Function Calling 主路径
-
-`runFunctionCalling()` 流程：
-
-1. 组装 `system + history + user` 消息；
-2. 调 `chatWithToolsStream()`（`utils/ai.js`）拿流式 `content/tool_calls`；
-3. 若有工具调用：
-   - `chatToolsService.executeByName()` 执行；
-   - 发送 `tool_start/tool_end`（映射到 SSE `delta.phase`）；
-   - 追加 `assistant(tool_calls)` 与 `tool(tool_call_id)` 进消息，进入下一轮；
-4. 迭代上限 `MAX_ITERATIONS=5`；
-5. 结束后回传 `markdownContent`、`_intentType`、`_toolMeta`。
-
-### 3.4 Intent Routing 兜底路径
-
-`runIntentRouting()` 流程：
-
-1. `chatIntentService.classify()` 产出 `intentType + entities`；
-2. `toolMap` 做 intent -> tool 映射；
-3. 单工具执行后由 `chatAnswerService.format()` 生成结构化回答；
-4. 返回 `overview/keyNumbers/attentionPoints/followUpSuggestions`（必要时兼容 `markdownContent`）。
+### 2.3 收尾与落库 (Finalize)
+LangGraph 返回最终状态后，`chatService` 将 AI 的 Markdown 存入 `chat_messages`，更新 `last_active`，并以 `[DONE]` 块结束 SSE 流。
 
 ---
 
-## 4. 工具层护栏（`chatToolsService.js`）
+## 3. Human-in-the-loop (HITL)：Clarify -> Resume 闭环
 
-`executeByName()` 包含三层约束：
+当请求含糊不清（如：参数缺失、置信度低），LangGraph 会触发真实的代码挂起。
 
-1. 工具白名单与动态注册校验；
-2. 参数 schema 基础校验（required/type）；
-3. 权限校验（`requiredRole` / `scopePolicy`）。
+### 3.1 挂起阶段 (Interrupt)
+1. 节点 `fc_ValidateParams` 发现异常，返回 `{ fc_next_action: 'hitl', interrupt_payload: {...} }`。
+2. 节点 `humanInTheLoopGate` 执行 `interrupt(payload)`。LangGraph **立刻休眠**，状态持久化到 `SqliteSaver` 中。
+3. `chatService` 捕捉到打断信号，向前端下发一条 `phase: 'clarify'` 的 SSE，内含选项卡片（如门店列表）。HTTP 请求结束。
 
-统一错误包装为：
-
-- `TOOL_NOT_FOUND`
-- `INVALID_PARAMETERS`
-- `PERMISSION_DENIED`
-- `TIMEOUT_ERROR`
-- `EXECUTION_ERROR`
-
----
-
-## 5. SSE 行为（`sendMessageStream` / `regenerateLastAssistantStream`）
-
-- 事件类型：`delta`、`done`、`error`。
-- `delta` 载荷核心字段：`text`、`phase`、`reasoningLevel`。
-  - `phase` 常见：`reasoning` / `content` / `tool_start` / `tool_end` / `clarify`。
-
-### 5.1 Abort 现状
-
-`chatService.js` 在客户端断开时会触发 `AbortController.abort()` 并把 `signal` 传给 `chatAgentRunner.run`。  
-但 `utils/ai.js` 当前 `fetch` 尚未接入该 `signal`，因此上游请求不一定及时中断，属已知实现差距。
+### 3.2 恢复阶段 (Resume)
+1. 用户在前端卡片点击后，前端请求 `POST /sessions/{id}/resume`，携带 `ResumePayload`（含 `resume_type` 和 `value`）。
+2. 后端进入 `resumeMessageStreamLangGraph`，使用相同的 `thread_id` 和一个装载着用户选择的 `Command({ resume: resumePayload })` 去唤醒沉睡的 LangGraph。
+3. 图在 `humanInTheLoopGate` 醒来：
+   - 若 `resume_type === 'slot_fill'`（补参）：将用户值打入 `pending_tool_calls`，跳回 `fc_ValidateParams` 重新校验。
+   - 若 `resume_type === 'intent_shift'`（用户改口）：清空当前待执行工具，将用户新话语推入队列，**伪造 ToolMessage 闭合上一轮**，然后跳回 `ContextAnalyzerRouter` 重新理解。
+   - 若 `resume_type === 'cancel'`：直接结束并提示用户已取消。
 
 ---
 
-## 6. 澄清恢复（Clarify/Resume）
+## 4. 旧版链路：AgentRunner (Legacy Stream)
 
-当工具返回 `needDisambiguation` 时：
+**注意：此链路已降级为遗留代码，仅在 `stream: 'legacy_stream'` 或非流式请求时触发。**
 
-1. `chatAgentRunner` 会通过 `phase: clarify` 下发候选信息；
-2. 前端回传 `clarificationResponse`；
-3. `chatService.handleIncomingMessage()` 写入 `tool` 行 + `user` 行，后续按普通请求继续跑。
-
-当前恢复机制仍基于消息序列拼接，并非 LangGraph Checkpointer 恢复。
-
----
-
-## 7. 记忆机制（当前）
-
-- 当前主链仍使用 `chatMemoryService.getMemories()/extract()`；
-- 在 `sendMessage/sendMessageStream` 末尾以 `setImmediate` 触发 `chatMemoryService.extract(sessionId)`；
-- `agent/queue/bullMqProducer.js` 为队列原型，尚未接入主请求流程。
-
----
-
-## 8. 遥测（`tracer.js`）
-
-当前链路已有 trace/span/generation 打点（如 `FC_Loop`、`DeepSeek_FC_Step`、`Tool_<name>`、`SSE_Stream`）。  
-Langfuse 指标与评测框架以实际打点字段为准，详见计划文档附录 D。
-
----
-
-## 9. 维护规则
-
-- 编排流程、模式开关、SSE phase 语义有变更时，同步更新本文。
-- 意图或工具映射变化，优先更新 [10-EXECUTIVE-CHAT-INTENTS-TOOLS.md](./10-EXECUTIVE-CHAT-INTENTS-TOOLS.md) 并在本文补流程影响。
-- 若后续切到 LangGraph 主链，本文需整体改写为 Graph 节点级流程，并同步 `09/12`。
+在引入 LangGraph 之前，AgentRunner 依赖自己写的 `while` 循环来管理多轮 FC 调用：
+1. `chatAgentRunner.run()` 是入口。
+2. 内部根据 `CHAT_AGENT_MODE` 决定使用 `runIntentRouting`（规则映射）或 `runFunctionCalling`（动态调用）。
+3. 循环校验工具执行结果，通过 `streamFormatCallbacks.onDelta` 手动发射 `tool_start` 和 `reasoning`。
+4. HITL 和多步防死循环在这套旧架构下较为脆弱，因此已被 LangGraph 替代。

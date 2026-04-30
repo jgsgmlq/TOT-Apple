@@ -4,7 +4,8 @@ const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmT
 
 // 路由条件分支
 const routeAfterRouter = (state) => {
-  if (state.mode === "deny" || state.global_safety_decision === "deny") return "deny";
+  // mode 是路由唯一真值源（chat_only | tool_action | deny）
+  if (state.mode === "deny") return "deny";
   if (state.mode === "chat_only") return "chat_only";
   if (state.mode === "tool_action") return "tool_action";
   return "chat_only"; // default

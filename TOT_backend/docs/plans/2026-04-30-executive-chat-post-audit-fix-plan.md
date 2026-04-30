@@ -855,6 +855,51 @@ type ResumePayload = {
 - [ ] 文档里不再把 `getProjectStatus` 当作真实工具名。
 - [ ] 文档明确 LangGraph 接入层级和 legacy 保留范围。
 
+### Task 6.5 Langfuse 工具调用观测字段对照表（新增）
+
+**目标：** 让排障时能直接从 Trace 判断“LLM 决定了哪些工具、实际执行了哪些工具、每个工具是否成功与耗时”。
+
+#### A. Root Trace（`Executive_Chat_Request`）字段
+
+| 字段 | 来源 | 含义 |
+|---|---|---|
+| `metadata.intent` | `finalState.intent` | 本轮最终意图（如 `project_status`） |
+| `metadata.selected_tier` | `finalState.selected_tier` | 路由层级（L2/L3/L4） |
+| `metadata.fc_steps_used` | `finalState.fc_super_step_count` | FC 超步数计数 |
+| `metadata.repair_attempts` | `finalState.fc_repair_attempts` | 参数修复次数 |
+| `metadata.tool_names` | `finalState.calledTools` 去重 | 本轮实际执行过的工具名列表 |
+| `metadata.tool_call_count` | `max(calledTools.length, toolResults.length)` | 本轮工具调用规模（汇总值） |
+
+#### B. LLM 决策 Span（`LLM_Decide_Tools`）字段
+
+| 字段 | 含义 |
+|---|---|
+| `input.candidateTools` | `ToolRetrieve` 提供给 LLM 的候选工具 |
+| `input.selectedTier` | 当前路由 tier |
+| `output.toolCallNames` | LLM 实际产出的 tool call 名称 |
+| `output.toolCallCount` | LLM 本轮决策调用数 |
+| `metadata.step` / `metadata.maxSteps` | 当前 FC 步数与上限 |
+
+#### C. 工具执行 Span（`Tool_Call:<toolName>`）字段
+
+| 字段 | 含义 |
+|---|---|
+| `input.toolCallId` | tool call 唯一 ID（用于跨节点关联） |
+| `input.toolName` | 执行的内部工具名 |
+| `input.argsHash` | 参数哈希（避免明文参数泄漏） |
+| `input.argFields` | 参数字段名列表（不上报值） |
+| `metadata.namespace` | 工具命名空间（默认 `executive_chat`） |
+| `metadata.selectedTier` | 调用时的 tier |
+| `metadata.status` | `success` / `error` |
+| `metadata.errorCode` | 失败时的错误码 |
+| `output` | 执行结果预览（脱敏 + 截断） |
+
+**验收：**
+
+- [ ] 可以仅凭 root trace 的 `tool_names` + `tool_call_count` 快速判断该轮是否执行了工具。
+- [ ] 可以通过 `LLM_Decide_Tools` 与 `Tool_Call:*` 对比“模型决策工具”与“实际执行工具”差异。
+- [ ] 工具失败时可从 `Tool_Call:*` 看到 `status=error` 与 `errorCode`，无需回看后端原始日志。
+
 ---
 
 ## 13. 推荐提交顺序

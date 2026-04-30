@@ -2130,11 +2130,20 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   }
   ```
   **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
-  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify"|"error", "reasoningLevel": "summary" }`。
-    - `reasoningLevel`：仅当 `phase="reasoning"` 时出现，目前固定为 `"summary"` 表示已脱敏摘要。
-    - `tool_start/end` 时 `text` 为工具名。
-    - `clarify` 时 `text` 为消歧请求 JSON（含备选项/参数补全提示），前端应展示选择 UI。
-  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "...", "toolName"?: "...", "status"?: "...", "reasoningLevel"?: "summary" }`。
+  
+  **SSE Phase 枚举表：**
+
+  | Phase | 说明 | `text` 字段内容 | 附加字段 |
+  |---|---|---|---|
+  | `reasoning` | 思维链 / 推理过程 | Token 片段 | `reasoningLevel` |
+  | `content` | 最终答复正文 | Token 片段 | - |
+  | `tool_start` | 工具开始执行 | 工具名称 | `toolName` |
+  | `tool_end` | 工具执行结束 | - | `status` |
+  | `clarify` | HITL 挂起（需消歧/补参） | `InterruptPayload` JSON | - |
+  | `error` | 链路异常 | 错误描述文本 | - |
+
+  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object, "responseTime": number, "contextId": "string", "timestamp": "string" }, "requestId": "..." }`。
   - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
   - **实现说明**：当前流式消息与 `resume` 路由均以 `stream=true` 或 `stream="langgraph"` 进入 LangGraph 引擎；`clarificationResponse.toolCallId` 需要与上一次工具调用 ID 对齐。
 
@@ -2163,24 +2172,48 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ### 6.2.1 恢复聊天会话（Resume HITL）**P1**
 
-- **接口名称**：恢复 Executive Chat 会话（HITL 恢复）
 - **接口路径**：`/chat/executive/sessions/{sessionId}/resume`
 - **请求方法**：POST
-- **请求头**：需携带通用请求头（Role=executive）
-- **路径参数**：sessionId（必填）
+- **请求头**：`Authorization: Bearer {token}`
 - **请求体**：
   ```json
   {
-    "resumePayload": {      // 消歧选择或补充参数
-      "action": "string",   // 动作类型，如 "select_option"
-      "value": "any"        // 选择的值
+    "resumePayload": { 
+      "resume_type": "slot_fill" | "intent_shift" | "cancel",
+      "selected_option_id": "string", // 选中项 ID
+      "value": "any",                // 选中的原始值或输入文本
+      "user_text": "string",         // 用于 intent_shift 的用户输入
+      "toolCallId": "string"         // 关联的工具 ID
     },
-    "stream": true          // 必须为 true 或 "langgraph"
+    "stream": true
   }
   ```
-- **响应体**：同 **§6.2** 流式响应。
-- **接口说明**：当 Agent 进入 `clarify` (HITL) 状态挂起后，前端通过此接口提交用户选择或补参结果以恢复图执行。`resumePayload` 会被作为结构化 tool 结果写回图状态，建议字段为 `resume_type`、`value`，并可透传 `toolCallId`。
-- **权限要求**：仅 executive；且 `sessionId` 必须属于 `req.user.id`
+
+#### 附：HITL 类型定义
+
+**InterruptPayload (由后端在 `phase: clarify` 发送)**
+```json
+{
+  "type": "select" | "input" | "confirm",
+  "reason": "low_confidence_entity" | "missing_required_param" | "custom",
+  "prompt": "请选择您要查询的门店",
+  "options": [
+    { "id": "string", "label": "string", "value": "any", "meta": { "intent_shift": boolean } }
+  ],
+  "resume_token": "call_abc123", // 必须在 resume 时传回作为 toolCallId 或 token
+  "context": { "missingFields": ["string"] }
+}
+```
+
+**ResumePayload (前端回传)**
+```json
+{
+  "resume_type": "slot_fill",      // slot_fill: 补参数; intent_shift: 切意图; cancel: 取消
+  "value": "上海陆家嘴店",
+  "selected_option_id": "opt_1",
+  "toolCallId": "call_abc123"
+}
+```
 
 ### 6.2.2 删除Executive Chat会话**P1**
 

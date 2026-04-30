@@ -104,11 +104,48 @@ function buildSseErrorPayload(message, code = 'CHAT_500', status = 500, requestI
   };
 }
 
+function isLikelyClientAbortError(err, abortSignal, sseClientAborted) {
+  const msg = typeof err?.message === 'string' ? err.message : '';
+  if (err?.name === 'AbortError') return true;
+  if ((abortSignal?.aborted || sseClientAborted) && /abort/i.test(msg)) return true;
+  return false;
+}
+
+function buildStreamAbortDiagnostics(err, req, res, abortSignal, sseClientAborted) {
+  return {
+    errName: err?.name || null,
+    errMessage: err?.message || null,
+    errCode: err?.code || null,
+    errStack: err?.stack ? String(err.stack).split('\n').slice(0, 6).join(' | ') : null,
+    errCtor: err?.constructor?.name || null,
+    signalAborted: !!abortSignal?.aborted,
+    signalReason: abortSignal?.reason ? String(abortSignal.reason).slice(0, 200) : null,
+    sseClientAborted: !!sseClientAborted,
+    reqAborted: !!req?.aborted,
+    reqDestroyed: !!req?.destroyed,
+    reqComplete: !!req?.complete,
+    resWritableEnded: !!res?.writableEnded,
+    resHeadersSent: !!res?.headersSent,
+  };
+}
+
 function extractLangGraphInterrupt(finalState) {
   const interrupts = finalState && finalState.__interrupt__;
   if (!Array.isArray(interrupts) || interrupts.length === 0) return null;
   const first = interrupts[0];
   return first?.value || first || null;
+}
+
+function extractToolMetaForTrace(finalState) {
+  const calledTools = Array.isArray(finalState?.calledTools) ? finalState.calledTools.filter(Boolean) : [];
+  const toolResults = finalState?.toolResults && typeof finalState.toolResults === 'object'
+    ? Object.values(finalState.toolResults)
+    : [];
+  const toolCallCount = Math.max(calledTools.length, toolResults.length);
+  return {
+    toolNames: Array.from(new Set(calledTools)),
+    toolCallCount,
+  };
 }
 
 function buildClarifySsePayload(interruptPayload, requestId) {
@@ -543,13 +580,16 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     const assistMsgId = finalState.finalMessageId || nanoid();
 
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+      const { toolNames, toolCallCount } = extractToolMetaForTrace(finalState);
       trace.update({
         output: finalMarkdown,
         metadata: {
           selected_tier: finalState.selected_tier,
           fc_steps_used: finalState.fc_super_step_count,
           repair_attempts: finalState.fc_repair_attempts,
-          intent: finalState.intent
+          intent: finalState.intent,
+          tool_names: toolNames,
+          tool_call_count: toolCallCount,
         }
       });
     }
@@ -574,8 +614,9 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     return result;
 
   } catch (err) {
-    if (err.name === 'AbortError' || err.message?.includes('abort')) {
-      logger.info('chat_stream_langgraph_aborted', { sessionId });
+    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, abortController.signal, sseClientAborted);
+    if (isLikelyClientAbortError(err, abortController.signal, sseClientAborted)) {
+      logger.info('chat_stream_langgraph_aborted', { sessionId, ...abortDiagnostics });
       endSpan(sseSpan, {
         output: null,
         level: 'WARNING',
@@ -585,9 +626,19 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       return;
     }
     
-    logger.error('chat_langgraph_resume_error', { sessionId, error: err.stack });
+    logger.error('chat_langgraph_resume_error', {
+      sessionId,
+      error: err.stack,
+      ...abortDiagnostics,
+    });
     endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
-    wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+    if (res.headersSent) {
+      try { wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
+      try { res.end(); } catch (_) {}
+      err._sseResponseSent = true;
+    } else {
+      wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+    }
     throw err;
   }
 }
@@ -685,12 +736,16 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       regionScope 
     };
 
-    const thread = { 
-      configurable: { 
-        thread_id: sessionId,
+    const thread = {
+      configurable: {
+        // 每次请求一个独立 thread_id，避免复用上一轮 checkpoint 把 fc_super_step_count
+        // 等中间状态带进来导致 fc_CheckSteps 直接判超限、跳过 fc_LlmToolCallStep。
+        // 历史对话上下文已经由 loadContext/loadFormattedHistory 从 chat_messages 表重建，
+        // 不依赖 LangGraph checkpoint 续接。resume 路径仍用稳定 thread_id（在另一个函数里）。
+        thread_id: `${sessionId}:${nanoid()}`,
         sseEmitter,
         // 将外层建好的 root TraceId 注入，好让子节点（Router 和 FC模型）生成的 Span 都挂在这棵树下
-        traceId: trace ? trace.id : undefined 
+        traceId: trace ? trace.id : undefined
       },
       signal: abortController.signal
     };
@@ -711,13 +766,16 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     const assistMsgId = finalState.finalMessageId || nanoid();
 
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
+      const { toolNames, toolCallCount } = extractToolMetaForTrace(finalState);
       trace.update({
         output: finalMarkdown,
         metadata: {
           selected_tier: finalState.selected_tier,
           fc_steps_used: finalState.fc_super_step_count,
           repair_attempts: finalState.fc_repair_attempts,
-          intent: finalState.intent
+          intent: finalState.intent,
+          tool_names: toolNames,
+          tool_call_count: toolCallCount,
         }
       });
     }
@@ -752,8 +810,9 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     return result;
 
   } catch (err) {
-    if (err.name === 'AbortError' || err.message?.includes('abort')) {
-      logger.info('chat_stream_langgraph_aborted', { sessionId });
+    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, abortController.signal, sseClientAborted);
+    if (isLikelyClientAbortError(err, abortController.signal, sseClientAborted)) {
+      logger.info('chat_stream_langgraph_aborted', { sessionId, ...abortDiagnostics });
       endSpan(sseSpan, {
         output: null,
         level: 'WARNING',
@@ -770,12 +829,38 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
           metadata: { status: 'aborted', reason: 'client_abort' },
         });
       }
-      return;
+      // Abort 路径也要 throw，否则上层（如 regenerate wrapper）的 catch 不会触发，
+      // 导致 restoreOldMessage 跳过、旧消息永久丢失、用户再点重新生成会 400。
+      // 同时必须先发 event:error 再 res.end()——否则前端 fetch 会拿到空 body 200，
+      // streamSsePostJson 的 reader.read() 立刻 done，onError/onComplete 都没机会调，
+      // 上层 promise 永远 pending，UI 转圈卡死。发了 event:error 前端 onError 才能触发，
+      // handleRegenerate 的 catch 才能 toast 失败 + 解锁 isRegenerating。
+      try {
+        wrappedSend('error', buildSseErrorPayload('请求被中断', 'CHAT_ABORT', 499, req.requestId));
+      } catch (_) {}
+      try { res.end(); } catch (_) {}
+      err._sseResponseSent = true;
+      err._abortedAfterDelete = true;
+      throw err;
     }
-    
-    logger.error('chat_langgraph_stream_error', { sessionId, error: err.stack });
+
+    logger.error('chat_langgraph_stream_error', {
+      sessionId,
+      error: err.stack,
+      ...abortDiagnostics,
+    });
     endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
-    wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+    // SSE 已发 headers 时，先把 SSE error 事件写出去并 res.end()，再 throw 让上层（如 regenerate
+    // wrapper 的 catch）做兜底（如 restoreOldMessage）。在 err 上打 _sseResponseSent 标记，
+    // 路由层 error middleware 看到这个标记就不要再 res.status(500).json(...) 了，
+    // 否则会触发 ERR_HTTP_HEADERS_SENT，前端拿到的就是 500 而非干净的 SSE error。
+    if (res.headersSent) {
+      try { wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
+      try { res.end(); } catch (_) {}
+      err._sseResponseSent = true;
+    } else {
+      wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+    }
     throw err;
   }
 }
@@ -964,17 +1049,72 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     return;
   }
 
-  // 1. 删除旧消息及其反馈，避免历史堆叠
+  // 1. 删除旧消息（包括对应的 tool 消息）
+  // 注：项目自定义 db.transaction(fn) 会同步执行并返回结果，不能再 () 调用一次。
+  // 之前写成 `const doDelete = db.transaction(...); doDelete();` 直接 TypeError: doDelete is not a function。
+  //
+  // 同时为 sendMessageStreamLangGraph 失败做兜底：先快照旧消息与 feedback，
+  // 流式失败时尝试还原，避免出现「旧消息已删 + 新消息没生成 + 用户彻底丢失原回复」。
+  const oldMessageRow = db.get('SELECT * FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+  const oldFeedbackRows = db.all
+    ? db.all('SELECT * FROM chat_message_feedback WHERE message_id = ?', [messageId])
+    : [];
+
   db.transaction(() => {
     db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
     db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
   });
 
+  const restoreOldMessage = () => {
+    if (!oldMessageRow) return;
+    try {
+      db.transaction(() => {
+        db.run(
+          `INSERT OR IGNORE INTO chat_messages
+            (id, session_id, role, content, intent_type, tool_calls, tool_call_id, client_message_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            oldMessageRow.id,
+            oldMessageRow.session_id,
+            oldMessageRow.role,
+            oldMessageRow.content,
+            oldMessageRow.intent_type,
+            oldMessageRow.tool_calls,
+            oldMessageRow.tool_call_id,
+            oldMessageRow.client_message_id,
+            oldMessageRow.created_at,
+          ]
+        );
+        for (const fb of oldFeedbackRows || []) {
+          db.run(
+            `INSERT OR IGNORE INTO chat_message_feedback
+              (id, message_id, user_id, feedback_type, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [fb.id, fb.message_id, fb.user_id, fb.feedback_type, fb.created_at, fb.updated_at]
+          );
+        }
+      });
+      logger.warn('regenerate_old_message_restored', { sessionId, messageId });
+    } catch (restoreErr) {
+      logger.error('regenerate_restore_failed', {
+        sessionId,
+        messageId,
+        error: restoreErr.message,
+      });
+    }
+  };
+
   // 2. 将请求桥接到标准的 LangGraph stream，跳过 handleIncomingMessage 避免重复插入 user 消息
-  return await sendMessageStreamLangGraph(sessionId, userPrompt, userId, req, res, { 
-    skipIncomingMessage: true,
-    entryKind: 'regenerateLastAssistantStreamLangGraph'
-  });
+  try {
+    return await sendMessageStreamLangGraph(sessionId, userPrompt, userId, req, res, {
+      skipIncomingMessage: true,
+      entryKind: 'regenerateLastAssistantStreamLangGraph'
+    });
+  } catch (err) {
+    // 流式重新生成失败 —— 还原旧消息，保证用户至少能继续看到之前的回复并再次重试。
+    restoreOldMessage();
+    throw err;
+  }
 }
 
 // ─── regenerateLastAssistantStream ────────────────────────────────────────────

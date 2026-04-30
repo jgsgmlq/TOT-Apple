@@ -166,7 +166,6 @@ export function runExecRegenerateSseChat(
   onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<SendMessageResult> {
-  void onClarify;
   return new Promise((resolve, reject) => {
     let partialReply = '';
     let thinkingSnapshot = '';
@@ -219,10 +218,10 @@ export function runExecRegenerateSseChat(
  * SSE 流式对话（delta/done），将增量映射为与 Executive 一致的 payload。
  * `done` 时 `thinkingSnapshot` 取最后一帧 delta 的快照。
  */
-export function runExecStyleSseChat(
+export function runExecStyleSseChat<TInput = string>(
   streamFn: (
     sessionId: string,
-    content: string,
+    content: TInput,
     onDelta: (chunk: { text: string; phase?: string }) => void,
     onComplete: (data: SendMessageResult) => void,
     onClarify: (payload: ClarifyPayload) => void,
@@ -230,12 +229,11 @@ export function runExecStyleSseChat(
     streamOptions?: { signal?: AbortSignal }
   ) => Promise<void>,
   sessionId: string,
-  userContent: string,
+  userContent: TInput,
   onStreamingPatch: (payload: ExecStyleAiPayload) => void,
   onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<{ result: SendMessageResult; thinkingSnapshot: string }> {
-  void onClarify;
   const state = initExecStreamState();
   let lastSnapshot = '';
   return new Promise((resolve, reject) => {
