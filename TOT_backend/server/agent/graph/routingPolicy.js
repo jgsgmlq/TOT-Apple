@@ -15,9 +15,9 @@ const RoutingPolicy = {
   
   // 各档位执行参数约束
   tiers: {
-    L2_intent_fastpath: { max_super_steps: 1, tool_top_k: 2, max_repair_attempts: 1 },
-    L3_fc_guarded:      { max_super_steps: 3, tool_top_k: 3, max_repair_attempts: 2 },
-    L4_heavy_fc:        { max_super_steps: 5, tool_top_k: 5, max_repair_attempts: 3 }
+    L2_intent_fastpath: { max_super_steps: 2, tool_top_k: 2, max_repair_attempts: 1 },
+    L3_fc_guarded:      { max_super_steps: 4, tool_top_k: 3, max_repair_attempts: 2 },
+    L4_heavy_fc:        { max_super_steps: 6, tool_top_k: 5, max_repair_attempts: 3 }
   }
 };
 

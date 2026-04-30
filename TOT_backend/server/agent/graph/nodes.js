@@ -226,7 +226,7 @@ const toolRetrieve = async (state) => {
 
 const fc_CheckSteps = async (state) => {
   return { 
-    fc_current_step: state.fc_current_step + 1,
+    fc_super_step_count: (state.fc_super_step_count || 0) + 1,
     fc_next_action: '',
   };
 };
@@ -264,7 +264,7 @@ ${state.memoryContext || ''}`;
 
   const messagesToSend = [
     new SystemMessage(systemPrompt),
-    new HumanMessage(state.userMessage),
+    new HumanMessage(state.userMessage), // 始终包含用户的原始提问
     ...safeHistory
   ];
 
@@ -293,9 +293,41 @@ ${state.memoryContext || ''}`;
   const llm = isOverCap ? getFcModel() : getLlmWithTools(state.candidateTools);
   const signal = config?.signal;
 
+  if (isOverCap) {
+    messagesToSend.push(new SystemMessage("NOTICE: You have reached the maximum tool call budget. You MUST summarize the final answer based ONLY on the data already collected. DO NOT request any more tools. DO NOT output any <｜｜DSML｜｜> tags."));
+  }
+
   try {
     const aiMessage = await llm.invoke(messagesToSend, { callbacks, signal });
     
+    // 兼容 DeepSeek 偶尔输出的 DSML (DeepSeek Markup Language)
+    if (typeof aiMessage.content === 'string' && aiMessage.content.includes('<｜｜DSML｜｜tool_calls>')) {
+      if (!isOverCap) {
+        const match = aiMessage.content.match(/<｜｜DSML｜｜invoke\s+name=["“”]([^"“”]+)["“”]>[\s\S]*?(?:<｜｜DSML｜｜parameter\s+name=["“”]([^"“”]+)["“”]\s+string=["“”](true|false)["“”]>([^<]*)<\/｜｜DSML｜｜parameter>)?[\s\S]*?<\/｜｜DSML｜｜invoke>/);
+        if (match && match[1]) {
+           const toolName = match[1];
+           let args = {};
+           if (match[2]) { // If it has at least one param
+             args[match[2]] = match[4];
+           }
+           
+           if (!aiMessage.tool_calls) aiMessage.tool_calls = [];
+           aiMessage.tool_calls.push({
+             name: toolName,
+             args: args,
+             id: `call_${Date.now()}_dsml`
+           });
+           console.log(`[fc_LlmToolCallStep] 拦截到 DSML 工具调用并成功修复: ${toolName}`);
+        }
+      } else {
+        // 如果已经超限，清理掉它乱吐出来的乱码，免得用户看到
+        aiMessage.content = aiMessage.content.replace(/<｜｜DSML｜｜tool_calls>[\s\S]*?<\/｜｜DSML｜｜tool_calls>/g, '').trim();
+        if (!aiMessage.content) {
+          aiMessage.content = "我已收集了相关数据，但系统限制导致无法完成进一步分析。建议缩小查询范围重试。";
+        }
+      }
+    }
+
     // 如果没有 tool_calls，标记为最终回复
     const hasTools = aiMessage.tool_calls && aiMessage.tool_calls.length > 0;
     const finalUpdates = { messages: [aiMessage] };
@@ -431,7 +463,9 @@ const fc_ValidateParams = async (state) => {
       };
     }
 
-    if (meta && meta.schema) {
+    if (!meta) {
+      violations.push({ tool_call_id: toolCall.id, field: 'toolName', code: 'INVALID_TOOL', message: `工具 ${toolName} 不存在或不可用，请使用候选工具列表中的工具。`, repairable: false });
+    } else if (meta.schema) {
       const schema = meta.schema;
       const required = Array.isArray(schema.required) ? schema.required : [];
       const properties = schema.properties || {};
@@ -582,7 +616,7 @@ const fc_ExecuteTool = async (state, config) => {
 const fc_MergeToolResults = async (state) => {
   const lastMsg = state.messages[state.messages.length - 1];
   if (!lastMsg || !lastMsg.tool_calls || lastMsg.tool_calls.length === 0) {
-    return { fc_super_step_count: state.fc_super_step_count + 1 };
+    return { fc_next_action: '' };
   }
 
   const newMessages = [];
@@ -602,7 +636,7 @@ const fc_MergeToolResults = async (state) => {
     }
   }
 
-  return { fc_super_step_count: state.fc_super_step_count + 1, messages: newMessages, pending_tool_calls: [], fc_next_action: '' };
+  return { messages: newMessages, pending_tool_calls: [], fc_next_action: '' };
 };
 
 const { interrupt } = require("@langchain/langgraph");

@@ -48,7 +48,7 @@ const ExecChatGraphState = Annotation.Root({
     default: () => [] 
   }),
   
-  selected_tier: Annotation({ reducer: (x, y) => y ?? x, default: () => "L3_fc_guarded" }),
+  selected_tier: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => "L3_fc_guarded" }),
   fc_super_step_count: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
   fc_current_step: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
   fc_repair_attempts: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),

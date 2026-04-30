@@ -21,10 +21,17 @@ const routeAfterFcCheckSteps = (state) => {
   if (nextAction === 'execute') return 'fc_ExecuteTool';
   if (nextAction === 'merge') return 'fc_MergeToolResults';
 
-  if (state.fc_super_step_count === 0) return 'fc_LlmToolCallStep';
-
+  // 必须保证只要还没有超过 maxSteps，每次 CheckSteps 都默认回流到 LLM 节点，以消化 tool result
   const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
-  if (state.fc_super_step_count >= maxSteps) return 'FinalResponseStep';
+  
+  // 如果刚合并完工具结果，必须给 LLM 一次机会去总结，不管是不是超出了 maxSteps
+  const lastMsg = state.messages[state.messages.length - 1];
+  const isJustMerged = lastMsg && lastMsg._getType() === 'tool';
+  
+  if (state.fc_super_step_count >= maxSteps && !isJustMerged) {
+    return 'FinalResponseStep';
+  }
+  
   return 'fc_LlmToolCallStep';
 };
 
