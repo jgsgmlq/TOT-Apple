@@ -495,7 +495,7 @@ const finalResponseStep = async (state) => {
   };
 };
 
-const persistAndEmit = async (state) => {
+const persistAndEmit = async (state, config) => {
   // Fire & Forget 发布 MemoryIngestRequested 事件
   memoryQueueProducer.publishMemoryIngestion({
     userId: state.userId || "mock_user_1",
@@ -504,14 +504,27 @@ const persistAndEmit = async (state) => {
     finalResponse: state.finalResponse
   }).catch(e => console.error("发布记忆事件失败:", e));
   
-  // T5 模拟：在流程结束时打点 Langfuse Metadata (或 Trace update)
-  console.log(`[T5 观测打点] Trace Metadata Update:`);
-  console.log(`  - selected_tier: ${state.selected_tier}`);
-  console.log(`  - fc_steps_used: ${state.fc_super_step_count}`);
-  console.log(`  - repair_attempts: ${state.fc_repair_attempts}`);
-  console.log(`  - intent: ${state.intent}`);
-  if (state.finalResponse && state.finalResponse.includes("SYSTEM_ERROR")) {
-    console.log(`  - error_code: TOOL_PARAM_ERROR`);
+  // T5 阶段二: 如果存在全局挂载的 trace，我们其实已经在 chatService 外部更新了。
+  // 为了独立测试时（如 test 脚本直接跑 invoke）依然有记录，我们尝试借用 lfCallback 来 update trace。
+  const lfCallback = getLangfuseCallback(config);
+  if (lfCallback && lfCallback.traceId) {
+    const { Langfuse } = require('langfuse');
+    const lf = new Langfuse({
+      publicKey: process.env.LANGFUSE_PUBLIC_KEY,
+      secretKey: process.env.LANGFUSE_SECRET_KEY,
+      baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST
+    });
+    // 直接复用外部创建好的 trace 更新元数据
+    lf.trace({ id: lfCallback.traceId }).update({
+      metadata: {
+        selected_tier: state.selected_tier,
+        fc_steps_used: state.fc_super_step_count,
+        repair_attempts: state.fc_repair_attempts,
+        intent: state.intent,
+        error_code: (state.finalResponse && state.finalResponse.includes("SYSTEM_ERROR")) ? "TOOL_PARAM_ERROR" : undefined
+      }
+    });
+    lf.flushAsync().catch(() => {});
   }
 
   return { ...state };
