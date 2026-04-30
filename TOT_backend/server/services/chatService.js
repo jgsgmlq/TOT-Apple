@@ -483,13 +483,14 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     const assistMsgId = nanoid();
     const finalContent = storageContentFromAgentResult(result);
     try {
-      db.transaction(() => {
+      const trx = db.transaction(() => {
         db.run(
           'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
           [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
         );
         db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-      })();
+      });
+      trx();
     } catch (err) {
       logger.error('chat_messages_insert_error', { sessionId, error: err.stack });
     }
@@ -651,13 +652,14 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       input: { sessionId, assistMsgId, intentType: result._intentType ?? null },
     });
     try {
-      db.transaction(() => {
+      const trx = db.transaction(() => {
         db.run(
           'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
           [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
         );
         db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-      })();
+      });
+      trx();
       endSpan(persistAsstSpan, { output: 'ok' });
     } catch (err) {
       endSpan(persistAsstSpan, { level: 'ERROR', statusMessage: err.message });
