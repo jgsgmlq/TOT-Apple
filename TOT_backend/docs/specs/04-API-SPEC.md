@@ -1,5 +1,11 @@
 # ToT API 接口定义文档
 
+### v1.5.5（2026-04-30）
+
+- **任务合集按平台颗粒度统计**：看板 **`GET /dashboard/overview`、`/heatmap`、`/store-rank`、`/warnings`、`/trend`、`/nudge-conversion`** 支持可选查询参数 **`platform`**（与 `PUT /assignments/:id/status` 的 `complete_platform` 使用同一套平台别名解析，实现见 **`server/utils/platforms.js`**）。传入后：完成/未完成人数、完成率、趋势与催办转化等以对应 **`task_assignments.*_completed`** 列为「完成」判定；**进行中 / 待开始** 与 **`employeeReadCount`** 与 **`read_receipts.source = task_detail_open:{平台标签}`** 精确匹配（如 `task_detail_open:MyPAL`）。**未传 `platform`** 时：**`employeeReadCount`** 仍为 **`source = 'task_detail_open'`**（精确，**不含**带 `:平台` 后缀的回执——与旧版「整单已读」写入一致）。**`taskReachRate`**：未传 `platform` 时为登录 / `received_at` 条件；传 `platform` 时为「存在该 **`source`** 的平台详情已读回执」的 **EXISTS** 子查询。非法 `platform` → **400 `DASH_006`**。成功响应 **`data.platform`** 回显规范化标签（`MyPAL` / `SmartSales` / `AiDemo` / `LiveBroadcast`）或 **`null`**（未传参时与旧版一致）。
+- **已读回执按平台分源**：**`POST /assignments/:id/viewed`** 支持可选 **`?platform=`**；写入 **`read_receipts.source`** 为 **`task_detail_open`**（未传平台）或 **`task_detail_open:{平台标签}`**。同一用户、同一 `task_assigned` 事件可对不同平台各有一条回执；**`UNIQUE(event_id, user_id, source)`**。传 `platform` 时须任务 **`tasks.has_*`** 已开启该平台，否则 **400 `ASSIGN_015`**；非法值 **400 `ASSIGN_012`**。响应体增加 **`source`**、**`platform`**；看板 WS **`dashboard_updated`** 的 **`data`** 可含 **`platform`**。
+- **未读与列表已读判定**：**`GET /events/unread-count`**、**`GET /events`** 对 `read_receipts` 使用 **`(event_id,user_id)` 聚合子查询**（同人多 `source` 时取最早 **`read_at`**），只要任一来源已读即不计未读。
+
 ### v1.5.4（2026-04-27）
 
 - **智能洞察模块解耦**：为配合前端布局拆分，新增了独立的 `conversion_funnel` (转化漏斗) 洞察类型。原先与北极星指标共享的漏斗分析现在拥有独立的持久化缓存和专用的 AI Prompt 诊断；并将原 `funnel_alerts` (预警中心) 的 AI 分析口径完全缩窄至专注逾期率与催办有效性转化率。
@@ -32,7 +38,7 @@
 
 ### v1.4.22（2026-04-14）
 
-- **已读主路径**：移除 **`POST /api/v1/events/{eventId}/read`**（原 `notification_click`）。员工侧 **`POST /api/v1/assignments/{assignmentId}/viewed`** 为唯一写入 **`read_receipts`（`source=task_detail_open`）** 的入口；若此前无 `task_assigned` 通知行（如 batch-create），服务端在事务内**补建**与 dispatch 同 **`dedupe_key`** 的 `notification_events` 后再写回执。新建回执时向看板推送 **`operationType: assignment_viewed`**。
+- **已读主路径**：移除 **`POST /api/v1/events/{eventId}/read`**（原 `notification_click`）。员工侧 **`POST /api/v1/assignments/{assignmentId}/viewed`** 为写入 **`read_receipts`** 的主入口（**`source`** 为 **`task_detail_open`** 或 **`task_detail_open:{平台}`**，见 **v1.5.5**）；若此前无 `task_assigned` 通知行（如 batch-create），服务端在事务内**补建**与 dispatch 同 **`dedupe_key`** 的 `notification_events` 后再写回执。新建回执时向看板推送 **`operationType: assignment_viewed`**。
 
 ### v1.4.21（2026-04-14）
 
@@ -1272,9 +1278,9 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           //   event_type IN ('task_assigned', 'nudge_*') → ta.completed_at（未完成时为 null）
           //   event_type = 'task_updated'               → 始终为 null
           "resolvedAt": "string",
-          // readStatus/readAt：JOIN read_receipts WHERE event_id=? AND user_id=当前用户
+          // readStatus/readAt：按 (event_id,user_id) 聚合 read_receipts（多 source 取最早 read_at）；任一来源已读即已读
           "readStatus": false,     // 当前用户是否已读
-          "readAt": "string",      // read_receipts.read_at，未读时为 null
+          "readAt": "string",      // 最早 read_at，未读时为 null
           "initiatorId": "string", // notification_events.initiator_id（users.id，串化），系统触发时为 null
           "createdAt": "string"    // notification_events.created_at（ISO8601）
         }
@@ -1290,7 +1296,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：获取通知类和催办类系统事件列表。`isActive`/`resolvedAt` 为计算值（不存于 DB，由服务端 JOIN `task_assignments.status` 和 `completed_at` 推导）。`readStatus`/`readAt` 通过 `read_receipts` JOIN 当前用户计算。**预警数据（§5.5）不在本接口，从 `task_assignments` 实时聚合。**
+- **接口说明**：获取通知类和催办类系统事件列表。`isActive`/`resolvedAt` 为计算值（不存于 DB，由服务端 JOIN `task_assignments.status` 和 `completed_at` 推导）。`readStatus`/`readAt` 对 **`read_receipts` 按 `(event_id,user_id)` 聚合**（同一事件多平台回执时取最早 **`read_at`**），只要有一条回执即视为已读。**预警数据（§5.5）不在本接口，从 `task_assignments` 实时聚合。**
 - **权限要求**：
   - central：所有事件
   - employee：仅本人事件（`target_user_id = 当前 Employee-Id`）
@@ -1299,11 +1305,15 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ### 4.3 记录任务详情已读（打开任务详情）**P0**
 
-- **接口名称**：记录任务详情打开（task_detail_open）
+- **接口名称**：记录任务详情打开（task_detail_open / 按平台分源）
 - **接口路径**：`/assignments/{assignmentId}/viewed`
 - **请求方法**：POST
 - **请求头**：需携带通用请求头
 - **路径参数**：assignmentId（必填，task_assignments.id）
+- **查询参数**：
+  | 参数名 | 类型 | 必选 | 说明 |
+  |--------|------|------|------|
+  | platform | string | 否 | 任务合集平台：与 **`PUT /assignments/:id/status`** 的 **`complete_platform`** 使用同一套别名（**`server/utils/platforms.js`**），如 `mypal`、`SmartSales`。不传则回执 **`source = task_detail_open`**（与旧版「整单已读」一致）；传入则 **`source = task_detail_open:{平台标签}`**（如 `task_detail_open:MyPAL`）。非法值 **400 `ASSIGN_012`**；任务未开启对应 **`tasks.has_*`** 时 **400 `ASSIGN_015`**。 |
 - **请求体**：无
 - **响应体（成功）**：
   ```json
@@ -1314,7 +1324,9 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "assignmentId": "string",
       "receivedAt": "string",   // task_assignments.received_at（首次打开时写入，已有则返回原值）
       "receiptId": "string",    // read_receipts.id（本次写入或已有；无 Employee-Id 时可能为 null）
-      "alreadyViewed": false    // true=已经打开过（received_at 已有值），false=首次打开
+      "alreadyViewed": false,   // true=已经打开过（received_at 已有值），false=首次打开
+      "source": "task_detail_open",           // 或 "task_detail_open:MyPAL" 等，与 DB 写入一致
+      "platform": "MyPAL"                     // 规范化标签；未传 platform 时为 null
     },
     "requestId": "string"
   }
@@ -1322,15 +1334,17 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 - **接口说明**：用户打开任务详情页时前端自动调用。服务端在**同一事务**内：
   1. 若 `task_assignments.received_at` 为 NULL，写入当前时间并更新 `updated_at`。
   2. **保证**存在与该 assignment 对应的 **`task_assigned`** 通知行：若尚无，则插入 `notification_events`（`dedupe_key` 与 **`POST /tasks/{id}/dispatch`** 一致：`task:{taskId}:user:{userId}`，与 batch-create 等路径补数后对齐）。
-  3. 写入 `read_receipts`（`source='task_detail_open'`）。`user_id` 来自请求头 `Employee-Id`。`UNIQUE(event_id, user_id)` 保证幂等。
+  3. 写入 `read_receipts`：**`source`** 为 **`task_detail_open`**（未传 `platform`）或 **`task_detail_open:{sourceLabel}`**（见上表）。`user_id` 来自请求头 `Employee-Id`。**`UNIQUE(event_id, user_id, source)`** 保证同一用户、同一事件、同一来源幂等；不同平台可各有一条回执。
 
-  **这是 PRD §6.12「店员已读」统计口径的写入入口**（`employeeReadCount`/`managerReadCount` 等从 `read_receipts` + `source='task_detail_open'` 统计）。新建回执时服务端向看板 WebSocket 推送 `dashboard_updated`（`operationType: assignment_viewed`）。
+  **看板「已读人数」**：未传 **`platform`** 时 **`employeeReadCount` / `managerReadCount`** 仅统计 **`read_receipts.source = 'task_detail_open'`**（精确，与未带 `platform` 的 **`POST .../viewed`** 写入一致；**不含** `task_detail_open:MyPAL` 等）。传 **`platform`** 时与 **`task_detail_open:{标签}`** 精确匹配。新建回执时服务端向看板 WebSocket 推送 **`dashboard_updated`**（**`operationType: assignment_viewed`**，**`data`** 可含 **`platform`**）。
 
   > **已移除**：`POST /api/v1/events/{eventId}/read`（原 `notification_click`）。历史库中仍可能存在 `source='notification_click'` 的回执记录。
 - **权限要求**：仅 assignment 所属用户（`user_id` = 当前 Employee-Id）
 - **异常场景**：
   - 404：assignmentId 不存在
   - 403：非所属用户
+  - 400 **`ASSIGN_012`**：`platform` 非法
+  - 400 **`ASSIGN_015`**：任务未配置该合集平台
 
 ### 4.4 获取未读事件数量**P0**
 
@@ -1349,14 +1363,19 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：轻量级接口，专门用于铃铛角标展示当前用户的未读系统事件总数。**计算口径如下**：
+- **接口说明**：轻量级接口，专门用于铃铛角标展示当前用户的未读系统事件总数。**计算口径如下**（实现上对 **`read_receipts` 使用 `(event_id,user_id)` 子查询聚合**：同一用户、同一事件多条 `source` 时，只要存在任一回执即**不算未读**）：
 
   ```sql
   SELECT COUNT(*) FROM notification_events ne
-  LEFT JOIN read_receipts rr ON rr.event_id = ne.id AND rr.user_id = :currentUserId
+  LEFT JOIN (
+    SELECT event_id, user_id, MIN(read_at) AS read_at
+    FROM read_receipts
+    WHERE user_id = :currentUserId
+    GROUP BY event_id, user_id
+  ) rr ON rr.event_id = ne.id
   LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
   WHERE ne.target_user_id = :currentUserId
-    AND rr.id IS NULL   -- 未读
+    AND rr.read_at IS NULL   -- 未读（无任何 source 的回执）
     AND (
       -- task_assigned / nudge_* 事件：关联 assignment 未完成才计入铃铛
       (ne.event_type IN ('task_assigned', 'nudge_yellow', 'nudge_orange', 'nudge_red')
@@ -1506,6 +1525,16 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
 
 ## 5. 数据看板 API（Dashboard）
 
+### 5.0 可选 `platform`（任务合集平台颗粒度）**P0**
+
+与 **`PUT /assignments/:id/status`** 的 **`complete_platform`**、**`POST /assignments/:id/viewed`** 的 **`platform`** 使用同一解析逻辑（**`server/utils/platforms.js`**）。**合法别名示例**（大小写/空格/下划线在规范化后匹配）：`mypal` / `my pal`；`smartsell` / `smart sales`；`ai_demo` / `ai coach`；`live_broadcast` / `直播培训` 等。
+
+- **适用接口**：**`GET /dashboard/overview`**、**`/heatmap`**、**`/store-rank`**、**`/warnings`**、**`/trend`**、**`/nudge-conversion`**（均为可选查询参数 **`platform`**）。
+- **非法值**：**400**，**`code: DASH_006`**，`message` 含「platform 非法」。
+- **成功响应**：上述接口成功体 **`data`** 内均含 **`platform`**：**`null`**（未传参，与旧版整单口径一致）或规范化标签 **`MyPAL` / `SmartSales` / `AiDemo` / `LiveBroadcast`**。
+- **完成判定**：传 **`platform`** 时，「已完成」以对应 **`task_assignments.*_completed = 1`** 为准（不再仅用 **`status = 'completed'`**）；**`/dashboard/trend`** 的完成时间戳为 **`COALESCE(completed_at, updated_at)`**。
+- **进行中 / 待开始 / 触达已读（`taskReachRate`）**：传 **`platform`** 时，进行中/待开始依赖 **`read_receipts.source = task_detail_open:{平台标签}`** 的 **EXISTS**（与 assignment 关联）；**`taskReachRate`** 同条件。**未传 `platform`** 时：进行中/待开始仍为 **`status`** 口径；**`taskReachRate`** 为 **`last_login_at` / `received_at`**（**不**读 `read_receipts`）。**`employeeReadCount`** 见上文：未传参为 **`source = 'task_detail_open'`** 精确匹配。
+
 ### 5.1 获取总部看板概览数据**P0**
 
 - **接口名称**：获取看板概览数据
@@ -1521,6 +1550,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | format | string | 否 | 门店下钻：与 `stores.format` 比对 |
   | dealerName | string | 否 | 门店下钻：与 `stores.dealer_name` 比对 |
   | storeId | string | 否 | 门店下钻：等于 `stores.id` |
+  | platform | string | 否 | 任务合集平台过滤，语义见 **§5.0**；非法 **400 `DASH_006`** |
   > 下钻参数可组合，逻辑为 **AND**。均不传时全量（与旧版一致）。若需 **推送/已读** 与下钻范围一致，请同时传 **`taskId`**。
 - **响应体（成功）**：
   ```json
@@ -1530,12 +1560,13 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       // ★ 以下数据均从 task_assignments / notification_events / read_receipts 实时聚合
       "totalAssignments": 300, // COUNT(*) FROM task_assignments WHERE task_id=?
+      "platform": null,        // 或 "MyPAL" 等；与请求 platform 一致，见 §5.0
       "pushUserCount": 300,
       "employeeReadCount": 180,
       "totalReadCount": 180, 
 
       // 核心北极星指标
-      "completionRate": 72.0,       // 按 status='completed' 计算 (0-100)
+      "completionRate": 72.0,       // 未传 platform：status='completed'；传 platform：见 §5.0（*_completed）
       "completedCount": 216,
       "onTimeCompletionRate": 70,   // 按时完成率：completed_at <= ddl_at
       "avgCompletionTimeHours": 12.5, // 人均完成耗时 (从任务下发 created_at 到 completed_at)
@@ -1563,10 +1594,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：返回总部/Executive看板核心概览数据，按维度聚合，并包含PRD 6.12口径的推送人数/已读人数/真实发放率指标
+- **接口说明**：返回总部/Executive看板核心概览数据，按维度聚合，并包含PRD 6.12口径的推送人数/已读人数/真实发放率指标。**可选 `platform`** 时完成率、进行中/待开始、已读与 **`read_receipts`** 口径见 **§5.0**。
 - **权限要求**：central/executive（executive按权限返回对应区域数据）
 - **异常场景**：
   - 403：非总部/Executive角色
+  - 400 **`DASH_006`**：`platform` 非法
 
 ### 5.2 获取RTM热力图数据**P0**
 
@@ -1583,6 +1615,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
   | storeId | string | 否 | 同上 |
+  | platform | string | 否 | 任务合集平台，语义见 **§5.0** |
   > 下钻参数可组合（AND）；不传则全任务维度内全部门店（与旧版一致）。
 - **响应体（成功）**：
   ```json
@@ -1592,6 +1625,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "taskId": "string",
       "rtmLevel": "string",
+      "platform": null,
       "heatmapData": [
         {
           "rtmValue": "string",
@@ -1607,7 +1641,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：返回区域完成率热力图数据，支持不同层级聚合
+- **接口说明**：返回区域完成率热力图数据，支持不同层级聚合。**`platform`** 见 **§5.0**。
 - **权限要求**：central/executive
 
 ### 5.3 获取Top/Bottom 5门店数据**P0**
@@ -1626,6 +1660,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | format | string | 否 | 门店下钻 |
   | dealerName | string | 否 | 门店下钻 |
   | storeId | string | 否 | 门店下钻 |
+  | platform | string | 否 | 任务合集平台，语义见 **§5.0** |
 - **响应体（成功）**：
   ```json
   {
@@ -1634,6 +1669,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "taskId": "string",
       "type": "top",
+      "platform": null,
       "rankList": [
         {
           "storeId": "string",
@@ -1648,7 +1684,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：返回完成率Top/Bottom N门店数据
+- **接口说明**：返回完成率Top/Bottom N门店数据。**`platform`** 见 **§5.0**。
 - **权限要求**：
   - central/executive：所有门店
 
@@ -1720,6 +1756,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
   | storeId | string | 否 | 同上 |
+  | platform | string | 否 | 任务合集平台，语义见 **§5.0** |
 - **响应体（成功）**：
   ```json
   {
@@ -1728,6 +1765,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "data": {
       "taskId": "string",
       "type": "daily",
+      "platform": null,
       "date": "2026-04-03", // 仅 type=hourly 时有效
       "trendData": [
         {
@@ -1740,7 +1778,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：用于绘制完成趋势折线图与柱状图。
+- **接口说明**：用于绘制完成趋势折线图与柱状图。**`platform`** 时「新增完成」按该平台 **`_completed`** 与 **`COALESCE(completed_at, updated_at)`** 口径，见 **§5.0**。
 - **权限要求**：central/executive
 
 ### 5.5 获取预警列表**P0**
@@ -1761,12 +1799,14 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
   | storeId | string | 否 | 同上 |
+  | platform | string | 否 | 任务合集平台，语义见 **§5.0** |
 - **响应体（成功）**：
   ```json
   {
     "code": 200,
     "message": "success",
     "data": {
+      "platform": null,
       "list": [
         {
           // 预警数据从 task_assignments 实时聚合计算（无独立 alerts 存储表）
@@ -1782,10 +1822,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "completionRate": 45.0,   // 实体完成率（task_assignments），与 warningRate 不同
           "completedCount": 2,      // 已完成人数
           "totalCount": 5,          // 总应完成人数
-          "overdueCount": 3,        // 逾期未完成人数（status != 'completed' AND ddl_at < now）
+          "overdueCount": 3,        // 逾期：未「完成」且 ddl_at < now；传 platform 时「完成」见 §5.0
+          "riskCount": 3,           // 与 warningRate 分子一致（历史催办人数或未完成兜底）
           "triggerDesc": "距 Deadline 不足N小时，仍未完成（P1）", // N 为任务配置的 p1 小时（默认 48）
           "aiSuggestion": "建议总部发起红牌催办，需重点跟进", // MVP 阶段为模板文案，非 AI 实时生成
-          "calculatedAt": "string"  // 本次聚合计算时间（YYYY-MM-DD HH:MM:SS）
+          "updatedAt": "string"     // 实现字段名；列表项最后更新时间
         }
       ],
       "pagination": {
@@ -1798,10 +1839,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
-- **接口说明**：**预警无独立存储表**。按门店+任务聚合，分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致（P0阈值默认 24h，P1阈值默认 48h，P2时间占比默认 50%，已过期不计入任何临期/预警档）；未配置 `deadlineCrisis` 的任务不出现在预警列表。**`warningRate`** 与 §5.1 概览中对应 KPI **同一计算方式**，仅分子分母缩至该门店。MVP 阶段 `aiSuggestion` 为静态模板文案。
+- **接口说明**：**预警无独立存储表**。按门店+任务聚合，分级与 `auto_nudge_rules.deadlineCrisis` / `evaluateAndTriggerAutoNudges` 一致（P0阈值默认 24h，P1阈值默认 48h，P2时间占比默认 50%，已过期不计入任何临期/预警档）；未配置 `deadlineCrisis` 的任务不出现在预警列表。**`warningRate`** 与 §5.1 概览中对应 KPI **同一计算方式**，仅分子分母缩至该门店；传 **`platform`** 时「未完成/已完成」与 **§5.0** 一致。MVP 阶段 `aiSuggestion` 为静态模板文案。
 - **权限要求**：仅总部角色（central）
 - **异常场景**：
   - 400：warningLevel非法（非 p2/p1/p0）
+  - 400 **`DASH_006`**：`platform` 非法
   - 403：非总部角色
 
 ### 5.6 门店任务明细（下钻）**P0**
@@ -2024,16 +2066,18 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | pageNum | int | 否 | 页码，默认1 |
   | pageSize | int | 否 | 页大小，默认20 |
   | rtm / format / dealerName / storeId | string | 否 | 下钻过滤条件 |
+  | platform | string | 否 | 任务合集平台，语义见 **§5.0**；非法 **400 `DASH_006`** |
 - **业务规则**：
   - 本看板展示的是**历史累计发生过的事件事实**，不受任务进度实时变化导致“已消除”预警状态的影响。
   - **触发人数（nudged）**：历史上记录在 `notification_events` 表中的催办接收人数。
-  - **转化人数（converted）**：收到该级别预警后，在预警下发时间之后最终将 `status` 变更为 `completed` 的人数。如果同一个人在完成前收到过多次同一级别的预警，只计算1次转化。
+  - **转化人数（converted）**：收到该级别预警后，在预警 **`created_at`** 之后满足「完成」的人数。**未传 `platform`** 时：「完成」= **`task_assignments.status = 'completed'`** 且 **`completed_at > ne.created_at`**。**传 `platform`** 时：「完成」= 对应 **`_*_completed = 1`**（与 **§5.0** 一致，不再要求 `completed_at` 晚于预警时间）。同一人在完成前收到过多次同一级别预警时，**`COUNT(DISTINCT user_id)`** 只计 1 次转化。
 - **响应体（成功）**：
   ```json
   {
     "code": 200,
     "message": "success",
     "data": {
+      "platform": null,
       "list": [
         {
           "targetId": "string",
@@ -2050,6 +2094,8 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
     "requestId": "string"
   }
   ```
+
+- **异常场景**：400 **`DASH_006`**：`platform` 非法
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 

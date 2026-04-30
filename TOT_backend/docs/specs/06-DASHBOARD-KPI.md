@@ -1,6 +1,6 @@
 # 看板指标规格
 
-**版本:** 1.5.0 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-16
+**版本:** 1.5.5 | **PRD §5.3、§6.6、附录 F** | **更新日期:** 2026-04-30
 
 ---
 
@@ -29,7 +29,7 @@
 
 ## 筛选维度（overview / 部分聚合）
 
-`GET /dashboard/overview` 支持查询参数 **`taskId`**、**`rtm`**、**`format`**（均可选，组合为对 `task_assignments` + `JOIN stores` 的过滤）。未传 `taskId` 时，推送/已读等依赖 `notification_events.task_id` 的统计在实现中会按「全任务或 1=1」条件聚合（与 `04-API-SPEC` 说明一致）。
+`GET /dashboard/overview` 支持查询参数 **`taskId`**、**`rtm`**、**`format`**（均可选，组合为对 `task_assignments` + `JOIN stores` 的过滤）。**另支持可选 `platform`**（任务合集平台颗粒度）：与 **`04-API-SPEC` §5.0** 一致，影响完成/已读等 KPI 口径。未传 `taskId` 时，推送/已读等依赖 `notification_events.task_id` 的统计在实现中会按「全任务或 1=1」条件聚合（与 `04-API-SPEC` 说明一致）。
 
 ---
 
@@ -62,16 +62,16 @@
 ### 规模与进度
 
 - **totalAssignments：** 范围内 assignment 总数。
-- **completedCount / completionRate：** 完成数；`completionRate = ROUND(100 * completed / total)`，total=0 时为 0。
-- **onTimeCompletionRate：** `completed_at <= ddl_at` 的完成数 / total（整数百分比）。
-- **avgCompletionTimeHours：** 已完成 assignment 的 `(completed_at - task.created_at)` 小时均值（实现为 SQLite `julianday` 差 ×24，保留一位小数）。
-- **inProgressCount / pendingCount / overdueCount：** 状态中人数；**逾期** = 未完成且当前时间晚于 `tasks.ddl_at`。
+- **completedCount / completionRate：** 未传 **`platform`** 时「完成」以 **`status = 'completed'`** 为准；传 **`platform`** 时以对应 **`_*_completed = 1`** 为准（见 **`04-API-SPEC` §5.0**）。`completionRate = ROUND(100 * completed / total)`，total=0 时为 0。
+- **onTimeCompletionRate：** 在 **`completedCond`** 为真的 assignment 中，**`completed_at <= ddl_at`** 的数量 / **total**（整数百分比；**传 `platform`** 时 **`completedCond`** 为对应 **`_*_completed = 1`**，仍用 **`ta.completed_at`** 与 **`ddl_at`** 比较，与 **`dashboard.js`** 一致）。
+- **avgCompletionTimeHours：** 已完成 assignment 的 `(completed_at - task.created_at)` 小时均值（实现为 SQLite `julianday` 差 ×24，保留一位小数）。**传 `platform`** 时「已完成」子集与 **`_*_completed`** 一致。
+- **inProgressCount / pendingCount / overdueCount：** 状态中人数；**逾期** = 未「完成」且当前时间晚于 `tasks.ddl_at`；**传 `platform`** 时「完成」见 **§5.0**。
 
 ### 链路（通知与已读）
 
 - **pushUserCount：** `notification_events` 中 `event_type = 'task_assigned'` 的 **去重 `target_user_id`**（带 `taskId` 时按任务过滤）。
-- **employeeReadCount / managerReadCount：** 实现上对 **`read_receipts.source = 'task_detail_open'`** 去重统计；当前两条 SQL 结构相同，一般 **`totalReadCount = employeeReadCount + managerReadCount`**（若产品需区分店长/店员，应后续在数据模型中区分用户类型后再拆口径）。
-- **taskReachRate：** 实现中为 **成功触达 assignment 数 / total × 100**（一位小数）。单条 assignment 计为已触达当 **`u.last_login_at >= ta.created_at`**（`last_login_at` 含 **`POST /auth/login`** 与 **在线收到 `task_assigned` WebSocket 推送** 时对 `users.last_login_at` 的刷新）**或** **`ta.received_at IS NOT NULL`**（详情打开 / 开始任务等路径写入，见 `04-API-SPEC` v1.4.23）。
+- **employeeReadCount / managerReadCount：** **未传 `platform`** 时仅统计 **`read_receipts.source = 'task_detail_open'`**（精确匹配，与未带 **`platform`** 的 **`POST /assignments/:id/viewed`** 一致）。**传 `platform`** 时为 **`source = task_detail_open:{平台标签}`**（见 **`04-API-SPEC` §5.0**）。**`managerReadCount`** 当前实现与 **`employeeReadCount`** 同值，**`totalReadCount`** 取 **`employeeReadCount`**（避免重复相加）。
+- **taskReachRate：** **未传 `platform`**：成功触达 assignment 数 / total ×100；单条计为已触达当 **`u.last_login_at >= ta.created_at`** 或 **`ta.received_at IS NOT NULL`**（见 `04-API-SPEC` v1.4.23）。**传 `platform`**：在上述范围内再要求存在 **`read_receipts`**（**`source = task_detail_open:{标签}`**）对该 assignment 的 **`task_assigned`** 事件已读（**EXISTS** 子查询，见 **`dashboard.js`**）。
 - **taskReadRate：** `totalReadCount / totalAssignments * 100`（一位小数）。
 - **nudgeConversionRate：** 在 **`nudge_count > 0`** 的 assignment 中，已 **`started_at` 非空或状态为 `completed`** 的比例（整数百分比）；与 PRD「提醒转化率」命名可能不完全一致，以 **`04-API-SPEC`** 字段名为准。
 
