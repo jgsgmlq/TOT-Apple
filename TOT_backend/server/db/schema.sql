@@ -125,9 +125,9 @@ CREATE TABLE IF NOT EXISTS read_receipts (
   event_id TEXT NOT NULL REFERENCES notification_events(id),
   user_id  TEXT NOT NULL REFERENCES employees(id),
   read_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-  source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
+  source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open') OR source LIKE 'task_detail_open:%')
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user ON read_receipts(event_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user_source ON read_receipts(event_id, user_id, source);
 CREATE INDEX        IF NOT EXISTS idx_rr_user_id    ON read_receipts(user_id);
 
 -- 8. nudge_records

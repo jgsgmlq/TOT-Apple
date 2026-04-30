@@ -31,6 +31,7 @@ const {
   computeAssignmentWarningRates,
   ruleBasedStoreWarningRate,
 } = require('../utils/dashboardWarningRates');
+const { getPlatformDefinition } = require('../utils/platforms');
 
 const router = express.Router();
 
@@ -48,6 +49,39 @@ function aiSuggestion(rate) {
   return '建议通过系统发送黄色催办提醒';
 }
 
+function parsePlatformFilter(query) {
+  if (!query.platform) return null;
+  const platform = getPlatformDefinition(query.platform);
+  if (!platform) {
+    throw createError(400, 'platform 非法', 'DASH_006');
+  }
+  return {
+    ...platform,
+    readSource: `task_detail_open:${platform.sourceLabel}`,
+  };
+}
+
+function platformReadExistsSql(sourceParam, taAlias = 'ta') {
+  return `EXISTS (
+    SELECT 1
+    FROM read_receipts rrp
+    JOIN notification_events nep ON nep.id = rrp.event_id
+    WHERE nep.assignment_id = ${taAlias}.id
+      AND rrp.user_id = ${taAlias}.user_id
+      AND rrp.source = ${sourceParam}
+  )`;
+}
+
+function completedCondition(platform, taAlias = 'ta') {
+  return platform ? `${taAlias}.${platform.completedColumn} = 1` : `${taAlias}.status = 'completed'`;
+}
+
+function uncompletedCondition(platform, taAlias = 'ta') {
+  return platform
+    ? `COALESCE(${taAlias}.${platform.completedColumn}, 0) != 1`
+    : `${taAlias}.status != 'completed'`;
+}
+
 // ─── GET /api/v1/dashboard/overview ──────────────────────────────────────────
 // §5.1 总部概览 KPI
 
@@ -55,6 +89,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
   try {
     const { taskId } = req.query;
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
 
     const taConditions = ['1=1'];
     const taParams = [];
@@ -64,22 +99,31 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
     const storeWhere = drill.hasDrill ? drill.sql : '';
     const allParams = [...taParams, ...drill.params];
     const nowMs = Date.now();
+    const completedCond = completedCondition(platform);
+    const uncompletedCond = uncompletedCondition(platform);
+    const inProgressCond = platform
+      ? `${platformReadExistsSql('?')} AND ${uncompletedCond}`
+      : "ta.status = 'in_progress'";
+    const pendingCond = platform
+      ? `NOT (${platformReadExistsSql('?')}) AND ${uncompletedCond}`
+      : "ta.status = 'pending'";
+    const platformSelectParams = platform ? [platform.readSource, platform.readSource] : [];
 
     // ─ assignment 基础聚合 ──
     const base = db.get(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN ta.status = 'completed'  THEN 1 ELSE 0 END) AS completed_count,
-         SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
-         SUM(CASE WHEN ta.status = 'pending'     THEN 1 ELSE 0 END) AS pending_count,
-         SUM(CASE WHEN ta.status = 'completed' AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS completed_on_time_count,
-         AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
+         SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+         SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
+         SUM(CASE WHEN ${pendingCond} THEN 1 ELSE 0 END) AS pending_count,
+         SUM(CASE WHEN ${completedCond} AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS completed_on_time_count,
+         AVG(CASE WHEN ${completedCond} AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
        FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-      allParams
+      [...platformSelectParams, ...allParams]
     );
 
     const total        = base.total        || 0;
@@ -104,7 +148,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
        JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND ta.status != 'completed'
+         AND ${uncompletedCond}
          AND datetime('now', 'localtime') > t.ddl_at`,
       allParams
     );
@@ -131,9 +175,10 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
       pushUserCount = (pushRow && pushRow.cnt) || 0;
     }
 
-    // ─ 已读人数（task_detail_open 去重）──
+    // ─ 已读人数（task_detail_open 去重；平台下钻时精确匹配 task_detail_open:平台）──
     const baseNeCond = taskId ? 'ne.task_id = ?' : '1=1';
     const baseNeParam = taskId ? [taskId] : [];
+    const readSource = platform ? platform.readSource : 'task_detail_open';
 
     let employeeReadCount = 0;
     let managerReadCount = 0;
@@ -143,8 +188,8 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          FROM read_receipts rr
          JOIN notification_events ne ON ne.id = rr.event_id
          JOIN stores s ON s.id = ne.store_id
-         WHERE ne.task_id = ? AND rr.source = 'task_detail_open' ${drill.sql}`,
-        [taskId, ...drill.params]
+         WHERE ne.task_id = ? AND rr.source = ? ${drill.sql}`,
+        [taskId, readSource, ...drill.params]
       );
       employeeReadCount = (readRow && readRow.cnt) || 0;
       managerReadCount = employeeReadCount;
@@ -154,8 +199,8 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          FROM read_receipts rr
          JOIN notification_events ne ON ne.id = rr.event_id
          WHERE ${baseNeCond}
-           AND rr.source = 'task_detail_open'`,
-        baseNeParam
+           AND rr.source = ?`,
+        [...baseNeParam, readSource]
       );
       employeeReadCount = (empReadRow && empReadRow.cnt) || 0;
       const mgrReadRow = db.get(
@@ -163,8 +208,8 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          FROM read_receipts rr
          JOIN notification_events ne ON ne.id = rr.event_id
          WHERE ${baseNeCond}
-           AND rr.source = 'task_detail_open'`,
-        baseNeParam
+           AND rr.source = ?`,
+        [...baseNeParam, readSource]
       );
       managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
     }
@@ -179,7 +224,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
          t.ddl_at,
          t.created_at,
          t.auto_nudge_rules,
-         SUM(CASE WHEN ta.status != 'completed' THEN 1 ELSE 0 END) AS uncompleted_count
+         SUM(CASE WHEN ${uncompletedCond} THEN 1 ELSE 0 END) AS uncompleted_count
        FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
        ${joinStore}
@@ -216,7 +261,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         SELECT
           COUNT(DISTINCT ne.target_user_id) AS total_nudged,
           COUNT(DISTINCT CASE 
-            WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+            WHEN ${platform ? completedCondition(platform) : "ta.status = 'completed' AND ta.completed_at > ne.created_at"} THEN ne.target_user_id 
             ELSE NULL 
           END) AS converted_nudged
         FROM notification_events ne
@@ -271,10 +316,9 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
        ${joinStore}
        WHERE ${taConditions.join(' AND ')} ${storeWhere}
          AND (
-           (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
-           OR ta.received_at IS NOT NULL
+           ${platform ? platformReadExistsSql('?') : '(u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at) OR ta.received_at IS NOT NULL'}
          )`,
-      allParams
+      platform ? [platform.readSource, ...allParams] : allParams
     );
     const reachedCount = (reachRow && reachRow.reached_count) || 0;
     const taskReachRate = total > 0 ? parseFloat(((reachedCount / total) * 100).toFixed(2)) : 0;
@@ -309,6 +353,7 @@ router.get('/overview', authenticate, requireRole(['central', 'executive', 'admi
         pendingCount:    pendingCnt,
         overdueCount,
         warningCount: { p2: warnP2, p1: warnP1, p0: warnP0 },
+        platform: platform ? platform.sourceLabel : null,
         updatedAt: base.last_updated || formatNowSqliteLocal(),
       },
       requestId: req.requestId,
@@ -327,6 +372,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
 
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
     const level = String(rtmLevel).toLowerCase();
 
     // rtm / region / format / subRtm；dealer(dealer_name) / store 为下钻维度
@@ -355,14 +401,18 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     }
 
     const heatParams = [taskId, ...drill.params];
+    const completedCond = completedCondition(platform);
+    const inProgressCond = platform
+      ? `${platformReadExistsSql('?')} AND ${uncompletedCondition(platform)}`
+      : "ta.status = 'in_progress'";
     const rows = db.all(
       `SELECT
          ${selectDim},
          COUNT(ta.id) AS assignment_count,
-         SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-         SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
-         AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
+         SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+         SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
+         ROUND(100.0 * SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
+         AVG(CASE WHEN ${completedCond} AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
          MAX(ta.updated_at) AS last_updated
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
@@ -370,7 +420,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
        WHERE ta.task_id = ? ${drill.sql}
        GROUP BY ${groupByDim}
        ORDER BY completion_rate DESC`,
-      heatParams
+      platform ? [platform.readSource, ...heatParams] : heatParams
     );
 
     const heatmapData = rows.map(r => ({
@@ -392,7 +442,7 @@ router.get('/heatmap', authenticate, requireRole(['central', 'executive', 'admin
     res.json({
       code: 200,
       message: 'success',
-      data: { taskId, rtmLevel, heatmapData, updatedAt },
+      data: { taskId, rtmLevel, platform: platform ? platform.sourceLabel : null, heatmapData, updatedAt },
       requestId: req.requestId,
     });
   } catch (err) {
@@ -407,6 +457,7 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
   try {
     const { taskId, type, limit = 5 } = req.query;
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
 
     if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
     if (!type || !['top', 'bottom'].includes(type)) {
@@ -425,14 +476,15 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
 
     const orderDir = type === 'top' ? 'DESC' : 'ASC';
     const bottomFilter = type === 'bottom' ? 'HAVING completion_rate < 100' : '';
+    const completedCond = completedCondition(platform);
 
     const rows = db.all(
       `SELECT
          s.id AS store_id,
          s.name AS store_name,
          COUNT(ta.id) AS assignment_count,
-         SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
-         ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
+         SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+         ROUND(100.0 * SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
          ROUND(AVG(ta.progress), 0) AS avg_progress
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
@@ -456,7 +508,7 @@ router.get('/store-rank', authenticate, requireRole(['central', 'executive', 'ad
     res.json({
       code: 200,
       message: 'success',
-      data: { taskId, type, rankList, updatedAt },
+      data: { taskId, type, platform: platform ? platform.sourceLabel : null, rankList, updatedAt },
       requestId: req.requestId,
     });
   } catch (err) {
@@ -473,6 +525,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
   try {
     const { taskId, warningLevel, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
 
     if (warningLevel && !['p2', 'p1', 'p0', 'startDelay'].includes(warningLevel)) {
       throw createError(400, 'warningLevel 非法（p2/p1/p0/startDelay）', 'DASH_003');
@@ -493,6 +546,8 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
     const whereClause = conditions.join(' AND ');
     const nowIso = formatNowSqliteLocal();
     const nowMs = Date.now();
+    const completedCond = completedCondition(platform);
+    const uncompletedCond = uncompletedCondition(platform);
 
     // 确定下钻聚合的维度
     let selectId, selectName, groupByDim;
@@ -524,10 +579,10 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
         t.ddl_at,
         t.auto_nudge_rules,
         COUNT(ta.id) AS total_count,
-        SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) AS completed_count,
-        SUM(CASE WHEN ta.status!='completed' THEN 1 ELSE 0 END) AS uncompleted_count,
-        SUM(CASE WHEN ta.status!='completed' AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
-        ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
+        SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+        SUM(CASE WHEN ${uncompletedCond} THEN 1 ELSE 0 END) AS uncompleted_count,
+        SUM(CASE WHEN ${uncompletedCond} AND ? > t.ddl_at THEN 1 ELSE 0 END) AS overdue_count,
+        ROUND(100.0 * SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate,
         MAX(ta.updated_at) AS last_updated
       FROM task_assignments ta
       JOIN stores s ON s.id = ta.store_id
@@ -630,6 +685,7 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
       code: 200,
       message: 'success',
       data: {
+        platform: platform ? platform.sourceLabel : null,
         list,
         pagination: { pageNum: page, pageSize: limit, total, totalPages }
       },
@@ -645,6 +701,7 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
   try {
     const { taskId, type = 'daily', date } = req.query;
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
     if (!taskId) throw createError(400, 'taskId 不能为空', 'DASH_001');
     if (!['daily', 'hourly'].includes(type)) {
       throw createError(400, 'type 必须是 daily 或 hourly', 'DASH_005');
@@ -655,33 +712,35 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
     const storeWhere = drill.hasDrill ? drill.sql : '';
     const trendParamsDaily = [taskId, ...drill.params];
     const trendParamsHourly = [taskId, targetDate, ...drill.params];
+    const completedCond = completedCondition(platform);
+    const completedAtExpr = platform ? 'COALESCE(ta.completed_at, ta.updated_at)' : 'ta.completed_at';
 
     let rows;
     if (type === 'daily') {
       // 每日新增
       rows = db.all(
         `SELECT
-           date(ta.completed_at) AS time_key,
+           date(${completedAtExpr}) AS time_key,
            COUNT(ta.id) AS new_completed
          FROM task_assignments ta
          ${joinStore}
-         WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL ${storeWhere}
-         GROUP BY date(ta.completed_at)
-         ORDER BY date(ta.completed_at) ASC`,
+         WHERE ta.task_id = ? AND ${completedCond} AND ${completedAtExpr} IS NOT NULL ${storeWhere}
+         GROUP BY date(${completedAtExpr})
+         ORDER BY date(${completedAtExpr}) ASC`,
         trendParamsDaily
       );
     } else {
       // 分小时新增 (指定日期)；占位符顺序：task_id、date(当天)、下钻条件
       rows = db.all(
         `SELECT
-           strftime('%H', ta.completed_at) AS time_key,
+           strftime('%H', ${completedAtExpr}) AS time_key,
            COUNT(ta.id) AS new_completed
          FROM task_assignments ta
          ${joinStore}
-         WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL
-           AND date(ta.completed_at) = ? ${storeWhere}
-         GROUP BY strftime('%H', ta.completed_at)
-         ORDER BY strftime('%H', ta.completed_at) ASC`,
+         WHERE ta.task_id = ? AND ${completedCond} AND ${completedAtExpr} IS NOT NULL
+           AND date(${completedAtExpr}) = ? ${storeWhere}
+         GROUP BY strftime('%H', ${completedAtExpr})
+         ORDER BY strftime('%H', ${completedAtExpr}) ASC`,
         trendParamsHourly
       );
     }
@@ -699,7 +758,7 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
     res.json({
       code: 200,
       message: 'success',
-      data: { taskId, type, date: targetDate, trendData },
+      data: { taskId, type, date: targetDate, platform: platform ? platform.sourceLabel : null, trendData },
       requestId: req.requestId,
     });
   } catch (err) {
@@ -713,6 +772,7 @@ router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', '
   try {
     const { taskId, pageNum = 1, pageSize = 20, level = 'store' } = req.query;
     const drill = parseStoreDrill(req.query);
+    const platform = parsePlatformFilter(req.query);
 
     const page = Math.max(1, parseInt(pageNum, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
@@ -730,6 +790,9 @@ router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', '
     }
 
     const whereClause = conditions.join(' AND ');
+    const nudgedConvertedCond = platform
+      ? completedCondition(platform)
+      : "ta.status = 'completed' AND ta.completed_at > ne.created_at";
 
     let selectId, selectName, groupByDim;
     const lvl = level.toLowerCase();
@@ -758,7 +821,7 @@ router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', '
         ne.severity,
         COUNT(DISTINCT ne.target_user_id) AS total_nudged,
         COUNT(DISTINCT CASE 
-          WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+          WHEN ${nudgedConvertedCond} THEN ne.target_user_id 
           ELSE NULL 
         END) AS converted_nudged
       FROM notification_events ne
@@ -799,7 +862,7 @@ router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', '
         ${selectId},
         COUNT(DISTINCT ne.target_user_id) AS overall_nudged,
         COUNT(DISTINCT CASE 
-          WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
+          WHEN ${nudgedConvertedCond} THEN ne.target_user_id 
           ELSE NULL 
         END) AS overall_converted
       FROM notification_events ne
@@ -830,6 +893,7 @@ router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', '
       code: 200,
       message: 'success',
       data: {
+        platform: platform ? platform.sourceLabel : null,
         list,
         pagination: { pageNum: page, pageSize: limit, total: totalRecords, totalPages }
       },
