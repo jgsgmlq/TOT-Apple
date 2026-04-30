@@ -126,6 +126,31 @@ const TASKS = [
     pass_score: 80,
     created_by: 'central',
   },
+  {
+    id:          'TASK_MYPAL_MAC_STUDIO',
+    title:       'MAC Studio产品销售教学',
+    description: 'MAC Studio 性能优势、目标客群画像与对比销售策略教学。单 MyPAL 平台任务。',
+    has_mypal: 1, has_smartsell: 0, has_ai_demo: 0, has_live_broadcast: 0,
+    status:    'dispatched',
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(randomDays(5, 7)))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(randomDays(5, 10)))),
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(7))),
+    pass_score: 80,
+    created_by: 'central',
+  },
+  {
+    id:          'TASK_BUNDLE_VISION_PRO',
+    title:       'Vision Pro介绍',
+    description: '深入了解 Apple Vision Pro，涵盖空间计算、佩戴体验与核心应用。',
+    has_mypal: 1, has_smartsell: 1, has_ai_demo: 1, has_live_broadcast: 0,
+    status:    'dispatched',
+    start_at:  parseDateToSqliteLocal(new Date(now - daysToMs(7))),
+    ddl_at:    parseDateToSqliteLocal(new Date(now + daysToMs(7))),
+    sub_tasks_config: '{"MyPAL":{"description":"Vision Pro 基础硬件参数与卖点学习。","deadline":"2026-05-05 20:32:30"},"SmartSell":{"description":"空间计算设备销售场景与话术演练。","deadline":"2026-04-29 20:32:30"},"AI Demo":{"description":"基于模拟顾客场景的 AI 角色对练考核。","deadline":"2026-05-03 20:32:30"}}',
+    created_at:parseDateToSqliteLocal(new Date(now - daysToMs(8))),
+    pass_score: 90,
+    created_by: 'central',
+  },
 ];
 
 // ─── 员工姓名与职位池 ───────────────────────────────────────────────────────────
@@ -156,6 +181,8 @@ const ARCHETYPE_STATUS = {
     /* Task Start */ ['completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P1 */    ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
     /* Task P0 */    ['completed','completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending'   ],
+    /* Task MacStudio */ ['completed','completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending'   ],
+    /* Task VisionPro */ ['completed','completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending'   ],
   ],
   good: [
     /* Task A */ ['completed','completed','completed','completed','completed','completed','completed','in_progress','in_progress','pending'   ],
@@ -164,6 +191,8 @@ const ARCHETYPE_STATUS = {
     /* Task Start */ ['completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P1 */    ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P0 */    ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
+    /* Task MacStudio */ ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
+    /* Task VisionPro */ ['completed','completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending'   ],
   ],
   moderate: [
     /* Task A */ ['completed','completed','completed','completed','completed','in_progress','in_progress','in_progress','pending',    'pending'   ],
@@ -172,6 +201,8 @@ const ARCHETYPE_STATUS = {
     /* Task Start */ ['in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P1 */    ['completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P0 */    ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task MacStudio */ ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task VisionPro */ ['completed','completed','completed','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
   ],
   warning: [
     /* Task A */ ['completed','completed','in_progress','in_progress','in_progress','pending',    'pending',    'pending',    'pending',    'pending'   ],
@@ -180,6 +211,8 @@ const ARCHETYPE_STATUS = {
     /* Task Start */ ['pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P1 */    ['completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
     /* Task P0 */    ['completed','completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task MacStudio */ ['completed','completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
+    /* Task VisionPro */ ['completed','completed','in_progress','pending',    'pending',    'pending',    'pending',    'pending',    'pending',    'pending'   ],
   ],
 };
 
@@ -321,6 +354,13 @@ function generateAssignments(employees) {
       // nudge_count：由后续真实的 autoNudge 引擎自动计算和累加，这里不再凭空捏造历史催办次数，保证数据一致性
       let nudge_count = 0;
 
+      if (task.id === 'TASK_BUNDLE_VISION_PRO' && emp.id === 'emp_E001') {
+        platforms.mypal_completed = 1;
+        platforms.smartsell_completed = 0;
+        platforms.ai_demo_completed = 0;
+        platforms.progress = 33;
+        status = 'in_progress';
+      }
       assignments.push({
         id:          nanoid(),
         task_id:     task.id,
