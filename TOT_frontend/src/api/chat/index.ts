@@ -133,7 +133,7 @@ export const sendChatMessage = (
 export const streamExecutiveChatMessage = async (
   sessionId: string,
   content: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
@@ -142,7 +142,7 @@ export const streamExecutiveChatMessage = async (
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
     body: { content, stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,
@@ -200,7 +200,7 @@ export const submitChatFeedback = (
 export const streamRegenerateChatMessage = async (
   sessionId: string,
   messageId: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
@@ -209,7 +209,7 @@ export const streamRegenerateChatMessage = async (
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages/${messageId}/regenerate`,
     body: { stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,
@@ -271,7 +271,7 @@ export const sendDashboardChatMessage = (
 export const streamDashboardChatMessage = async (
   sessionId: string,
   content: string,
-  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onMessage: (chunk: { text: string; phase?: string; toolName?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
@@ -280,7 +280,7 @@ export const streamDashboardChatMessage = async (
   return streamSsePostJson({
     path: `${CHAT_DASHBOARD_SESSIONS}/${sessionId}/messages`,
     body: { content, stream: true },
-    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,

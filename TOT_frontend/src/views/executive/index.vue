@@ -1178,6 +1178,7 @@
               thinking: p.thinking,
               jsonStream: p.jsonStream,
               partialReply: p.partialReply ?? undefined,
+              activeToolName: p.activeToolName,
             };
             scrollToBottom();
             if (tts) {
@@ -1199,12 +1200,8 @@
         applySendSuccess(sid, result, thinkingSnapshot);
       } finally {
         if (tts) {
-          try {
-            tts.finish();
-            await tts.waitUntilClosed(120000);
-          } finally {
-            tts.dispose();
-          }
+          tts.finish();
+          void tts.waitUntilClosed(120000).finally(() => tts?.dispose());
         }
       }
     };
@@ -1239,6 +1236,7 @@
       }
     } finally {
       isSending.value = false;
+      abortController.value = null;
       scrollToBottom();
     }
   };

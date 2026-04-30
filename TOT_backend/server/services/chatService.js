@@ -922,10 +922,86 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   const wrappedSend = (event, payload) => send(event, payload);
 
-  return await sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res, {
-    skipIncomingMessage: false,
-    entryKind: 'sendMessageStream',
-  });
+  const startMs = Date.now();
+  let result;
+  try {
+    result = await chatAgentRunner.run(userMessage, history, regionScope, {
+      sessionId,
+      userId: session.user_id,
+      signal: abortController.signal,
+      trace,
+      streamFormatCallbacks: {
+        onDelta: (text, meta) => {
+          const phase = meta?.phase || 'content';
+          if (phase === 'reasoning') sseReasoningCount += 1;
+          else if (phase === 'tool_start') sseToolStartCount += 1;
+          if (typeof text === 'string' && text) {
+            sseDeltaCount += 1;
+            sseDeltaBytes += text.length;
+          }
+          wrappedSend('delta', {
+            text,
+            phase,
+            reasoningLevel: meta?.reasoningLevel || undefined,
+            toolName:
+              phase === 'tool_start' || phase === 'tool_end'
+                ? meta?.text || undefined
+                : undefined,
+          });
+        },
+      },
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      logger.info('chat_stream_aborted', { sessionId });
+      endSpan(sseSpan, {
+        output: null,
+        level: 'WARNING',
+        metadata: {
+          status: 'aborted',
+          clientAborted: sseClientAborted,
+          deltaCount: sseDeltaCount,
+          deltaBytes: sseDeltaBytes,
+          reasoningCount: sseReasoningCount,
+          toolStartCount: sseToolStartCount,
+          durationMs: Date.now() - sseT0,
+        },
+      });
+      trace.update({
+        output: null,
+        metadata: { status: 'aborted', reason: 'client_abort' },
+      });
+      return;
+    }
+    endSpan(sseSpan, {
+      output: null,
+      level: 'ERROR',
+      statusMessage: err.message,
+      metadata: {
+        status: 'error',
+        deltaCount: sseDeltaCount,
+        deltaBytes: sseDeltaBytes,
+        durationMs: Date.now() - sseT0,
+      },
+    });
+    trace.update({
+      output: maskPII(err.message || String(err)),
+      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
+    });
+    send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
+    res.end();
+    return;
+  }
+
+  const responseTime = Date.now() - startMs;
+  const now = formatNowSqliteLocal();
+  const assistMsgId = nanoid();
+  const finalContent = storageContentFromAgentResult(result);
+  const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
+
+  logger.info('chat_turn', {
+    sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
+    toolName: result._toolMeta?.toolName, msgId: assistMsgId, stream: true,  });
 }
 
 // ─── getHistory ───────────────────────────────────────────────────────────────
@@ -1231,6 +1307,10 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
             text,
             phase,
             reasoningLevel: meta?.reasoningLevel || undefined,
+            toolName:
+              phase === 'tool_start' || phase === 'tool_end'
+                ? meta?.text || undefined
+                : undefined,
           });
         },
       },
