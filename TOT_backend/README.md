@@ -1,6 +1,9 @@
-# TOT/Apple 培训任务管理系统 — 后端 MVP P0
+# TOT/Apple 培训任务管理系统 — 后端 MVP P0 (含 Executive Chat 2.0)
 
 零售门店培训任务管理平台。总部创建培训任务并按 RTM 渠道/区域下发给门店，店员在 MyPAL、SmartSell、AI Demo、Live Broadcast 四个平台完成学习后逐项打卡，系统实时聚合完成率并向总部和店长推送预警与催办。
+
+**新增核心模块：Executive Chat 2.0 (智能高管数据助理)**
+基于 LangGraph 和 DeepSeek 构建的 Agentic Workflow。支持自然语言查询区域完成率、任务进度、门店预警等指标。具备精准的工具调度 (Function Calling)、自动参数修复、人机协同断点挂起 (HITL) 以及异步记忆提取能力。
 
 ---
 
@@ -35,6 +38,7 @@
 | **实时推送** | WebSocket 向员工和店长推送任务变更、催办、完成事件 |
 | **看板聚合** | 总部概览 KPI、RTM 热力图、门店排行、预警列表、门店下钻 |
 | **自动预警调度** | 服务端按间隔扫描已配置 `auto_nudge_rules` 的下发中任务；可调 `AUTO_NUDGE_INTERVAL_MS`，`AUTO_NUDGE_SCHEDULER=0` 关闭；详见 `docs/specs/04-API-SPEC.md` §2.9 |
+| **Executive Chat (AI)** | 智能数据看板助理。流式输出、动态图表渲染、多工具聚合分析、人机协同补参打断 (HITL)、长期偏好记忆 (BullMQ Worker) |
 
 ---
 
@@ -47,10 +51,11 @@
 | 数据库 | SQLite 3，WAL 模式，`better-sqlite3`（**同步 API**，无需 await） |
 | 认证 | JWT HS256，7 天有效期，`Authorization: Bearer <token>` |
 | 实时 | WebSocket（`ws` 库）主推送 + REST 轮询降级 |
-| ID 生成 | nanoid |
-| 密码 | bcrypt，10 rounds |
+| 异步任务 | BullMQ + Redis（用于 AI 记忆抽取） |
+| AI 编排 | LangGraph.js v1.2+ (StateGraph) |
+| AI 可观测 | Langfuse v3.x |
+| AI 模型 | DeepSeek (OpenAI SDK 兼容) |
 | 外部集成 | MyPal（Mock/真实 HTTP 二选一） |
-| 可选 AI 能力 | DeepSeek（OpenAI 兼容 API） |
 
 ---
 
@@ -60,11 +65,13 @@
 - Node.js `>= 18`（推荐 LTS 版本）
 - npm（随 Node.js 安装）
 - 可写本地磁盘（SQLite 会创建 `server/database.db`）
+- Redis 服务（推荐使用 Docker 启动 `redis:alpine`，供 BullMQ 记忆系统使用）
 
-可选能力：
+可选/核心能力开关：
 - MyPal 本地 Mock：`MYPAL_MOCK=1`
 - MyPal 真实联调：`MYPAL_ENABLED=1` + 一组 MyPal 凭证
-- Agent AI 能力：`DEEPSEEK_API_KEY`
+- Agent 智能体能力：`DEEPSEEK_API_KEY` 必填
+- Agent 可观测性：`LANGFUSE_ENABLED=true` 及相应的 PublicKey/SecretKey 必填
 
 ---
 
@@ -79,21 +86,21 @@ npm install
 # 2. 初始化数据库（10 店 / 100 员工；3 个预置任务 + 300 条分配 + MyPal Mock；详见 db/seed.js）
 npm run seed
 
-# 3. 配置环境变量（在仓库根目录）
+# 3. 启动 Redis (用于 AI 记忆异步任务)
+# docker run -d -p 6379:6379 redis:alpine
+
+# 4. 配置环境变量（在仓库根目录）
 # cp .env.example .env
-#
-# 4. 开启 MyPal Mock（开发联调用）
-#    根目录 `.env` 里设置 `MYPAL_MOCK=1`
-#    不开启时，`GET /api/v1/mypal/mock/learning` 将返回 404
-#
-# 5. 自动预警定时调度（可选，见根目录 .env.example）
-#    AUTO_NUDGE_SCHEDULER=0 关闭；AUTO_NUDGE_INTERVAL_MS 调整间隔（毫秒），默认 1 小时
-#
-# 6. 启动服务（默认 PORT=3000）
+# (请务必配置好 DEEPSEEK_API_KEY)
+
+# 5. 启动服务（默认 PORT=3000）
 npm start
 
 # 开发模式（文件变更自动重启）
 npm run dev
+
+# 6. 单独启动 AI 记忆收集 Worker (可选，如果不启动，控制台会有无害警告)
+npm run memory-worker
 ```
 
 服务启动后：
