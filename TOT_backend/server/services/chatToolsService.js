@@ -9,6 +9,12 @@ const logger = require('../utils/logger');
 const TOOL_SCHEMAS = [];
 const toolHandlers = new Map();
 const toolMetas = new Map(); // Store metadata for guardrails
+const toolNamespace = 'executive_chat';
+
+function normalizeToolName(toolName) {
+  if (!toolName || typeof toolName !== 'string') return '';
+  return toolName.includes('.') ? toolName.split('.').pop() : toolName;
+}
 
 function loadTools() {
   const toolsDir = path.join(__dirname, '..', 'chat_tools');
@@ -35,6 +41,8 @@ function loadTools() {
         TOOL_SCHEMAS.push(toolModule.schema);
         toolHandlers.set(toolName, toolModule.handler);
         toolMetas.set(toolName, {
+          name: toolName,
+          namespaceName: `${toolNamespace}.${toolName}`,
           schema: toolModule.schema.function.parameters,
           requiredRole: meta.requiredRole || [],
           scopePolicy: meta.scopePolicy || 'any', // 'any', 'national_only'
@@ -58,51 +66,184 @@ loadTools();
 
 // ─── Guardrails ──────────────────────────────────────────────────────────────
 
-function validateToolArgs(toolName, schema, args) {
-  // Basic required fields validation based on JSON schema
-  if (schema && schema.required && Array.isArray(schema.required)) {
-    for (const reqField of schema.required) {
-      if (args[reqField] === undefined || args[reqField] === null) {
-        throw new Error(`Missing required parameter: ${reqField}`);
+function getRegisteredToolNames() {
+  return Array.from(toolHandlers.keys());
+}
+
+function getToolSchema(toolName) {
+  const normalized = normalizeToolName(toolName);
+  const schema = TOOL_SCHEMAS.find(item => item?.function?.name === normalized);
+  return schema || null;
+}
+
+function getToolSchemasByNames(names = []) {
+  if (!Array.isArray(names) || names.length === 0) return [];
+  const wanted = names.map(normalizeToolName).filter(Boolean);
+  const toolMap = new Map();
+  TOOL_SCHEMAS.forEach(item => {
+    if (item?.function?.name) toolMap.set(item.function.name, item);
+  });
+  
+  return wanted.map(name => toolMap.get(name)).filter(Boolean);
+}
+
+// Violation 形状：{ field, code, message, repairable, repairValue?, requires_user_input? }
+// 调用方（fc_ValidateParams）会自行 push tool_call_id，所以这里只输出 field 级信息。
+function _typeOf(val) {
+  if (val === null) return 'null';
+  if (Array.isArray(val)) return 'array';
+  return typeof val;
+}
+
+function _checkType(field, def, val, violations) {
+  const expected = def.type;
+  if (!expected) return;
+  if (val === null && def.nullable === true) return;
+
+  if (expected === 'string' && typeof val !== 'string') {
+    violations.push({ field, code: 'INVALID_TYPE', message: `参数 '${field}' 应为 string，实际为 ${_typeOf(val)}`, repairable: true });
+    return;
+  }
+  if (expected === 'number' && typeof val !== 'number') {
+    violations.push({ field, code: 'INVALID_TYPE', message: `参数 '${field}' 应为 number，实际为 ${_typeOf(val)}`, repairable: true });
+    return;
+  }
+  if (expected === 'boolean' && typeof val !== 'boolean') {
+    violations.push({ field, code: 'INVALID_TYPE', message: `参数 '${field}' 应为 boolean，实际为 ${_typeOf(val)}`, repairable: true });
+    return;
+  }
+  if (expected === 'array' && !Array.isArray(val)) {
+    violations.push({ field, code: 'INVALID_TYPE', message: `参数 '${field}' 应为 array，实际为 ${_typeOf(val)}`, repairable: true });
+    return;
+  }
+  if (expected === 'object' && (typeof val !== 'object' || Array.isArray(val) || val === null)) {
+    violations.push({ field, code: 'INVALID_TYPE', message: `参数 '${field}' 应为 object，实际为 ${_typeOf(val)}`, repairable: true });
+    return;
+  }
+}
+
+function _validateField(field, def, val, violations) {
+  if (val === undefined || val === null) {
+    if (val === null && def.nullable === true) return;
+    return; // undefined 由 required 检查在上层处理
+  }
+
+  _checkType(field, def, val, violations);
+
+  // enum 校验：可修复（repairValue 给第一个枚举值作为提示）
+  if (Array.isArray(def.enum) && !def.enum.includes(val)) {
+    violations.push({
+      field,
+      code: 'INVALID_ENUM',
+      message: `参数 '${field}' 必须是 [${def.enum.join(', ')}] 之一，实际为 ${JSON.stringify(val)}`,
+      repairable: true,
+      repairValue: def.enum[0],
+    });
+  }
+
+  // array.items 校验：每个元素递归
+  if (def.type === 'array' && Array.isArray(val) && def.items) {
+    val.forEach((item, idx) => {
+      const itemField = `${field}[${idx}]`;
+      // items 也可能带 enum / properties
+      _validateField(itemField, def.items, item, violations);
+    });
+  }
+
+  // object.properties 校验：每个属性递归（required 在嵌套层也支持）
+  if (def.type === 'object' && def.properties && typeof val === 'object' && !Array.isArray(val) && val !== null) {
+    if (Array.isArray(def.required)) {
+      for (const reqKey of def.required) {
+        if (val[reqKey] === undefined) {
+          violations.push({
+            field: `${field}.${reqKey}`,
+            code: 'MISSING_PARAM',
+            message: `参数 '${field}.${reqKey}' 是必填的`,
+            repairable: true,
+          });
+        }
       }
     }
-  }
-  // Basic type checking based on schema.properties
-  if (schema && schema.properties) {
-    for (const [key, def] of Object.entries(schema.properties)) {
-      const val = args[key];
-      if (val !== undefined && val !== null) {
-        if (def.type === 'string' && typeof val !== 'string') {
-           throw new Error(`Parameter '${key}' must be a string.`);
-        }
-        if (def.type === 'number' && typeof val !== 'number') {
-           throw new Error(`Parameter '${key}' must be a number.`);
-        }
-        if (def.type === 'boolean' && typeof val !== 'boolean') {
-           throw new Error(`Parameter '${key}' must be a boolean.`);
-        }
+    for (const [subKey, subDef] of Object.entries(def.properties)) {
+      const subVal = val[subKey];
+      if (subVal !== undefined) {
+        _validateField(`${field}.${subKey}`, subDef, subVal, violations);
       }
     }
   }
 }
 
-function authorizeToolCall(toolName, meta, sessionContext) {
-  const { regionScope, userRoles = ['executive'] } = sessionContext;
+/**
+ * 校验工具参数。返回 { ok, violations }。
+ * 不再 throw — 调用方决定如何处理（fc_ValidateParams 收集成 batch，executeByName 见下）。
+ *
+ * 支持 JSON Schema 子集：required / type / enum / items / properties / nullable。
+ */
+function validateToolArgs(toolName, schema, args) {
+  const violations = [];
+  if (!schema) return { ok: true, violations };
 
-  // 1. Check requiredRole
-  if (meta.requiredRole && meta.requiredRole.length > 0) {
+  const safeArgs = args && typeof args === 'object' ? args : {};
+
+  // 顶层 required（缺失必填参数：标记 repairable=true 让 fc_ParamRepair 先试着从上下文推断；
+  // 推断失败再升级到 HITL 让用户补。这是与 nodes.js 现有行为对齐的口径，不要随便改）
+  if (Array.isArray(schema.required)) {
+    for (const reqField of schema.required) {
+      if (safeArgs[reqField] === undefined || safeArgs[reqField] === null) {
+        violations.push({
+          field: reqField,
+          code: 'MISSING_PARAM',
+          message: `参数 '${reqField}' 是必填的`,
+          repairable: true,
+        });
+      }
+    }
+  }
+
+  // 顶层 properties 递归
+  if (schema.properties) {
+    for (const [key, def] of Object.entries(schema.properties)) {
+      const val = safeArgs[key];
+      _validateField(key, def, val, violations);
+    }
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * 角色 / scope 校验。返回 { ok, violations }（不再 throw）。
+ * 当前规则两条：requiredRole 与 scopePolicy === 'national_only'。
+ * 未来扩业务规则统一在这个函数内补，不要散落到 nodes.js。
+ */
+function authorizeToolCall(toolName, meta, sessionContext) {
+  const violations = [];
+  const { regionScope, userRoles = ['executive'] } = sessionContext || {};
+
+  if (meta?.requiredRole && Array.isArray(meta.requiredRole) && meta.requiredRole.length > 0) {
     const hasRole = meta.requiredRole.some(role => userRoles.includes(role));
     if (!hasRole) {
-      throw new Error(`Tool ${toolName} requires one of these roles: ${meta.requiredRole.join(', ')}. Current roles: ${userRoles.join(', ')}`);
+      violations.push({
+        field: 'role',
+        code: 'PERMISSION_DENIED',
+        message: `工具 ${toolName} 需要 [${meta.requiredRole.join(', ')}] 角色，当前用户角色为 [${userRoles.join(', ')}]`,
+        repairable: false,
+      });
     }
   }
 
-  // 2. Check scopePolicy (e.g., if a tool is strictly for national data, block regional users)
-  if (meta.scopePolicy === 'national_only') {
+  if (meta?.scopePolicy === 'national_only') {
     if (!regionScope || regionScope.type !== 'national') {
-      throw new Error(`Tool ${toolName} requires national data access scope. Current scope: ${regionScope ? regionScope.type : 'none'}`);
+      violations.push({
+        field: 'scope',
+        code: 'PERMISSION_DENIED',
+        message: `工具 ${toolName} 仅对全国权限用户开放（当前 scope=${regionScope?.type || 'none'}）`,
+        repairable: false,
+      });
     }
   }
+
+  return { ok: violations.length === 0, violations };
 }
 
 async function executeWithTimeout(promise, timeoutMs) {
@@ -127,8 +268,9 @@ async function executeWithTimeout(promise, timeoutMs) {
  */
 async function executeByName(toolName, params, regionScope) {
   // 1) 工具名白名单存在性校验
-  const handler = toolHandlers.get(toolName);
-  const meta = toolMetas.get(toolName);
+  const normalizedToolName = normalizeToolName(toolName);
+  const handler = toolHandlers.get(normalizedToolName);
+  const meta = toolMetas.get(normalizedToolName);
   if (!handler || !meta) {
     return { 
       error: {
@@ -139,18 +281,36 @@ async function executeByName(toolName, params, regionScope) {
     };
   }
 
-  // Temporary session context wrapper (will be passed from above in future refactor)
+  // Context wrapper (support passing user roles from upstream)
   const sessionContext = {
     regionScope,
-    userRoles: ['executive'] // Executive chat defaults to executive role
+    userRoles: regionScope?.userRoles || ['executive']
   };
 
-  try {
-    // 2) 参数 schema 校验
-    validateToolArgs(toolName, meta.schema, params);
+  if (!regionScope?.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
+    logger.warn('tool_roles_fallback', { toolName, usingFallback: 'executive' });
+  }
 
-    // 3) 角色/区域权限校验
-    authorizeToolCall(toolName, meta, sessionContext);
+  try {
+    // 2) 参数 schema 校验（结构化 violations，不再 throw）
+    const argCheck = validateToolArgs(toolName, meta.schema, params);
+    if (!argCheck.ok) {
+      const first = argCheck.violations[0];
+      const err = new Error(`Invalid parameters: ${first.message}`);
+      err.code = 'INVALID_PARAMETERS';
+      err.violations = argCheck.violations;
+      throw err;
+    }
+
+    // 3) 角色/区域权限校验（结构化 violations，不再 throw）
+    const authCheck = authorizeToolCall(toolName, meta, sessionContext);
+    if (!authCheck.ok) {
+      const first = authCheck.violations[0];
+      const err = new Error(first.message);
+      err.code = 'PERMISSION_DENIED';
+      err.violations = authCheck.violations;
+      throw err;
+    }
 
     // 4) 执行与超时保护
     const executionPromise = Promise.resolve(handler(params, regionScope));
@@ -158,33 +318,44 @@ async function executeByName(toolName, params, regionScope) {
 
     return result;
   } catch (err) {
-    // 5) 统一错误包装（避免裸栈信息泄漏给 LLM）
-    let code = 'EXECUTION_ERROR';
+    // 5) 统一错误包装。优先采用 err.code（来自结构化 violation），其次根据 message 推断（兼容超时/handler 抛错）
+    let code = err.code || 'EXECUTION_ERROR';
     let recommendation = 'Please explain the limitation to the user.';
-    if (err.message.includes('Missing required parameter') || err.message.includes('must be a')) {
-      code = 'INVALID_PARAMETERS';
+    if (code === 'INVALID_PARAMETERS') {
       recommendation = 'Please correct the parameters and try again.';
-    } else if (err.message.includes('requires one of these roles') || err.message.includes('requires national data access')) {
-      code = 'PERMISSION_DENIED';
+    } else if (code === 'PERMISSION_DENIED') {
       recommendation = 'Please tell the user they do not have permission to view this data.';
-    } else if (err.message.includes('timed out')) {
+    } else if (err.message && err.message.includes('timed out')) {
       code = 'TIMEOUT_ERROR';
       recommendation = 'The query took too long. Try narrowing the date range or filtering by a specific store/region.';
     }
 
-    logger.warn('tool_blocked', { toolName, error: err.message, code });
+    logger.warn('tool_blocked', { toolName: normalizedToolName, error: err.message, code });
 
-    return { 
+    return {
       error: {
         code,
-        message: `Failed to execute ${toolName}: ${err.message}`,
-        recommendation
+        message: `Failed to execute ${normalizedToolName}: ${err.message}`,
+        recommendation,
+        violations: err.violations || undefined,
       }
     };
   }
 }
 
+function getToolMeta(toolName) {
+  const normalized = normalizeToolName(toolName);
+  return toolMetas.get(normalized);
+}
+
 module.exports = {
   TOOL_SCHEMAS,
   executeByName,
+  getToolMeta,
+  getRegisteredToolNames,
+  getToolSchema,
+  getToolSchemasByNames,
+  normalizeToolName,
+  validateToolArgs,
+  authorizeToolCall,
 };

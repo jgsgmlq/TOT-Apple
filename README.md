@@ -5,7 +5,7 @@
 > 产品需求口径：以 `[TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md](TOT_backend/docs/product/PRODUCT_REQUIREMENTS.md)` 为准。
 > 完整文档索引见 `[TOT_backend/docs/README.md](TOT_backend/docs/README.md)`。
 
-**更新日期：** 2026-04-13
+**更新日期：** 2026-04-30
 
 ---
 
@@ -43,7 +43,8 @@
 1. **任务管理闭环** — 总部下发培训任务 → 学习对象（店员）执行 → 规则引擎自动预警提醒
 2. **总部数据看板** — 完成率、按时完成率、RTM L4、区域热力图、预警列表等核心指标
 
-**P1（设计框架，本期不要求全部实现）：** Executive Chat 自然语言查询、AI 辅助润色/洞察、下发预览历史等。
+**新增核心主线：Executive Chat 2.0 (智能高管助理)**
+基于 LangGraph 和 DeepSeek 打造的 Agentic Workflow。支持自然语言查询大区/门店的多维指标，具备自动参数修复、人机协同 (HITL) 补参以及基于 BullMQ 的异步偏好记忆能力。
 
 ---
 
@@ -56,6 +57,8 @@
 | **数据库**  | SQLite 3 + WAL 模式（`better-sqlite3`） | 同步读写，禁止对 `db.`* 使用 `await`      |
 | **认证**   | JWT · HS256 · 7 天有效                 | `Authorization: Bearer <token>` |
 | **实时**   | WebSocket（主）+ REST 轮询（降级）           | `ws://host:3000/ws?token=<JWT>` |
+| **异步任务**| BullMQ + Redis                      | 专用于 AI 记忆抽取任务              |
+| **AI 编排**| LangGraph.js v1.2+                  | StateGraph 核心状态机            |
 | **前端**   | Vue 3 + Vite · Alova（HTTP）          | 总部 / 店员 / Executive 多入口         |
 | **包管理**  | 后端 npm · 前端 pnpm                    |                                 |
 | **进程管理** | PM2                                 | 共享服务器上的守护进程                     |
@@ -219,8 +222,14 @@ npm install
 # 生成种子数据（首次启动或重置数据后）
 npm run seed
 
+# 启动 Redis 服务 (推荐使用 Docker，AI 记忆收集需依赖此项)
+# docker run -d -p 6379:6379 redis:alpine
+
 # 启动开发服务器（node --watch，修改自动重启）
 npm run dev
+
+# (可选) 新开终端启动 AI 记忆收集 Worker 
+# npm run memory-worker
 ```
 
 **预期输出（`JWT_SECRET` 未设置时会多一行 `[auth] WARNING`；Agent 技能注册日志在其前）：**
@@ -281,7 +290,9 @@ pnpm run dev                  # 端口 8001
 | `MYPAL_ENABLED`          | 否       | `0`                                | 设为 `1` 启用真实 MyPal HTTP 对接（凭证就绪后再开）  |
 | `AUTO_NUDGE_SCHEDULER`   | 否       | `1`                                | 设为 `0` 禁用定时催办调度器                    |
 | `AUTO_NUDGE_INTERVAL_MS` | 否       | `3600000`（1h）                      | 催办调度间隔（毫秒）                          |
-| `DEEPSEEK_API_KEY`       | AI 功能必填 | —                                  | DeepSeek API Key，**禁止硬编码**          |
+| `DEEPSEEK_API_KEY`       | AI 必填   | —                                  | DeepSeek API Key，**禁止硬编码**          |
+| `LANGFUSE_ENABLED`       | 否       | `false`                            | 设为 `true` 启用 Agent 链路追踪 (Langfuse) |
+| `REDIS_URL`              | 否       | `redis://127.0.0.1:6379`           | BullMQ 依赖，用于执行 AI 记忆提取等异步队列         |
 
 
 **前端（`TOT_frontend/.env.development`）：**
@@ -714,6 +725,15 @@ ws.onerror = (e) => console.error('连接失败', e);
 ## 前后端联调更新概览
 
 以下为按日期的变更摘要。
+
+## 2026-04-30
+
+- **Executive Chat 2.0 架构彻底重构 (LangGraph)**：
+  - **核心状态机重写**：废弃旧版 `chatAgentRunner.js` 基于 `while` 的脆弱循环，全面接入 `LangGraph.js`。实现了从意图路由、工具去重、参数校验到合并渲染的标准 Agentic Workflow。
+  - **人机协同断点挂起 (HITL)**：原生支持基于 LangGraph `interrupt()` 的执行流挂起。当 AI 遇到门店重名等低置信度实体或缺失必填参数时，能向前端推送卡片并挂起状态，待用户选择后无缝恢复（Resume）原调用栈。
+  - **智能错误感知与防死循环**：统一 `success: false` 与 Error 抛出的异常处理，并在 LLM 的 System Prompt 中强制注入“缺参追问”指令，彻底根除了大模型遇到参数报错时疯狂试错耗尽 Token 的幻觉行为。
+  - **异步长期记忆抽取 (Memory Worker)**：引入 `BullMQ` 和 `Redis` 构建异步提取队列，通过大模型实时萃取并落库用户的长期查询偏好与业务事实，实现 AI 的个性化记忆累积。
+  - **全方位防腐与异常降级**：修复了意图切换 (`intent_shift`) 导致的 LLM 消息格式报错 (400 Bad Request) 问题，同时为 Markdown 渲染器加上了原生的报错 Message 提取能力，避免直接暴露 JSON 代码块给终端用户。
 
 ## 2026-04-13
 

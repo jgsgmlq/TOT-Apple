@@ -6,6 +6,16 @@
  */
 
 function errorHandler(err, req, res, next) {
+  // SSE 路径出错时，service 已经把 SSE error 事件写出并 res.end()，再写一次会触发
+  // ERR_HTTP_HEADERS_SENT 让前端拿到 500 而非干净的 SSE error。看到标记直接静默返回。
+  if (err && err._sseResponseSent) {
+    return;
+  }
+  if (res.headersSent) {
+    // 兜底：标记没打但 headers 已发的极端情况，交给 Express 默认行为关连接，不再写 body
+    return next(err);
+  }
+
   const status = err.status || err.statusCode || 500;
   const message = err.message || '服务器内部错误';
 

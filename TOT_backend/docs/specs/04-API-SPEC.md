@@ -2181,40 +2181,92 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   }
   ```
   **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
-  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify", "reasoningLevel": "summary" }`。
-    - `reasoningLevel`：仅当 `phase="reasoning"` 时出现，目前固定为 `"summary"` 表示已脱敏摘要。
-    - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
-    - `clarify` 时 `text` 为消歧请求 JSON（含备选门店列表），前端应展示选择 UI。
-  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "...", "toolName"?: "...", "status"?: "...", "reasoningLevel"?: "summary" }`。
+  
+  **SSE Phase 枚举表：**
+
+  | Phase | 说明 | `text` 字段内容 | 附加字段 |
+  |---|---|---|---|
+  | `reasoning` | 思维链 / 推理过程 | Token 片段 | `reasoningLevel` |
+  | `content` | 最终答复正文 | Token 片段 | - |
+  | `tool_start` | 工具开始执行 | 工具名称 | `toolName` |
+  | `tool_end` | 工具执行结束 | - | `status` |
+  | `clarify` | HITL 挂起（需消歧/补参） | `InterruptPayload` JSON | - |
+  | `error` | 链路异常 | 错误描述文本 | - |
+
+  - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object, "responseTime": number, "contextId": "string", "timestamp": "string" }, "requestId": "..." }`。
   - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
+  - **实现说明**：当前流式消息与 `resume` 路由均以 `stream=true` 或 `stream="langgraph"` 进入 LangGraph 引擎；`clarificationResponse.toolCallId` 需要与上一次工具调用 ID 对齐。
 
   - **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
-   "code": 200,
-   "message": "success",
-   "data": {
-     "messageId": "string",
-     "markdownContent": "string", // FC 模式下的 Markdown 正文
-     "replyContent": { // 兼容字段，Routing 模式下为对象，FC 模式下为 null
-       "overview": "...", // (Legacy)
-       "keyNumbers": [], // (Legacy)
-       "attentionPoints": [], // (Legacy)
-       "followUpSuggestions": [] // (Legacy)
-     },     "responseTime": 3500,
-     "contextId": "string",
-     "timestamp": "string"
-   },
-   "requestId": "string"
+    "code": 200,
+    "message": "success",
+    "data": {
+      "messageId": "string",
+      "markdownContent": "string",
+      "replyContent": null,
+      "responseTime": 3500,
+      "contextId": "string",
+      "timestamp": "string"
+    },
+    "requestId": "string"
   }
-  ```- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
+  ```
+- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文。当前实现中，FC / LangGraph 的最终对外正文以 `markdownContent` 为主；`replyContent` 在流式与非流式成功响应里均保持 `null`，用于兼容旧前端字段但不承载新结构化卡片数据。
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
   - 409：`CHAT_009`，重复的 messageId（幂等拦截）
   - 503：AI Agent服务未就绪（响应超时）
 
-### 6.2.1 删除Executive Chat会话**P1**
+### 6.2.1 恢复聊天会话（Resume HITL）**P1**
+
+- **接口路径**：`/chat/executive/sessions/{sessionId}/resume`
+- **请求方法**：POST
+- **请求头**：`Authorization: Bearer {token}`
+- **请求体**：
+  ```json
+  {
+    "resumePayload": { 
+      "resume_type": "slot_fill" | "intent_shift" | "cancel",
+      "selected_option_id": "string", // 选中项 ID
+      "value": "any",                // 选中的原始值或输入文本
+      "user_text": "string",         // 用于 intent_shift 的用户输入
+      "toolCallId": "string"         // 关联的工具 ID
+    },
+    "stream": true
+  }
+  ```
+
+#### 附：HITL 类型定义
+
+**InterruptPayload (由后端在 `phase: clarify` 发送)**
+```json
+{
+  "type": "select" | "input" | "confirm",
+  "reason": "low_confidence_entity" | "missing_required_param" | "custom",
+  "prompt": "请选择您要查询的门店",
+  "options": [
+    { "id": "string", "label": "string", "value": "any", "meta": { "intent_shift": boolean } }
+  ],
+  "resume_token": "call_abc123", // 必须在 resume 时传回作为 toolCallId 或 token
+  "context": { "missingFields": ["string"] }
+}
+```
+
+**ResumePayload (前端回传)**
+```json
+{
+  "resume_type": "slot_fill",      // slot_fill: 补参数; intent_shift: 切意图; cancel: 取消
+  "value": "上海陆家嘴店",
+  "selected_option_id": "opt_1",
+  "toolCallId": "call_abc123"
+}
+```
+
+### 6.2.2 删除Executive Chat会话**P1**
 
 - **接口名称**：删除Executive Chat会话
 - **接口路径**：`/chat/executive/sessions/{sessionId}`
@@ -2262,9 +2314,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "historyList": [
         {
           "messageId": "string",
-          "sender": "executive/assistant",
-          "content": "string", // 原始正文（FC模式为 Markdown，Routing模式为 JSON 字符串）
-          "replyContent": null|object, // 兼容字段：仅当 content 为旧版 JSON 且解析成功时填充对象，否则为 null
+          "role": "assistant",
+          "content": "string",        // assistant 的展示内容；当前实现为 markdownContent 或原始 content
+          "markdownContent": "string", // assistant 的 Markdown 正文
+          "replyContent": null|object,   // 当前实现保持 null；仅保留兼容字段
+          "intentType": "string|null",
           "userFeedback": "like | dislike | null",
           "timestamp": "string"
         }

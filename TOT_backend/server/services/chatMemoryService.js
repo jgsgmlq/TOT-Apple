@@ -200,8 +200,17 @@ ${conversationText}`;
  * @param {number} userId 
  */
 function getMemories(userId) {
-  const rows = db.all('SELECT memory_type, content FROM user_memories WHERE user_id = ?', [userId]);
-  if (!rows.length) return '';
+  // T4: mid-term TTL 14 天兜底策略。对于 mid_term 类型的记忆，只读取最近 14 天内的记录
+  const rows = db.all(`
+    SELECT memory_type, content 
+    FROM user_memories 
+    WHERE user_id = ? 
+      AND (
+        memory_type != 'mid_term' 
+        OR (memory_type = 'mid_term' AND created_at > datetime('now', '-14 days'))
+      )
+  `, [userId]);
+  if (!rows || !rows.length) return '';
   
   return rows.map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
 }

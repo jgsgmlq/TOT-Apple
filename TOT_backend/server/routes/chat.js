@@ -27,7 +27,7 @@ function requireSessionOwnership(req, res, next) {
 
 function handleCreateSession(req, res, next) {
   try {
-    const result = chatService.createSession(req.user.id);
+    const result = chatService.createSession(req.user.id, req.user);
     res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);
@@ -43,13 +43,41 @@ async function handlePostMessage(req, res, next) {
       throw createError(400, 'content 不能为空', 'CHAT_005');
     }
 
-    if (stream === true) {
+    if (stream === 'legacy_stream') {
+      // 保留一个后门，允许测试人员或灰度策略回退到老引擎
       await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
       return;
     }
 
-    const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id);
+    if (stream === true || stream === 'langgraph') {
+      // 默认将前端的所有流式请求（前端传 stream: true）全部导向新版 LangGraph 引擎
+      await chatService.sendMessageStreamLangGraph(sessionId, content.trim(), req.user.id, req, res);
+      return;
+    }
+
+    const result = await chatService.sendMessage(sessionId, content.trim(), req.user.id, req);
     res.json({ code: 200, message: 'success', data: result, requestId: req.requestId });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function handleResume(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    const { resumePayload, stream } = req.body;
+
+    if (!resumePayload) {
+      throw createError(400, 'resumePayload 不能为空', 'CHAT_006');
+    }
+
+    if (stream === true || stream === 'langgraph') {
+      await chatService.resumeMessageStreamLangGraph(sessionId, resumePayload, req.user.id, req, res);
+      return;
+    }
+
+    // 默认回退逻辑
+    throw createError(400, '仅支持 LangGraph 模式下的流式 resume 操作', 'CHAT_007');
   } catch (err) {
     next(err);
   }
@@ -86,12 +114,18 @@ async function handleRegenerate(req, res, next) {
     const { sessionId, messageId } = req.params;
     const { stream } = req.body;
 
-    if (stream === true) {
+    if (stream === 'legacy_stream') {
       await chatService.regenerateLastAssistantStream(sessionId, messageId, req.user.id, req, res);
       return;
     }
 
-    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id);
+    if (stream === true || stream === 'langgraph') {
+      // Regenerate 也要引向 LangGraph 引擎（需要在 chatService 中增加映射方法）
+      await chatService.regenerateLastAssistantStreamLangGraph(sessionId, messageId, req.user.id, req, res);
+      return;
+    }
+
+    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id, req);
 
     res.json({
       code: 200,
@@ -156,6 +190,14 @@ function mountChatRoutes(prefix, roles) {
     requireRole(roles),
     requireSessionOwnership,
     handlePostMessage
+  );
+
+  router.post(
+    `${base}/:sessionId/resume`,
+    authenticate,
+    requireRole(roles),
+    requireSessionOwnership,
+    handleResume
   );
 
   router.post(

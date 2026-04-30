@@ -1,4 +1,4 @@
-import type { ReplyContent, SendMessageResult } from '@/api/chat';
+import type { ReplyContent, SendMessageResult, ClarifyPayload } from '@/api/chat';
 import { formatReplyContentText } from '@/api/chat';
 import { splitPreambleAndJson, parseReplyContentProgressive } from '@/utils/execChatStreamParts';
 
@@ -177,18 +177,26 @@ export function finalizeExecStyleMessage(
 /**
  * SSE 流式重新生成（由于 API 参数不同，这里单独封装）
  */
+export type ExecStreamPayload =
+  | { id: string; type: 'streaming'; partialReply: string; thinking: string }
+  | { id: string; type: 'done'; result: SendMessageResult; thinking: string }
+  | { id: string; type: 'clarify'; clarify: ClarifyPayload; thinking: string }
+  | { id: string; type: 'error'; error: unknown };
+
 export function runExecRegenerateSseChat(
   streamFn: (
     sessionId: string,
     messageId: string,
     onDelta: (chunk: { text: string; phase?: string; toolName?: string }) => void,
     onComplete: (data: SendMessageResult) => void,
+    onClarify: (payload: ClarifyPayload) => void,
     onError: (error: unknown) => void,
     streamOptions?: { signal?: AbortSignal }
   ) => Promise<void>,
   sessionId: string,
   messageId: string,
   onUpdate: (payload: ExecStreamPayload) => void,
+  onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<SendMessageResult> {
   return new Promise((resolve, reject) => {
@@ -221,6 +229,15 @@ export function runExecRegenerateSseChat(
         });
         resolve(data);
       },
+      (clarify) => {
+        onClarify?.(clarify);
+        onUpdate({
+          id: messageId,
+          type: 'clarify',
+          clarify,
+          thinking: thinkingSnapshot,
+        });
+      },
       (err) => {
         onUpdate({ id: messageId, type: 'error', error: err });
         reject(err);
@@ -234,18 +251,20 @@ export function runExecRegenerateSseChat(
  * SSE 流式对话（delta/done），将增量映射为与 Executive 一致的 payload。
  * `done` 时 `thinkingSnapshot` 取最后一帧 delta 的快照。
  */
-export function runExecStyleSseChat(
+export function runExecStyleSseChat<TInput = string>(
   streamFn: (
     sessionId: string,
     content: string,
     onDelta: (chunk: { text: string; phase?: string; toolName?: string }) => void,
     onComplete: (data: SendMessageResult) => void,
+    onClarify: (payload: ClarifyPayload) => void,
     onError: (error: unknown) => void,
     streamOptions?: { signal?: AbortSignal }
   ) => Promise<void>,
   sessionId: string,
-  userContent: string,
+  userContent: TInput,
   onStreamingPatch: (payload: ExecStyleAiPayload) => void,
+  onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<{ result: SendMessageResult; thinkingSnapshot: string }> {
   const state = initExecStreamState();
@@ -262,6 +281,9 @@ export function runExecStyleSseChat(
       },
       (result) => {
         resolve({ result, thinkingSnapshot: lastSnapshot });
+      },
+      (clarify) => {
+        onClarify?.(clarify);
       },
       (err) => reject(err),
       { signal: options?.signal }

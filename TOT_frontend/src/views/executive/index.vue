@@ -179,6 +179,39 @@
 
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <n-spin :show="isLoadingHistory" style="min-height: 120px">
+            <div v-if="pendingClarification" class="clarify-panel">
+              <div class="clarify-title">{{ pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
+              <div class="clarify-options" v-if="pendingClarification.data?.options?.length || pendingClarification.options?.length">
+                <n-button
+                  v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
+                  :key="opt.id"
+                  size="small"
+                  round
+                  type="primary"
+                  ghost
+                  @click="sendClarificationResponse(pendingClarification, { action: 'select_option', option: opt })"
+                >
+                  {{ opt.label }}
+                </n-button>
+              </div>
+              <div
+                class="clarify-input"
+                v-if="(pendingClarification.data?.type || pendingClarification.type) === 'input' || (pendingClarification.data?.reason || pendingClarification.reason) === 'missing_required_param'"
+              >
+                <n-input
+                  v-model:value="clarifyInputDraft"
+                  size="small"
+                  placeholder="请直接输入要补充的内容"
+                  @keyup.enter="submitClarifyInput"
+                />
+                <n-button size="small" type="primary" @click="submitClarifyInput" :disabled="!clarifyInputDraft.trim()">
+                  提交
+                </n-button>
+              </div>
+              <div class="clarify-actions">
+                <n-button size="small" tertiary @click="cancelClarification">取消</n-button>
+              </div>
+            </div>
             <div v-if="messages.length === 0 && !isLoadingHistory" class="empty-chat">
               <h3>Hi! {{ displayName }} 👋✨</h3>
               <p>作为你的智能助手，我可以为你答疑解惑～</p>
@@ -376,6 +409,39 @@
         </div>
 
         <div class="chat-footer">
+          <div v-if="pendingClarification" class="clarify-panel">
+            <div class="clarify-title">需要进一步确认</div>
+            <div class="clarify-text">{{ pendingClarification.message || pendingClarification.data?.prompt || '请选择一个选项继续' }}</div>
+            <div class="clarify-options">
+              <n-button
+                v-for="opt in (pendingClarification.data?.options || [])"
+                :key="opt.id"
+                type="primary"
+                secondary
+                round
+                @click="sendClarificationResponse(pendingClarification, { action: 'select_option', option: opt })"
+              >
+                {{ opt.label }}
+              </n-button>
+            </div>
+            <div
+              class="clarify-input"
+              v-if="(pendingClarification.data?.type || pendingClarification.type) === 'input' || (pendingClarification.data?.reason || pendingClarification.reason) === 'missing_required_param'"
+            >
+              <n-input
+                v-model:value="clarifyInputDraft"
+                size="small"
+                placeholder="请直接输入要补充的内容"
+                @keyup.enter="submitClarifyInput"
+              />
+              <n-button size="small" type="primary" @click="submitClarifyInput" :disabled="!clarifyInputDraft.trim()">
+                提交
+              </n-button>
+            </div>
+            <div class="clarify-actions">
+              <n-button size="small" tertiary @click="cancelClarification">取消</n-button>
+            </div>
+          </div>
           <div class="input-wrapper">
             <n-input
               v-model:value="inputValue"
@@ -430,6 +496,7 @@
   import {
     createChatSession,
     streamExecutiveChatMessage,
+    streamResumeExecutiveChatMessage,
     getChatHistory,
     deleteChatSession,
     formatReplyContentText,
@@ -439,6 +506,7 @@
     type ChatHistoryItem,
     type SendMessageResult,
     type ReplyContent,
+    type ClarifyPayload,
   } from '@/api/chat';
   import {
     runExecStyleSseChat,
@@ -489,6 +557,8 @@
     thinking?: string;
     /** 旧版结构化回答（仅用于历史兼容） */
     replyContent?: ReplyContent | null;
+    /** HITL / clarify 交互态 */
+    pendingClarification?: ClarifyPayload | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
     isFeedbackLoading?: boolean;
@@ -544,21 +614,164 @@
   watch(voiceEnabled, (v) => setExecutiveVoiceEnabled(v));
 
   const messages = ref<ChatMessage[]>([]);
+  const pendingClarification = ref<ClarifyPayload | null>(null);
 
   const handleStop = () => {
-    // 1. 中止请求
+    // 守卫：regenerate 用的是本地 controller，跟全局 abortController.value 完全隔离。
+    // 如果当前有任何消息正在 regenerate，stop 按钮被误触发（如 v-else 切换瞬间事件冒泡到刚切出来的
+    // stop 按钮）会破坏 regenerate 流：误把流式中的 streamContent 当 content、清掉 isSending。
+    // 这种情况下 stop 应该是 no-op，让 regenerate 自己跑完或失败。
+    const isAnyRegenerating = messages.value.some((m) => m.isRegenerating);
+    if (isAnyRegenerating) return;
     abortController.value?.abort();
     abortController.value = null;
-    // 2. 更新状态
     isSending.value = false;
     const lastMsg = messages.value[messages.value.length - 1];
     if (lastMsg?.role === 'ai') {
-      // 保留已生成的 streamContent
       lastMsg.content = lastMsg.streamContent || lastMsg.content || '';
       lastMsg.done = true;
       lastMsg.activeToolName = undefined;
       lastMsg.streamContent = undefined;
     }
+  };
+
+  const clearClarification = () => {
+    pendingClarification.value = null;
+    clarifyInputDraft.value = '';
+  };
+
+  const cancelClarification = async () => {
+    const payload = pendingClarification.value;
+    if (!payload) return;
+    // 仅清空本地视图会让后端 graph 持续挂在 interrupt 上，必须显式发 cancel 回 /resume，
+    // 让 humanInTheLoopGate 走 cancel 分支安全收尾。
+    try {
+      await sendClarificationResponse(payload, { resumeType: 'cancel' });
+    } catch {
+      /* sendClarificationResponse 内部已处理错误提示 */
+    } finally {
+      clearClarification();
+    }
+  };
+
+  const submitClarifyInput = async () => {
+    const payload = pendingClarification.value;
+    if (!payload) return;
+    const text = clarifyInputDraft.value.trim();
+    if (!text) return;
+    await sendClarificationResponse(payload, { resumeType: 'slot_fill', value: text, userText: text });
+    clarifyInputDraft.value = '';
+  };
+
+  const clarifyInputDraft = ref('');
+
+  const buildClarifyMessage = (payload: ClarifyPayload) => {
+    const d = payload.data || {};
+    const prompt = typeof d.prompt === 'string' ? d.prompt : payload.message || payload.prompt || '需要你进一步确认';
+    return {
+      id: `clarify-${Date.now()}`,
+      role: 'ai' as const,
+      content: prompt,
+      done: true,
+      pendingClarification: payload,
+      streamContent: prompt,
+    };
+  };
+
+  const sendClarificationResponse = async (
+    payload: ClarifyPayload,
+    chosen?: {
+      action?: string;
+      option?: { id?: string; label?: string; value?: unknown; meta?: Record<string, unknown> };
+      value?: unknown;
+      resumeType?: 'slot_fill' | 'intent_shift' | 'cancel';
+      userText?: string;
+    }
+  ) => {
+    if (!sessionId.value) return;
+
+    // 1) 决定 resume_type：
+    //    - 显式 chosen.resumeType 优先
+    //    - 选项的 meta.intent_shift === true → intent_shift
+    //    - 否则 slot_fill
+    const optMeta = (chosen?.option?.meta || {}) as Record<string, unknown>;
+    const isIntentShift =
+      chosen?.resumeType === 'intent_shift' || optMeta.intent_shift === true;
+    const isCancel = chosen?.resumeType === 'cancel';
+    const resumeType: 'slot_fill' | 'intent_shift' | 'cancel' = isCancel
+      ? 'cancel'
+      : isIntentShift
+      ? 'intent_shift'
+      : 'slot_fill';
+
+    // 2) 真正回传给后端的 value：优先 meta.value（我们后端 Fix 1 写的就是它），
+    //    再退到 option.value，再退到 chosen.value，再退到 option.label。
+    const resolvedValue =
+      optMeta.value !== undefined
+        ? optMeta.value
+        : chosen?.option?.value !== undefined
+        ? chosen.option.value
+        : chosen?.value !== undefined
+        ? chosen.value
+        : chosen?.option?.label;
+
+    const resumePayload: Record<string, unknown> = {
+      resume_type: resumeType,
+      value: resolvedValue,
+      selected_option_id: chosen?.option?.id,
+      action: chosen?.action || (isCancel ? 'cancel' : 'select_option'),
+      toolCallId:
+        payload.data?.toolCallId || payload.data?.resumeToken || payload.toolCallId,
+    };
+    if (isIntentShift) {
+      // 后端 humanInTheLoopGate 会优先读 user_text 写回 userMessage 让 router 重跑
+      resumePayload.user_text =
+        chosen?.userText ??
+        (typeof resolvedValue === 'string' ? resolvedValue : '') ??
+        '';
+    }
+
+    pendingClarification.value = null;
+    if (!isCancel) {
+      messages.value.push({
+        role: 'user',
+        content:
+          typeof resolvedValue === 'string'
+            ? resolvedValue
+            : chosen?.option?.label || '已确认补充信息',
+      });
+      messages.value.push({ role: 'ai', content: '已提交补充信息，正在继续处理…', done: true });
+      scrollToBottom();
+    }
+
+    try {
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamResumeExecutiveChatMessage,
+        sessionId.value,
+        resumePayload,
+        (p) => {
+          if (isCancel) return;
+          messages.value[messages.value.length - 1] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+          };
+          scrollToBottom();
+        },
+        async (clarify) => {
+          pendingClarification.value = clarify;
+          messages.value[messages.value.length - 1] = buildClarifyMessage(clarify);
+          scrollToBottom();
+        },
+        { signal: abortController.value?.signal }
+      );
+      applySendSuccess(sessionId.value, result, thinkingSnapshot);
+    } catch (e) {
+      message.error('恢复对话失败，请重试');
+    }
+    return resumePayload;
   };
 
   async function fillComposerWithSuggestion(text: string) {
@@ -973,6 +1186,11 @@
               if (spoken) tts.pushSpokenPlainText(spoken);
             }
           },
+          async (clarify) => {
+            pendingClarification.value = clarify;
+            messages.value[loadingIndex] = buildClarifyMessage(clarify);
+            scrollToBottom();
+          },
           { signal: abortController.value?.signal }
         );
         if (tts) {
@@ -1054,7 +1272,13 @@
       done: false,
     };
 
-    abortController.value = new AbortController();
+    // regenerate 用本地 controller，**不暴露给全局 abortController.value ref**。
+    // 否则当用户点重新生成时，isSending.value=true 会让 send 按钮切到 stop 状态，
+    // 同一个 click 的事件落到刚切出来的 stop 按钮上 → handleStop 触发 abort →
+    // server 端 ~4ms 内收到 socket close → AbortError。诊断 stack 印证：
+    //   regenAbort.abort() called → handleStop → naive-ui handleClick2 → HTMLButtonElement
+    // trade-off：regenerate 期间 stop 按钮无效（无法中途取消），可接受。
+    const regenAbort = new AbortController();
 
     try {
       const result = await runExecRegenerateSseChat(
@@ -1080,7 +1304,12 @@
           }
           scrollToBottom();
         },
-        { signal: abortController.value.signal }
+        (clarify) => {
+          pendingClarification.value = clarify;
+          messages.value[index] = buildClarifyMessage(clarify);
+          scrollToBottom();
+        },
+        { signal: regenAbort.signal }
       );
 
       if (voiceEnabled.value) {
@@ -1089,15 +1318,21 @@
     } catch (error) {
       if (!isStreamAbortError(error)) {
         message.error('重新生成失败，请重试');
-        messages.value[index].content = '*(请求失败)*';
-        messages.value[index].done = true;
+        const errIdx = messages.value.findIndex((m) => m.id === msg.id);
+        const target = errIdx >= 0 ? messages.value[errIdx] : messages.value[index];
+        if (target) {
+          target.content = '*(请求失败)*';
+          target.done = true;
+        }
       }
     } finally {
-      if (messages.value[index]) {
-        messages.value[index].isRegenerating = false;
-      }
+      // 用 messageId 重新定位消息：如果中间被 buildClarifyMessage 等替换或数组变长/变短，
+      // 直接拿原 index 会清错对象，留下 isRegenerating=true 卡住按钮。
+      const finalIdx = messages.value.findIndex((m) => m.id === msg.id);
+      const target = finalIdx >= 0 ? messages.value[finalIdx] : messages.value[index];
+      if (target) target.isRegenerating = false;
       isSending.value = false;
-      abortController.value = null;
+      // regenAbort 没暴露给全局 ref，无需清理 abortController.value
     }
   };
 </script>
@@ -1605,6 +1840,34 @@
               }
             }
           }
+        }
+
+        .clarify-panel {
+          margin-bottom: 16px;
+          padding: 12px 14px;
+          border: 1px solid rgba(37, 99, 235, 0.2);
+          background: rgba(37, 99, 235, 0.06);
+          border-radius: 12px;
+        }
+
+        .clarify-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: #1d4ed8;
+          margin-bottom: 10px;
+          white-space: pre-wrap;
+        }
+
+        .clarify-options {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-bottom: 10px;
+        }
+
+        .clarify-actions {
+          display: flex;
+          justify-content: flex-end;
         }
 
         .exec-json-fallback {

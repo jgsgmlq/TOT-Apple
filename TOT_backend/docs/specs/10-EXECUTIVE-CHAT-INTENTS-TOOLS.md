@@ -1,10 +1,11 @@
 # Executive Chat 意图与工具实现说明（As-Is）
 
-**最后更新：** 2026-04-21  
+**最后更新：** 2026-04-28  
 **状态：** Current  
 **适用范围：** `TOT_backend/server/services/chatIntentService.js`、`chatAgentRunner.js`、`chatToolsService.js`、`server/chat_tools/*`
 
-> 约定：`09-EXECUTIVE-CHAT.md` 对意图与工具仅保留摘要列表；本文件作为意图/工具实现与扩展流程的详细说明正本。
+> 约定：`09-EXECUTIVE-CHAT.md` 对意图与工具仅保留摘要列表；本文件作为意图/工具实现与扩展流程的详细说明正本。  
+> 当前运行链路以 `chatService -> chatAgentRunner` 为准；LangGraph 迁移内容见 `docs/plans/`，不在本文件混写目标态节点细节。
 
 ---
 
@@ -27,32 +28,33 @@
 
 ---
 
-## 1. 当前已实现意图（intentType）
+## 1. 当前已实现规范意图（Canonical Intents）与别名（Aliases）
 
-### 1.1 分类器合法集合（`VALID_INTENTS`）
+### 1.1 规范意图集合（Canonical Intents）
 
-当前代码中 **意图分类 LLM** 的输出会被约束为 `chatIntentService.js` 的 `VALID_INTENTS`：
+当前系统中，无论是 Router 模型的直接输出，还是经过别名转换后，最终用于路由和视图渲染的规范意图（Canonical Intents）如下：
 
-| intentType | 语义 | 示例问题 | 当前状态 |
+| 规范意图 (Canonical) | 语义 | 核心工具优先级 | 示例问题 |
 |-----------|------|----------|----------|
-| `progress_query` | 培训进度与完成率查询 | 「Q1 新品培训完成率是多少？」 | 已实现 |
-| `project_status` | 项目/任务状态查询 | 「现在有哪些进行中的培训任务？」 | 已实现 |
-| `warning_query` | 预警与风险查询 | 「现在有哪些门店需要重点关注？」 | 已实现 |
-| `drill_down` | 区域或门店下钻查询 | 「华东区怎么样？」/「上海环球港店怎么样？」 | 已实现 |
-| `analytics_query` | 统计分析查询（依赖 `analysisType`） | 「华东区 P90 完成耗时是多少？」 | 已实现 |
-| `matrix_query` | 矩阵式多维指标查询（统一工具 `queryExecutiveMetrics`） | 「各区域的完成率和 P0 预警数是多少？」 | 已实现（v3.0） |
-| `unknown` | 闲聊或超范围问题兜底 | 「你好」「谢谢」 | 已实现 |
+| `query_metrics` | 综合指标/矩阵查询 | `queryExecutiveMetrics`, `getOverviewData` | 「各区域的完成率和 P0 预警数是多少？」 |
+| `progress_query`| 培训进度概览查询 | `getOverviewData`, `queryExecutiveMetrics` | 「Q1 新品培训完成率是多少？」 |
+| `project_status`| 项目/任务状态查询 | `getTaskListData`, `getOverviewData` | 「现在有哪些进行中的培训任务？」 |
+| `warning_query` | 预警与风险查询 | `getWarningsData`, `queryExecutiveMetrics` | 「现在有哪些门店需要重点关注？」 |
+| `drill_down`    | 区域或门店下钻查询 | `getRegionDetailData`, `getStoreDetailData` | 「华东区怎么样？」/「上海环球港店怎么样？」 |
+| `analytics_query`| 高阶统计分析查询 | `runAnalytics`, `queryExecutiveMetrics` | 「华东区 P90 完成耗时是多少？」 |
+| `chat_only`     | 纯对话/闲聊兜底 | (不调用工具) | 「你好」「谢谢」「你是谁」 |
 
-### 1.2 Agent 响应侧扩展 `_intentType`（非分类器枚举）
+### 1.2 意图别名映射表（INTENT_ALIAS_MAP）
 
-`chatAgentRunner.run()` 在 **不经过意图分类** 的分支上也会直接返回结构化回复，此时 `_intentType` 可能为：
+由于 LLM 偶尔会输出旧版文档中的别名，系统在 `intents.js` 中维护了统一的 `INTENT_ALIAS_MAP` 以进行归一化 (`normalizeIntent`)：
 
-| `_intentType` | 说明 |
-|---------------|------|
-| `chat_only` | 轻量寒暄/空输入等，由 `classifyExecutionMode` 判定为仅对话，不调工具 |
-| `deny` | 语义监工判定为危险写操作（代发邮件、改库等），只读拦截 |
-
-落库字段 `intent_type` 以实际返回值为准；与 §1.1 并列理解即可。
+| LLM 输出 / 别名 (Alias) | 规范意图 (Canonical) | 说明 |
+|---|---|---|
+| `matrix_query` | `query_metrics` | 旧版矩阵查询统一并入 query_metrics |
+| `task_status` | `project_status` | 任务状态查询统一并入 project_status |
+| `store_warning`| `warning_query` | 门店预警统一并入 warning_query |
+| `analytics` | `analytics_query`| 统计分析后缀补齐 |
+| `unknown` | `chat_only` | 无法识别或闲聊兜底 |
 
 ---
 
@@ -83,46 +85,23 @@
 
 ---
 
-## 3. 运行模式与意图 → 工具映射
+## 3. 意图与候选工具映射 (INTENT_TOOL_MAP)
 
-### 3.1 默认：`function_calling`（`CHAT_AGENT_MODE`）
+在当前的 LangGraph 架构中，系统通过 `INTENT_TOOL_MAP` 为不同的规范意图静态绑定了一组推荐的候选工具集合，这些候选工具将提供给 LLM 供其在 FC 循环中自主调用：
 
-环境变量 **`CHAT_AGENT_MODE`** 未设置时，默认值为 **`function_calling`**（见 `chatAgentRunner.js`）。模型可在一个用户轮次内自主选择并串联多个工具；落库 **`intentType`** 由下列规则推导：
-
-1. 若发生工具调用：按 **`deriveIntentType(calledToolNames, fallbackIntent)`** 根据**已调用工具名集合**映射（见 §3.3）。
-2. 若无工具调用：使用 **`inferIntentFromMessage(userMessage)`** 正则/关键词兜底（含 `matrix_query`、`analytics_query` 等优先级）。
-
-### 3.2 兜底：`intent_routing`
-
-`CHAT_AGENT_MODE=intent_routing` 时，先由 `chatIntentService.classify` 得到 `intentType` + `entities`，再查 **`toolMap`**（见 §3.4）。适用于 FC 不稳定时的故障回退。
-
-### 3.3 FC 模式：工具名 → `intentType`（`deriveIntentType` 顺序）
-
-以下按代码判定顺序（先命中先生效）：
-
-| 条件 | 落库 intentType |
-|------|-----------------|
-| 调用过 `queryExecutiveMetrics` | `matrix_query` |
-| 调用过 `runAnalytics` | `analytics_query` |
-| 调用过 `getWarningsData` | `warning_query` |
-| 调用过 `getRegionDetailData` 或 `getStoreDetailData` | `drill_down` |
-| 调用过 `getTaskListData` | `project_status` |
-| 调用过 `getOverviewData` | `progress_query` |
-| 以上皆无 | `fallbackIntent`（来自 `inferIntentFromMessage`）或 `unknown` |
-
-### 3.4 Intent routing：`intentType` → 工具
-
-`runIntentRouting` 中 **`toolMap`**：
-
-| intentType | 工具映射规则 |
+| 规范意图 (intent) | 绑定的候选工具列表 (Candidate Tools) |
 |-----------|--------------|
-| `progress_query` | `getOverviewData` |
-| `matrix_query` | `queryExecutiveMetrics`（`entities` 会归一化为工具入参，含 `dimensions`/`metrics`/`taskName`/`productName`/`filters`/`sort`） |
-| `project_status` | `getTaskListData` |
-| `warning_query` | `getWarningsData` |
-| `drill_down` | 若 `entities.region` 存在且 `storeId`/`storeName` 均为空 → `getRegionDetailData`；否则 → `getStoreDetailData` |
-| `analytics_query` | `runAnalytics`（若缺 `analysisType` 且无 `[绘图]` 缓存命中，可能直接返回引导文案而不调工具） |
-| `unknown` | 不调用工具，返回对话/引导内容 |
+| `query_metrics` | `queryExecutiveMetrics`, `getOverviewData`, `getRegionDetailData` |
+| `progress_query` | `getOverviewData`, `queryExecutiveMetrics` |
+| `project_status` | `getTaskListData`, `getOverviewData`, `queryExecutiveMetrics` |
+| `warning_query` | `getWarningsData`, `queryExecutiveMetrics`, `getStoreDetailData` |
+| `drill_down` | `getRegionDetailData`, `getStoreDetailData`, `queryExecutiveMetrics` |
+| `analytics_query` | `runAnalytics`, `queryExecutiveMetrics`, `fetchRawDataset`, `executeCode` |
+| 兜底 (Fallback) | `queryExecutiveMetrics`, `getOverviewData`, `getTaskListData` |
+
+> **说明**：
+> 1. `ContextAnalyzerRouter` 确定意图并完成归一化后，`ToolRetrieve` 节点会根据此表筛选工具注入上下文。
+> 2. 这是目前的静态绑定策略。未来 `ToolRetrieve` 可能会升级为结合 BM25 动态检索的 Top-K 模式。
 
 ---
 

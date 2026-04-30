@@ -1,6 +1,6 @@
 # MVP 项目文档中心
 
-**最后更新:** 2026-04-23  
+**最后更新:** 2026-04-30  
 **文档版本:** 1.3  
 **适用于:** AI、开发者、测试、产品
 
@@ -60,6 +60,9 @@
 - 后端：[`backend/index.md`](backend/index.md)  
 - 测试：[`tests/index.md`](tests/index.md)  
 - 内部契约 / 前端交付：[`internal/CONTRACT.md`](internal/CONTRACT.md)、[`internal/FRONTEND-HANDOFF.md`](internal/FRONTEND-HANDOFF.md)  
+- Executive Chat 代码导读 / 状态图对照：[`internal/EXECUTIVE-CHAT-CODE-MAP.md`](internal/EXECUTIVE-CHAT-CODE-MAP.md)  
+- Executive Chat To-Be 状态图逐状态修复计划：[`plans/2026-04-30-executive-chat-to-be-state-audit-fix-plan.md`](plans/2026-04-30-executive-chat-to-be-state-audit-fix-plan.md)  
+- Executive Chat Post-Audit 专项修复计划：[`plans/2026-04-30-executive-chat-post-audit-fix-plan.md`](plans/2026-04-30-executive-chat-post-audit-fix-plan.md)  
 - 归档：[`archive/index.md`](archive/index.md)
 
 ---
