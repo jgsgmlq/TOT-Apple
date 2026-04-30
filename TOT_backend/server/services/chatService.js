@@ -478,6 +478,22 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       _toolMeta: { toolCalls: [] } 
     };
 
+    // T1: 恢复唤醒后生成的新答案也需要入库
+    const now = formatNowSqliteLocal();
+    const assistMsgId = nanoid();
+    const finalContent = storageContentFromAgentResult(result);
+    try {
+      db.transaction(() => {
+        db.run(
+          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+        );
+        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+      })();
+    } catch (err) {
+      logger.error('chat_messages_insert_error', { sessionId, error: err.stack });
+    }
+
     endSpan(sseSpan, { output: 'success' });
     wrappedSend('done', '[DONE]');
     return result;
@@ -533,13 +549,16 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     entryKind: 'sendMessageStreamLangGraph',
   });
 
-  // 我们不再依赖旧的 handleIncomingMessage，因为 LangGraph 会自己存消息
+  // T1: 必须调用 handleIncomingMessage 以保证外部 API (/history) 获取到的旧表 chat_messages 里有用户输入
+  await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
+
   writeSseHeaders(res);
   const send = createSseSender(res);
   const abortController = new AbortController();
 
   const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId } });
   let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
+  const startMs = Date.now();
   
   const wrappedSend = (event, payload) => send(event, payload);
   let sseClientAborted = false;
@@ -622,6 +641,28 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
       _toolMeta: { toolCalls: [] } 
     };
+
+    // T1: 持久化机器人回复到 DB 以确保 /history 能读取到
+    const now = formatNowSqliteLocal();
+    const assistMsgId = nanoid();
+    const finalContent = storageContentFromAgentResult(result);
+    const persistAsstSpan = trace.span({
+      name: 'Persist_Assistant_Message',
+      input: { sessionId, assistMsgId, intentType: result._intentType ?? null },
+    });
+    try {
+      db.transaction(() => {
+        db.run(
+          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
+        );
+        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+      })();
+      endSpan(persistAsstSpan, { output: 'ok' });
+    } catch (err) {
+      endSpan(persistAsstSpan, { level: 'ERROR', statusMessage: err.message });
+      logger.error('chat_messages_insert_error', { sessionId, error: err.stack });
+    }
 
     endSpan(sseSpan, { output: 'success' });
     wrappedSend('done', '[DONE]');
