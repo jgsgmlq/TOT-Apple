@@ -61,21 +61,89 @@ function buildExecutiveMessageApiData(result) {
   if (md) {
     return { replyContent: null, markdownContent: md };
   }
+  const replyContent = {
+    overview: typeof result.overview === 'string' ? result.overview : '',
+    keyNumbers: Array.isArray(result.keyNumbers) ? result.keyNumbers : [],
+    attentionPoints: Array.isArray(result.attentionPoints) ? result.attentionPoints : [],
+    followUpSuggestions: Array.isArray(result.followUpSuggestions) ? result.followUpSuggestions : [],
+    ...(Array.isArray(result.visualizations) ? { visualizations: result.visualizations } : {}),
+    ...(result.statisticsProvenance && typeof result.statisticsProvenance === 'object'
+      ? { statisticsProvenance: result.statisticsProvenance }
+      : {}),
+    ...(typeof result.forecastDisclaimer === 'string' ? { forecastDisclaimer: result.forecastDisclaimer } : {}),
+  };
   return {
-    replyContent: {
-      overview: typeof result.overview === 'string' ? result.overview : '',
-      keyNumbers: Array.isArray(result.keyNumbers) ? result.keyNumbers : [],
-      attentionPoints: Array.isArray(result.attentionPoints) ? result.attentionPoints : [],
-      followUpSuggestions: Array.isArray(result.followUpSuggestions) ? result.followUpSuggestions : [],
-      ...(Array.isArray(result.visualizations) ? { visualizations: result.visualizations } : {}),
-      ...(result.statisticsProvenance && typeof result.statisticsProvenance === 'object'
-        ? { statisticsProvenance: result.statisticsProvenance }
-        : {}),
-      ...(typeof result.forecastDisclaimer === 'string'
-        ? { forecastDisclaimer: result.forecastDisclaimer }
-        : {}),
+    replyContent,
+    markdownContent: JSON.stringify({ replyContent, markdownContent: null }),
+  };
+}
+
+function buildSseFinalPayload(result, sessionId, requestId, responseTime, timestamp) {
+  const payload = buildExecutiveMessageApiData(result);
+  return {
+    code: 200,
+    message: 'success',
+    data: {
+      messageId: result?.messageId || nanoid(),
+      ...payload,
+      responseTime,
+      contextId: sessionId,
+      timestamp,
     },
-    markdownContent: null,
+    requestId,
+  };
+}
+
+function buildSseErrorPayload(message, code = 'CHAT_500', status = 500, requestId) {
+  return {
+    code: status,
+    message,
+    errorCode: code,
+    data: null,
+    requestId,
+  };
+}
+
+function extractLangGraphInterrupt(finalState) {
+  const interrupts = finalState && finalState.__interrupt__;
+  if (!Array.isArray(interrupts) || interrupts.length === 0) return null;
+  const first = interrupts[0];
+  return first?.value || first || null;
+}
+
+function buildClarifySsePayload(interruptPayload, requestId) {
+  const payload = interruptPayload && typeof interruptPayload === 'object' ? interruptPayload : {};
+  const prompt = payload.prompt || payload.message || '需要您补充一些信息后才能继续。';
+  return {
+    code: 202,
+    message: prompt,
+    data: {
+      ...payload,
+      prompt,
+      resumeToken: payload.resume_token || payload.resumeToken || null,
+      payload,
+    },
+    requestId,
+  };
+}
+
+function buildInterruptedDonePayload(interruptPayload, sessionId, requestId, responseTime, timestamp) {
+  const payload = interruptPayload && typeof interruptPayload === 'object' ? interruptPayload : {};
+  const prompt = payload.prompt || payload.message || '需要您补充一些信息后才能继续。';
+  return {
+    code: 202,
+    message: 'interrupted',
+    data: {
+      status: 'interrupted',
+      messageId: payload.resume_token || payload.resumeToken || nanoid(),
+      replyContent: null,
+      markdownContent: prompt,
+      responseTime,
+      contextId: sessionId,
+      timestamp,
+      interruptPayload: payload,
+    },
+    requestId,
   };
 }
 
@@ -253,7 +321,7 @@ function loadFormattedHistory(sessionId, trace = null) {
 }
 
 // ─── sendMessage (Non-stream) ──────────────────────────────────────────────────
-async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
+async function sendMessage(sessionId, userMessage, userId, req = {}) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
   if (Number(session.user_id) !== Number(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
@@ -279,7 +347,7 @@ async function sendMessage(sessionId, userMessage, userId, reqBody = {}) {
     entryKind: 'sendMessage',
   });
 
-  await handleIncomingMessage(sessionId, userMessage, userId, reqBody, trace);
+  await handleIncomingMessage(sessionId, userMessage, userId, req.body || {}, trace);
   const history = loadFormattedHistory(sessionId, trace);
 
   const startMs = Date.now();
@@ -399,6 +467,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
 
   const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, resumePayload } });
   let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
+  const startMs = Date.now();
   
   const wrappedSend = (event, payload) => send(event, payload);
   let sseClientAborted = false;
@@ -419,16 +488,18 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     },
     handleToolStart: (toolInfo) => {
       sseToolStartCount += 1;
-      wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
+      wrappedSend('delta', { text: toolInfo?.name || '', phase: 'tool_start', toolName: toolInfo?.name });
     },
     handleToolEnd: (result) => {
       wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+    },
+    handleError: (message) => {
+      wrappedSend('error', { message, code: 'CHAT_500' });
     }
   };
 
   try {
-    const dbPath = path.join(__dirname, '..', 'database.db');
-    const sqliteDb = new Database(dbPath);
+    const sqliteDb = getDb();
     const checkpointer = new SqliteSaver(sqliteDb);
     
     const app = buildGraph().compile({ checkpointer }); 
@@ -457,10 +528,23 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       new (require("@langchain/langgraph").Command)({ resume: resumePayload }), 
       thread
     );
+
+    const interruptPayload = extractLangGraphInterrupt(finalState);
+    if (interruptPayload) {
+      const responseTime = Date.now() - startMs;
+      const timestamp = formatNowSqliteLocal();
+      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId));
+      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp));
+      res.end();
+      return { interrupted: true, interruptPayload };
+    }
     
+    const finalMarkdown = finalState.reply_markdown || finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content;
+    const assistMsgId = finalState.finalMessageId || nanoid();
+
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
       trace.update({
-        output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+        output: finalMarkdown,
         metadata: {
           selected_tier: finalState.selected_tier,
           fc_steps_used: finalState.fc_super_step_count,
@@ -474,28 +558,19 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       _intentType: finalState.intent,
       _formatVersion: "v4.0.0",
       _safetyCheck: finalState.safety,
-      markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
-      _toolMeta: { toolCalls: [] } 
+      markdownContent: finalMarkdown,
+      replyContent: null,
+      _toolMeta: { toolCalls: [] }
     };
 
-    // T1: 恢复唤醒后生成的新答案也需要入库
-    const now = formatNowSqliteLocal();
-    const assistMsgId = nanoid();
-    const finalContent = storageContentFromAgentResult(result);
-    try {
-      db.transaction(() => {
-        db.run(
-          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-        );
-        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-      });
-    } catch (err) {
-      logger.error('chat_messages_insert_error', { sessionId, error: err.stack });
-    }
+    const responseTime = Date.now() - startMs;
+    const timestamp = formatNowSqliteLocal();
+    const donePayload = buildSseFinalPayload({ ...result, messageId: assistMsgId }, sessionId, req.requestId, responseTime, timestamp);
 
     endSpan(sseSpan, { output: 'success' });
-    wrappedSend('done', '[DONE]');
+    
+    wrappedSend('done', donePayload);
+    res.end();
     return result;
 
   } catch (err) {
@@ -512,13 +587,13 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     
     logger.error('chat_langgraph_resume_error', { sessionId, error: err.stack });
     endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
-    wrappedSend('error', { message: 'Agent LangGraph 唤醒出错' });
+    wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
     throw err;
   }
 }
 
 // ─── sendMessageStreamLangGraph (T1 Phase 2 调试专用) ────────────────────────────────
-async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res) {
+async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res, options = {}) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) {
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
@@ -546,11 +621,13 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     userMessage,
     scopeType: regionScope.type,
     agentMode: AGENT_MODE,
-    entryKind: 'sendMessageStreamLangGraph',
+    entryKind: options.entryKind || 'sendMessageStreamLangGraph',
   });
 
   // T1: 必须调用 handleIncomingMessage 以保证外部 API (/history) 获取到的旧表 chat_messages 里有用户输入
-  await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
+  if (options.skipIncomingMessage !== true) {
+    await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
+  }
 
   writeSseHeaders(res);
   const send = createSseSender(res);
@@ -587,8 +664,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
   };
 
   try {
-    const dbPath = path.join(__dirname, '..', 'database.db');
-    const sqliteDb = new Database(dbPath);
+    const sqliteDb = getDb();
     const checkpointer = new SqliteSaver(sqliteDb);
     
     const app = buildGraph().compile({ checkpointer }); 
@@ -620,10 +696,23 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     };
 
     const finalState = await app.invoke(inputState, thread);
+
+    const interruptPayload = extractLangGraphInterrupt(finalState);
+    if (interruptPayload) {
+      const responseTime = Date.now() - startMs;
+      const timestamp = formatNowSqliteLocal();
+      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId));
+      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp));
+      res.end();
+      return { interrupted: true, interruptPayload };
+    }
     
+    const finalMarkdown = finalState.reply_markdown || finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content;
+    const assistMsgId = finalState.finalMessageId || nanoid();
+
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
       trace.update({
-        output: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+        output: finalMarkdown,
         metadata: {
           selected_tier: finalState.selected_tier,
           fc_steps_used: finalState.fc_super_step_count,
@@ -638,34 +727,28 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       _intentType: finalState.intent,
       _formatVersion: "v4.0.0",
       _safetyCheck: finalState.safety,
-      markdownContent: finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content,
+      markdownContent: finalMarkdown,
+      replyContent: null,
       _toolMeta: { toolCalls: [] } 
     };
 
-    // T1: 持久化机器人回复到 DB 以确保 /history 能读取到
-    const now = formatNowSqliteLocal();
-    const assistMsgId = nanoid();
-    const finalContent = storageContentFromAgentResult(result);
-    const persistAsstSpan = trace.span({
-      name: 'Persist_Assistant_Message',
-      input: { sessionId, assistMsgId, intentType: result._intentType ?? null },
-    });
-    try {
-      db.transaction(() => {
-        db.run(
-          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [assistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-        );
-        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-      });
-      endSpan(persistAsstSpan, { output: 'ok' });
-    } catch (err) {
-      endSpan(persistAsstSpan, { level: 'ERROR', statusMessage: err.message });
-      logger.error('chat_messages_insert_error', { sessionId, error: err.stack });
-    }
+    const responseTime = Date.now() - startMs;
 
     endSpan(sseSpan, { output: 'success' });
-    wrappedSend('done', '[DONE]');
+    
+    wrappedSend('done', {
+      code: 200,
+      message: 'success',
+      data: {
+        messageId: assistMsgId,
+        ...buildExecutiveMessageApiData(result),
+        responseTime,
+        contextId: sessionId,
+        timestamp: formatNowSqliteLocal(),
+      },
+      requestId: req.requestId,
+    });
+    res.end();
     return result;
 
   } catch (err) {
@@ -692,7 +775,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     
     logger.error('chat_langgraph_stream_error', { sessionId, error: err.stack });
     endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
-    wrappedSend('error', { message: 'Agent LangGraph 执行出错' });
+    wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
     throw err;
   }
 }
@@ -754,160 +837,10 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   const wrappedSend = (event, payload) => send(event, payload);
 
-  const startMs = Date.now();
-  let result;
-  try {
-    // 【紧急修复】恢复生产真实能力，将 LangGraph 切回旧版 chatAgentRunner
-    result = await chatAgentRunner.run(userMessage, history, regionScope, {
-      sessionId,
-      userId: session.user_id,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          wrappedSend('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-          });
-        },
-      },
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      logger.info('chat_stream_aborted', { sessionId });
-      endSpan(sseSpan, {
-        output: null,
-        level: 'WARNING',
-        metadata: {
-          status: 'aborted',
-          clientAborted: sseClientAborted,
-          deltaCount: sseDeltaCount,
-          deltaBytes: sseDeltaBytes,
-          reasoningCount: sseReasoningCount,
-          toolStartCount: sseToolStartCount,
-          durationMs: Date.now() - sseT0,
-        },
-      });
-      trace.update({
-        output: null,
-        metadata: { status: 'aborted', reason: 'client_abort' },
-      });
-      return;
-    }
-    endSpan(sseSpan, {
-      output: null,
-      level: 'ERROR',
-      statusMessage: err.message,
-      metadata: {
-        status: 'error',
-        deltaCount: sseDeltaCount,
-        deltaBytes: sseDeltaBytes,
-        durationMs: Date.now() - sseT0,
-      },
-    });
-    trace.update({
-      output: maskPII(err.message || String(err)),
-      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
-    });
-    send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
-    res.end();
-    return;
-  }
-
-  const responseTime = Date.now() - startMs;
-  const now = formatNowSqliteLocal();
-  const assistMsgId = nanoid();
-  const finalContent = storageContentFromAgentResult(result);
-  const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
-
-  logger.info('chat_turn', {
-    sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
-    toolName: result._toolMeta?.toolName, msgId: assistMsgId, stream: true,
+  return await sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res, {
+    skipIncomingMessage: false,
+    entryKind: 'sendMessageStream',
   });
-
-  const persistAsstSpan = trace.span({
-    name: 'Persist_Assistant_Message',
-    input: { sessionId, assistMsgId, intentType: result._intentType || null },
-  });
-  const persistT0 = Date.now();
-  try {
-    db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [assistMsgId, sessionId, 'assistant', finalContent, result._intentType, toolCallsStr, now]
-    );
-    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-    endSpan(persistAsstSpan, {
-      output: 'ok',
-      metadata: {
-        contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
-        hasToolCalls: !!toolCallsStr,
-        durationMs: Date.now() - persistT0,
-      },
-    });
-  } catch (err) {
-    endSpan(persistAsstSpan, {
-      output: null,
-      level: 'ERROR',
-      statusMessage: err.message,
-      metadata: { durationMs: Date.now() - persistT0 },
-    });
-    throw err;
-  }
-
-  trace.update({
-    output: maskPII(preview(finalContent)),
-    metadata: {
-      status: 'ok',
-      intentType: result._intentType || null,
-      intentResolvedBy: result._intentResolvedBy || null,
-      toolName: result._toolMeta?.toolName || null,
-      toolNames: result._toolMeta?.toolNames || null,
-      iterations: result._toolMeta?.iterations || null,
-      responseTimeMs: responseTime,
-      msgId: assistMsgId,
-      stream: true,
-    },
-  });
-
-  // 异步提取记忆
-  setImmediate(() => {
-    chatMemoryService.extract(sessionId).catch(e => logger.warn('memory_extract_error', { sessionId, error: e.message }));
-  });
-
-  endSpan(sseSpan, {
-    output: 'done',
-    metadata: {
-      status: 'ok',
-      deltaCount: sseDeltaCount,
-      deltaBytes: sseDeltaBytes,
-      reasoningCount: sseReasoningCount,
-      toolStartCount: sseToolStartCount,
-      durationMs: Date.now() - sseT0,
-      msgId: assistMsgId,
-    },
-  });
-
-  send('done', {
-    code: 200,
-    message: 'success',
-    data: {
-      messageId: assistMsgId,
-      ...buildExecutiveMessageApiData(result),
-      responseTime,
-      contextId: sessionId,
-      timestamp: now,
-    },
-    requestId: req.requestId,
-  });
-  res.end();
 }
 
 // ─── getHistory ───────────────────────────────────────────────────────────────
@@ -927,12 +860,29 @@ function getHistory(sessionId, pageNum, pageSize) {
 
   const historyList = rows.map((r) => {
     let replyContent = null;
+    let markdownContent = null;
     if (r.role === 'assistant') {
+      const normalizedContent = typeof r.content === 'string' ? r.content : '';
+      markdownContent = normalizedContent || null;
       try {
-        const parsed = JSON.parse(r.content);
-        // 如果能解析且包含 legacy 核心字段，视为 replyContent
-        if (parsed && typeof parsed === 'object' && (parsed.overview || parsed.keyNumbers)) {
-          replyContent = parsed;
+        const parsed = JSON.parse(normalizedContent);
+        if (parsed && typeof parsed === 'object') {
+          if (typeof parsed.markdownContent === 'string' && parsed.markdownContent.trim()) {
+            markdownContent = parsed.markdownContent.trim();
+          }
+          if (parsed.replyContent && typeof parsed.replyContent === 'object') {
+            replyContent = parsed.replyContent;
+          } else if (parsed && (parsed.overview || parsed.keyNumbers || parsed.attentionPoints || parsed.followUpSuggestions)) {
+            replyContent = {
+              overview: parsed.overview || '',
+              keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
+              attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
+              followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
+              ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
+              ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
+              ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
+            };
+          }
         }
       } catch (e) {
         replyContent = null;
@@ -941,7 +891,8 @@ function getHistory(sessionId, pageNum, pageSize) {
     return {
       messageId: r.id,
       role: r.role,
-      content: r.content, // assistant 始终返回原始内容 (Markdown)
+      content: markdownContent || r.content,
+      markdownContent,
       replyContent,
       intentType: r.intent_type,
       userFeedback: r.role === 'assistant' ? (r.feedback_type || null) : undefined,
@@ -1013,12 +964,17 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     return;
   }
 
-  // 将请求桥接到标准的 LangGraph stream，直接用当时的用户输入重跑图。
-  // 在 LangGraph 侧，它自己会去 Checkpointer 读取真实上下文。
-  // 注意，对于 regenerate，我们需要通过特殊标记清空最后一步的 State（后续可在 Graph 层做 snapshot 重置），
-  // 这里我们简化：对于 PoC，由于 state 是通过 thread_id 绑定的，如果需要无痕 regenerate，最好分配一个新的 thread_id，
-  // 或者在 state 中注入一个 flag 触发 rewind，目前直接将其视为一次新的对话追加。
-  return await sendMessageStreamLangGraph(sessionId, userPrompt, userId, req, res);
+  // 1. 删除旧消息及其反馈，避免历史堆叠
+  db.transaction(() => {
+    db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
+    db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
+  });
+
+  // 2. 将请求桥接到标准的 LangGraph stream，跳过 handleIncomingMessage 避免重复插入 user 消息
+  return await sendMessageStreamLangGraph(sessionId, userPrompt, userId, req, res, { 
+    skipIncomingMessage: true,
+    entryKind: 'regenerateLastAssistantStreamLangGraph'
+  });
 }
 
 // ─── regenerateLastAssistantStream ────────────────────────────────────────────
@@ -1208,17 +1164,10 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       },
     });
 
-    const payload = buildExecutiveMessageApiData(result);
+    const timestamp = formatNowSqliteLocal();
+    const donePayload = buildSseFinalPayload({ ...result, messageId: newAssistMsgId }, sessionId, req.requestId, responseTime, timestamp);
 
-    send('done', {
-      messageId: newAssistMsgId,
-      intentType: result._intentType,
-      replyContent: payload.replyContent,
-      markdownContent: payload.markdownContent,
-      toolData: result.toolData,
-      suggestions: result.followUpSuggestions,
-      _debug: result._debug,
-    });
+    send('done', donePayload);
     res.end();
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -1251,7 +1200,7 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
       metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
     });
     logger.error('regenerate_agent_stream_failed', { sessionId, error: err.message, stack: err.stack });
-    send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
+    send('error', buildSseErrorPayload(err.message || '处理失败', err.code || 'CHAT_500', err.status || 500, req.requestId));
     res.end();
   }
 }

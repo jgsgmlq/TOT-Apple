@@ -1,4 +1,4 @@
-import type { ReplyContent, SendMessageResult } from '@/api/chat';
+import type { ReplyContent, SendMessageResult, ClarifyPayload } from '@/api/chat';
 import { formatReplyContentText } from '@/api/chat';
 import { splitPreambleAndJson, parseReplyContentProgressive } from '@/utils/execChatStreamParts';
 
@@ -144,20 +144,29 @@ export function finalizeExecStyleMessage(
 /**
  * SSE 流式重新生成（由于 API 参数不同，这里单独封装）
  */
+export type ExecStreamPayload =
+  | { id: string; type: 'streaming'; partialReply: string; thinking: string }
+  | { id: string; type: 'done'; result: SendMessageResult; thinking: string }
+  | { id: string; type: 'clarify'; clarify: ClarifyPayload; thinking: string }
+  | { id: string; type: 'error'; error: unknown };
+
 export function runExecRegenerateSseChat(
   streamFn: (
     sessionId: string,
     messageId: string,
     onDelta: (chunk: { text: string; phase?: string }) => void,
     onComplete: (data: SendMessageResult) => void,
+    onClarify: (payload: ClarifyPayload) => void,
     onError: (error: unknown) => void,
     streamOptions?: { signal?: AbortSignal }
   ) => Promise<void>,
   sessionId: string,
   messageId: string,
   onUpdate: (payload: ExecStreamPayload) => void,
+  onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<SendMessageResult> {
+  void onClarify;
   return new Promise((resolve, reject) => {
     let partialReply = '';
     let thinkingSnapshot = '';
@@ -188,6 +197,15 @@ export function runExecRegenerateSseChat(
         });
         resolve(data);
       },
+      (clarify) => {
+        onClarify?.(clarify);
+        onUpdate({
+          id: messageId,
+          type: 'clarify',
+          clarify,
+          thinking: thinkingSnapshot,
+        });
+      },
       (err) => {
         onUpdate({ id: messageId, type: 'error', error: err });
         reject(err);
@@ -207,14 +225,17 @@ export function runExecStyleSseChat(
     content: string,
     onDelta: (chunk: { text: string; phase?: string }) => void,
     onComplete: (data: SendMessageResult) => void,
+    onClarify: (payload: ClarifyPayload) => void,
     onError: (error: unknown) => void,
     streamOptions?: { signal?: AbortSignal }
   ) => Promise<void>,
   sessionId: string,
   userContent: string,
   onStreamingPatch: (payload: ExecStyleAiPayload) => void,
+  onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
 ): Promise<{ result: SendMessageResult; thinkingSnapshot: string }> {
+  void onClarify;
   const state = initExecStreamState();
   let lastSnapshot = '';
   return new Promise((resolve, reject) => {
@@ -229,6 +250,9 @@ export function runExecStyleSseChat(
       },
       (result) => {
         resolve({ result, thinkingSnapshot: lastSnapshot });
+      },
+      (clarify) => {
+        onClarify?.(clarify);
       },
       (err) => reject(err),
       { signal: options?.signal }

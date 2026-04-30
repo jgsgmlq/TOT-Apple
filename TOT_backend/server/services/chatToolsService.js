@@ -9,6 +9,12 @@ const logger = require('../utils/logger');
 const TOOL_SCHEMAS = [];
 const toolHandlers = new Map();
 const toolMetas = new Map(); // Store metadata for guardrails
+const toolNamespace = 'executive_chat';
+
+function normalizeToolName(toolName) {
+  if (!toolName || typeof toolName !== 'string') return '';
+  return toolName.includes('.') ? toolName.split('.').pop() : toolName;
+}
 
 function loadTools() {
   const toolsDir = path.join(__dirname, '..', 'chat_tools');
@@ -35,6 +41,8 @@ function loadTools() {
         TOOL_SCHEMAS.push(toolModule.schema);
         toolHandlers.set(toolName, toolModule.handler);
         toolMetas.set(toolName, {
+          name: toolName,
+          namespaceName: `${toolNamespace}.${toolName}`,
           schema: toolModule.schema.function.parameters,
           requiredRole: meta.requiredRole || [],
           scopePolicy: meta.scopePolicy || 'any', // 'any', 'national_only'
@@ -57,6 +65,22 @@ function loadTools() {
 loadTools();
 
 // ─── Guardrails ──────────────────────────────────────────────────────────────
+
+function getRegisteredToolNames() {
+  return Array.from(toolHandlers.keys());
+}
+
+function getToolSchema(toolName) {
+  const normalized = normalizeToolName(toolName);
+  const schema = TOOL_SCHEMAS.find(item => item?.function?.name === normalized);
+  return schema || null;
+}
+
+function getToolSchemasByNames(names = []) {
+  if (!Array.isArray(names) || names.length === 0) return [];
+  const wanted = new Set(names.map(normalizeToolName).filter(Boolean));
+  return TOOL_SCHEMAS.filter(item => wanted.has(item?.function?.name));
+}
 
 function validateToolArgs(toolName, schema, args) {
   // Basic required fields validation based on JSON schema
@@ -127,8 +151,9 @@ async function executeWithTimeout(promise, timeoutMs) {
  */
 async function executeByName(toolName, params, regionScope) {
   // 1) 工具名白名单存在性校验
-  const handler = toolHandlers.get(toolName);
-  const meta = toolMetas.get(toolName);
+  const normalizedToolName = normalizeToolName(toolName);
+  const handler = toolHandlers.get(normalizedToolName);
+  const meta = toolMetas.get(normalizedToolName);
   if (!handler || !meta) {
     return { 
       error: {
@@ -176,19 +201,30 @@ async function executeByName(toolName, params, regionScope) {
       recommendation = 'The query took too long. Try narrowing the date range or filtering by a specific store/region.';
     }
 
-    logger.warn('tool_blocked', { toolName, error: err.message, code });
+    logger.warn('tool_blocked', { toolName: normalizedToolName, error: err.message, code });
 
     return { 
       error: {
         code,
-        message: `Failed to execute ${toolName}: ${err.message}`,
+        message: `Failed to execute ${normalizedToolName}: ${err.message}`,
         recommendation
       }
     };
   }
 }
 
+function getToolMeta(toolName) {
+  const normalized = normalizeToolName(toolName);
+  return toolMetas.get(normalized);
+}
+
 module.exports = {
   TOOL_SCHEMAS,
   executeByName,
+  getToolMeta,
+  getRegisteredToolNames,
+  getToolSchema,
+  getToolSchemasByNames,
+  normalizeToolName,
+  validateToolArgs,
 };

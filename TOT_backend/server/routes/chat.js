@@ -71,7 +71,7 @@ async function handleResume(req, res, next) {
       throw createError(400, 'resumePayload 不能为空', 'CHAT_006');
     }
 
-    if (stream === 'langgraph') {
+    if (stream === true || stream === 'langgraph') {
       await chatService.resumeMessageStreamLangGraph(sessionId, resumePayload, req.user.id, req, res);
       return;
     }

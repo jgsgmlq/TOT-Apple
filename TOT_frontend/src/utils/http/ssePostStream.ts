@@ -9,6 +9,7 @@ export async function streamSsePostJson(options: {
   onDelta: (parsed: unknown) => void;
   onDone: (data: unknown) => void;
   onError: (error: unknown) => void;
+  onClarify?: (parsed: unknown) => void;
   /** `event: error` 且 payload 无 `message` 时使用 */
   fallbackErrorMessage?: string;
   /** 可选：中止信号 */
@@ -20,6 +21,7 @@ export async function streamSsePostJson(options: {
     onDelta,
     onDone,
     onError,
+    onClarify,
     fallbackErrorMessage = '流式请求失败',
     signal,
   } = options;
@@ -86,6 +88,8 @@ export async function streamSsePostJson(options: {
             } else if (currentEvent === 'done') {
               const resultData = parsed.data !== undefined ? parsed.data : parsed;
               onDone(resultData);
+            } else if (currentEvent === 'clarify') {
+              onClarify?.(parsed);
             } else if (currentEvent === 'error') {
               const msg =
                 typeof parsed.message === 'string' ? parsed.message : fallbackErrorMessage;

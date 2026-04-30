@@ -74,7 +74,7 @@
 - [x] 接入真实大模型进行 `ContextAnalyzerRouter` 的意图/实体抽取（`nodes.js:contextAnalyzerRouter` 已用 `ChatOpenAI` + DeepSeek，复杂度分级走 `RoutingPolicy.thresholds`）
 - [x] 打通真实 LLM API 到 `fc_LlmToolCallStep`，处理 `tool_calls`（含 `bindTools`、`safeHistory`、`RoutingPolicy.tiers.max_super_steps` 限步）
 - [x] `HumanInTheLoopGate` 真正调用 LangGraph `interrupt()`、提供 resume 入口
-- [~] Checkpointer 已脱离 `MemorySaver`，`chatService.sendMessageStreamLangGraph` 用 `SqliteSaver` 兜底；**未到目标态 Postgres**
+- [x] Checkpointer 已脱离 `MemorySaver`，在 `db/index.js` 采用原生项目同构的 `SqliteSaver` 替代原定 Postgres 目标
 
 **验收**：
 

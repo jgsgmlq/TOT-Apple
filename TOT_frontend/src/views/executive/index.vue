@@ -179,6 +179,25 @@
 
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <n-spin :show="isLoadingHistory" style="min-height: 120px">
+            <div v-if="pendingClarification" class="clarify-panel">
+              <div class="clarify-title">{{ pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
+              <div class="clarify-options" v-if="pendingClarification.data?.options?.length || pendingClarification.options?.length">
+                <n-button
+                  v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
+                  :key="opt.id"
+                  size="small"
+                  round
+                  type="primary"
+                  ghost
+                  @click="sendClarificationResponse(pendingClarification, { action: 'select_option', value: opt.value ?? opt.label })"
+                >
+                  {{ opt.label }}
+                </n-button>
+              </div>
+              <div class="clarify-actions">
+                <n-button size="small" tertiary @click="clearClarification">取消</n-button>
+              </div>
+            </div>
             <div v-if="messages.length === 0 && !isLoadingHistory" class="empty-chat">
               <h3>Hi! {{ displayName }} 👋✨</h3>
               <p>作为你的智能助手，我可以为你答疑解惑～</p>
@@ -376,6 +395,22 @@
         </div>
 
         <div class="chat-footer">
+          <div v-if="pendingClarification" class="clarify-panel">
+            <div class="clarify-title">需要进一步确认</div>
+            <div class="clarify-text">{{ pendingClarification.message || pendingClarification.data?.prompt || '请选择一个选项继续' }}</div>
+            <div class="clarify-options">
+              <n-button
+                v-for="opt in (pendingClarification.data?.options || [])"
+                :key="opt.id"
+                type="primary"
+                secondary
+                round
+                @click="sendClarificationResponse(pendingClarification, { action: 'select_option', value: opt })"
+              >
+                {{ opt.label }}
+              </n-button>
+            </div>
+          </div>
           <div class="input-wrapper">
             <n-input
               v-model:value="inputValue"
@@ -439,6 +474,7 @@
     type ChatHistoryItem,
     type SendMessageResult,
     type ReplyContent,
+    type ClarifyPayload,
   } from '@/api/chat';
   import {
     runExecStyleSseChat,
@@ -489,6 +525,8 @@
     thinking?: string;
     /** 旧版结构化回答（仅用于历史兼容） */
     replyContent?: ReplyContent | null;
+    /** HITL / clarify 交互态 */
+    pendingClarification?: ClarifyPayload | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
     isFeedbackLoading?: boolean;
@@ -544,21 +582,78 @@
   watch(voiceEnabled, (v) => setExecutiveVoiceEnabled(v));
 
   const messages = ref<ChatMessage[]>([]);
+  const pendingClarification = ref<ClarifyPayload | null>(null);
 
   const handleStop = () => {
-    // 1. 中止请求
     abortController.value?.abort();
     abortController.value = null;
-    // 2. 更新状态
     isSending.value = false;
     const lastMsg = messages.value[messages.value.length - 1];
     if (lastMsg?.role === 'ai') {
-      // 保留已生成的 streamContent
       lastMsg.content = lastMsg.streamContent || lastMsg.content || '';
       lastMsg.done = true;
       lastMsg.activeToolName = undefined;
       lastMsg.streamContent = undefined;
     }
+  };
+
+  const clearClarification = () => {
+    pendingClarification.value = null;
+  };
+
+  const buildClarifyMessage = (payload: ClarifyPayload) => {
+    const d = payload.data || {};
+    const prompt = typeof d.prompt === 'string' ? d.prompt : payload.message || payload.prompt || '需要你进一步确认';
+    return {
+      id: `clarify-${Date.now()}`,
+      role: 'ai' as const,
+      content: prompt,
+      done: true,
+      pendingClarification: payload,
+      streamContent: prompt,
+    };
+  };
+
+  const sendClarificationResponse = async (payload: ClarifyPayload, chosen?: { action: string; value: unknown }) => {
+    if (!sessionId.value) return;
+    const resumePayload = {
+      ...(payload.data?.payload && typeof payload.data.payload === 'object' ? (payload.data.payload as Record<string, unknown>) : {}),
+      action: chosen?.action || 'select_option',
+      value: chosen?.value ?? payload.data?.payload ?? null,
+      resume_type: 'slot_fill',
+      toolCallId: payload.data?.toolCallId || payload.data?.resumeToken || payload.toolCallId,
+    };
+    pendingClarification.value = null;
+    messages.value.push({ role: 'user', content: typeof chosen?.value === 'string' ? chosen.value : '已确认补充信息' });
+    messages.value.push({ role: 'ai', content: '已提交补充信息，正在继续处理…', done: true });
+    scrollToBottom();
+    try {
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamResumeExecutiveChatMessage,
+        sessionId.value,
+        resumePayload,
+        (p) => {
+          messages.value[messages.value.length - 1] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+          };
+          scrollToBottom();
+        },
+        async (clarify) => {
+          pendingClarification.value = clarify;
+          messages.value[messages.value.length - 1] = buildClarifyMessage(clarify);
+          scrollToBottom();
+        },
+        { signal: abortController.value?.signal }
+      );
+      applySendSuccess(sessionId.value, result, thinkingSnapshot);
+    } catch (e) {
+      message.error('恢复对话失败，请重试');
+    }
+    return resumePayload;
   };
 
   async function fillComposerWithSuggestion(text: string) {
@@ -972,6 +1067,11 @@
               if (spoken) tts.pushSpokenPlainText(spoken);
             }
           },
+          async (clarify) => {
+            pendingClarification.value = clarify;
+            messages.value[loadingIndex] = buildClarifyMessage(clarify);
+            scrollToBottom();
+          },
           { signal: abortController.value?.signal }
         );
         if (tts) {
@@ -1080,6 +1180,11 @@
             currentMsg.done = true;
             currentMsg.replyContent = data.replyContent ?? null;
           }
+          scrollToBottom();
+        },
+        (clarify) => {
+          pendingClarification.value = clarify;
+          messages.value[index] = buildClarifyMessage(clarify);
           scrollToBottom();
         },
         { signal: abortController.value.signal }
@@ -1607,6 +1712,34 @@
               }
             }
           }
+        }
+
+        .clarify-panel {
+          margin-bottom: 16px;
+          padding: 12px 14px;
+          border: 1px solid rgba(37, 99, 235, 0.2);
+          background: rgba(37, 99, 235, 0.06);
+          border-radius: 12px;
+        }
+
+        .clarify-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: #1d4ed8;
+          margin-bottom: 10px;
+          white-space: pre-wrap;
+        }
+
+        .clarify-options {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-bottom: 10px;
+        }
+
+        .clarify-actions {
+          display: flex;
+          justify-content: flex-end;
         }
 
         .exec-json-fallback {

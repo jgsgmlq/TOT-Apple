@@ -27,6 +27,28 @@ export interface SendMessageResult {
   timestamp: string;
 }
 
+export interface ClarifyPayload {
+  code?: number;
+  message?: string;
+  data?: {
+    toolCallId?: string;
+    resumeToken?: string;
+    prompt?: string;
+    options?: Array<{ id: string; label: string; value?: unknown }>;
+    toolCallIdList?: string[];
+    payload?: unknown;
+    resume_type?: string;
+  };
+  type?: string;
+  prompt?: string;
+  options?: Array<{ id: string; label: string; value?: unknown }>;
+  resume_token?: string;
+  toolCallId?: string;
+  agent_id?: string;
+  requestId?: string;
+  [key: string]: unknown;
+}
+
 export interface ChatHistoryItem {
   messageId: string;
   role: 'user' | 'assistant';
@@ -113,6 +135,7 @@ export const streamExecutiveChatMessage = async (
   content: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
+  onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
 ) => {
@@ -121,6 +144,7 @@ export const streamExecutiveChatMessage = async (
     body: { content, stream: true },
     onDelta: (p) => onMessage(p as { text: string; phase?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
+    onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
     signal: streamOptions?.signal,
@@ -178,6 +202,7 @@ export const streamRegenerateChatMessage = async (
   messageId: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
+  onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
 ) => {
@@ -186,6 +211,7 @@ export const streamRegenerateChatMessage = async (
     body: { stream: true },
     onDelta: (p) => onMessage(p as { text: string; phase?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
+    onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,
     fallbackErrorMessage: 'Executive Chat 重新生成处理失败',
     signal: streamOptions?.signal,
@@ -195,6 +221,27 @@ export const streamRegenerateChatMessage = async (
 /**
  * 重新生成 AI 的最后一条回复
  */
+export const streamResumeExecutiveChatMessage = async (
+  sessionId: string,
+  resumePayload: Record<string, unknown>,
+  onMessage: (chunk: { text: string; phase?: string }) => void,
+  onComplete: (data: SendMessageResult) => void,
+  onClarify: (payload: ClarifyPayload) => void,
+  onError: (error: unknown) => void,
+  streamOptions?: { signal?: AbortSignal }
+) => {
+  return streamSsePostJson({
+    path: `/chat/executive/sessions/${sessionId}/resume`,
+    body: { resumePayload, stream: true },
+    onDelta: (p) => onMessage(p as { text: string; phase?: string }),
+    onDone: (d) => onComplete(d as SendMessageResult),
+    onClarify: (p) => onClarify(p as ClarifyPayload),
+    onError,
+    fallbackErrorMessage: 'Executive Chat 恢复处理失败',
+    signal: streamOptions?.signal,
+  });
+};
+
 export const regenerateChatMessage = (sessionId: string, messageId: string, stream?: boolean) => {
   if (stream) {
     return Alova.Post<SendMessageResult>(
@@ -226,6 +273,7 @@ export const streamDashboardChatMessage = async (
   content: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
+  onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
   streamOptions?: { signal?: AbortSignal }
 ) => {
@@ -234,6 +282,7 @@ export const streamDashboardChatMessage = async (
     body: { content, stream: true },
     onDelta: (p) => onMessage(p as { text: string; phase?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
+    onClarify: (p) => onClarify(p as ClarifyPayload),
     onError,
     fallbackErrorMessage: '看板机器人对话处理失败',
     signal: streamOptions?.signal,

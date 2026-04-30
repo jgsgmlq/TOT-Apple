@@ -2130,40 +2130,59 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   }
   ```
   **`stream: true`**：响应为 **`text/event-stream`（SSE）**，事件流定义如下：
-  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify", "reasoningLevel": "summary" }`。
+  - `delta`：推送增量。data 为 `{ "text": "...", "phase": "content"|"reasoning"|"tool_start"|"tool_end"|"clarify"|"error", "reasoningLevel": "summary" }`。
     - `reasoningLevel`：仅当 `phase="reasoning"` 时出现，目前固定为 `"summary"` 表示已脱敏摘要。
-    - `tool_start/end` 时 `text` 为工具名（如 `runAnalytics`）。
-    - `clarify` 时 `text` 为消歧请求 JSON（含备选门店列表），前端应展示选择 UI。
+    - `tool_start/end` 时 `text` 为工具名。
+    - `clarify` 时 `text` 为消歧请求 JSON（含备选项/参数补全提示），前端应展示选择 UI。
   - `done`：成功结束。data 为 `{ "code": 200, "message": "success", "data": { "messageId": "string", "markdownContent": "string", "replyContent": null|object }, "requestId": "..." }`。
   - `error`：失败。data 为 `{ "code": 500, "message": "...", "requestId": "..." }`。
+  - **实现说明**：当前流式消息与 `resume` 路由均以 `stream=true` 或 `stream="langgraph"` 进入 LangGraph 引擎；`clarificationResponse.toolCallId` 需要与上一次工具调用 ID 对齐。
 
   - **响应体（成功，`stream` 未传或为 false）**：
   ```json
   {
-   "code": 200,
-   "message": "success",
-   "data": {
-     "messageId": "string",
-     "markdownContent": "string", // FC 模式下的 Markdown 正文
-     "replyContent": { // 兼容字段，Routing 模式下为对象，FC 模式下为 null
-       "overview": "...", // (Legacy)
-       "keyNumbers": [], // (Legacy)
-       "attentionPoints": [], // (Legacy)
-       "followUpSuggestions": [] // (Legacy)
-     },     "responseTime": 3500,
-     "contextId": "string",
-     "timestamp": "string"
-   },
-   "requestId": "string"
+    "code": 200,
+    "message": "success",
+    "data": {
+      "messageId": "string",
+      "markdownContent": "string",
+      "replyContent": null,
+      "responseTime": 3500,
+      "contextId": "string",
+      "timestamp": "string"
+    },
+    "requestId": "string"
   }
-  ```- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文
+  ```
+- **接口说明**：核心AI Agent接口，处理自然语言查询，返回结构化回答，支持多轮上下文。当前实现中，FC / LangGraph 的最终对外正文以 `markdownContent` 为主；`replyContent` 在流式与非流式成功响应里均保持 `null`，用于兼容旧前端字段但不承载新结构化卡片数据。
 - **权限要求**：仅executive角色
 - **异常场景**：
   - 400：content为空/contextId不存在
   - 409：`CHAT_009`，重复的 messageId（幂等拦截）
   - 503：AI Agent服务未就绪（响应超时）
 
-### 6.2.1 删除Executive Chat会话**P1**
+### 6.2.1 恢复聊天会话（Resume HITL）**P1**
+
+- **接口名称**：恢复 Executive Chat 会话（HITL 恢复）
+- **接口路径**：`/chat/executive/sessions/{sessionId}/resume`
+- **请求方法**：POST
+- **请求头**：需携带通用请求头（Role=executive）
+- **路径参数**：sessionId（必填）
+- **请求体**：
+  ```json
+  {
+    "resumePayload": {      // 消歧选择或补充参数
+      "action": "string",   // 动作类型，如 "select_option"
+      "value": "any"        // 选择的值
+    },
+    "stream": true          // 必须为 true 或 "langgraph"
+  }
+  ```
+- **响应体**：同 **§6.2** 流式响应。
+- **接口说明**：当 Agent 进入 `clarify` (HITL) 状态挂起后，前端通过此接口提交用户选择或补参结果以恢复图执行。`resumePayload` 会被作为结构化 tool 结果写回图状态，建议字段为 `resume_type`、`value`，并可透传 `toolCallId`。
+- **权限要求**：仅 executive；且 `sessionId` 必须属于 `req.user.id`
+
+### 6.2.2 删除Executive Chat会话**P1**
 
 - **接口名称**：删除Executive Chat会话
 - **接口路径**：`/chat/executive/sessions/{sessionId}`
@@ -2211,9 +2230,11 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "historyList": [
         {
           "messageId": "string",
-          "sender": "executive/assistant",
-          "content": "string", // 原始正文（FC模式为 Markdown，Routing模式为 JSON 字符串）
-          "replyContent": null|object, // 兼容字段：仅当 content 为旧版 JSON 且解析成功时填充对象，否则为 null
+          "role": "assistant",
+          "content": "string",        // assistant 的展示内容；当前实现为 markdownContent 或原始 content
+          "markdownContent": "string", // assistant 的 Markdown 正文
+          "replyContent": null|object,   // 当前实现保持 null；仅保留兼容字段
+          "intentType": "string|null",
           "userFeedback": "like | dislike | null",
           "timestamp": "string"
         }
