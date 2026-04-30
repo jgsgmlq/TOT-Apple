@@ -20,7 +20,9 @@
         </button>
       </template>
       <div class="ai-analyze-content flex flex-col gap-3">
-        <div class="ai-analyze-header flex items-center justify-between border-b border-gray-100 pb-3">
+        <div
+          class="ai-analyze-header flex items-center justify-between border-b border-gray-100 pb-3"
+        >
           <div class="flex items-center gap-1.5 text-[#0071E3]">
             <n-icon size="18"><ColorWandOutline /></n-icon>
             <span class="font-semibold text-gray-900 text-[15px]">智能分析</span>
@@ -36,18 +38,42 @@
         </div>
         <div class="ai-analyze-body max-h-[320px] overflow-y-auto overflow-x-hidden pr-1">
           <n-spin :show="loading" size="small">
-            <div v-if="!loading && !content" class="text-center py-8 text-gray-400 text-[13px]">暂无分析内容</div>
-            <div v-else-if="content" class="prose prose-sm prose-blue text-[13px] leading-[1.6] text-gray-700 font-medium" v-html="renderMarkdown(content)"></div>
+            <div v-if="!loading && !content" class="text-center py-8 text-gray-400 text-[13px]"
+              >暂无分析内容</div
+            >
+            <div
+              v-else-if="content"
+              class="prose prose-sm prose-blue text-[13px] leading-[1.6] text-gray-700 font-medium"
+              v-html="renderMarkdown(content)"
+            ></div>
           </n-spin>
         </div>
-        <div class="ai-analyze-actions flex items-center justify-between pt-2 text-[12px] text-gray-400 border-t border-gray-100 mt-1">
+        <div
+          class="ai-analyze-actions flex items-center justify-between pt-2 text-[12px] text-gray-400 border-t border-gray-100 mt-1"
+        >
           <div v-if="generatedAt">分析生成时间：{{ formatTime(generatedAt) }}</div>
           <div v-else></div>
           <div class="flex items-center gap-3">
-            <n-icon size="16" class="cursor-pointer hover:text-blue-600 transition-colors" :class="{'text-blue-600': userVote === 'up'}" @click="$emit('feedback', 'up')"><LikeOutlined /></n-icon>
-            <n-icon size="16" class="cursor-pointer hover:text-blue-600 transition-colors" :class="{'text-blue-600': userVote === 'down'}" @click="$emit('feedback', 'down')"><DislikeOutlined /></n-icon>
-            <n-icon size="16" class="cursor-pointer hover:text-blue-600 transition-colors" @click="$emit('copy')">
-              <CheckOutlined v-if="copied" style="color: #10b981;" />
+            <n-icon
+              size="16"
+              class="cursor-pointer hover:text-blue-600 transition-colors"
+              :class="{ 'text-blue-600': userVote === 'up' }"
+              @click="$emit('feedback', 'up')"
+              ><LikeOutlined
+            /></n-icon>
+            <n-icon
+              size="16"
+              class="cursor-pointer hover:text-blue-600 transition-colors"
+              :class="{ 'text-blue-600': userVote === 'down' }"
+              @click="$emit('feedback', 'down')"
+              ><DislikeOutlined
+            /></n-icon>
+            <n-icon
+              size="16"
+              class="cursor-pointer hover:text-blue-600 transition-colors"
+              @click="$emit('copy')"
+            >
+              <CheckOutlined v-if="copied" style="color: #10b981" />
               <CopyOutlined v-else />
             </n-icon>
           </div>
@@ -58,41 +84,70 @@
 </template>
 
 <script setup lang="ts">
-import { NPopover, NIcon, NSwitch, NSpin } from 'naive-ui';
-import { ColorWandOutline } from '@vicons/ionicons5';
-import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
+  import { NPopover, NIcon, NSwitch, NSpin } from 'naive-ui';
+  import { ColorWandOutline } from '@vicons/ionicons5';
+  import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
 
-defineProps<{
-  loading: boolean;
-  content: string;
-  generatedAt: string | null;
-  userVote: 'up' | 'down' | null;
-  isReasoning: boolean;
-  copied: boolean;
-  renderMarkdown: (text: string) => string;
-}>();
+  defineProps<{
+    loading: boolean;
+    content: string;
+    generatedAt: string | null;
+    userVote: 'up' | 'down' | null;
+    isReasoning: boolean;
+    copied: boolean;
+    renderMarkdown: (text: string) => string;
+  }>();
 
-defineEmits(['open', 'toggleReasoning', 'feedback', 'copy']);
+  defineEmits(['open', 'toggleReasoning', 'feedback', 'copy']);
 
-const formatTime = (dateStr: string) => {
-  const d = new Date(dateStr);
-  if(isNaN(d.getTime())) return '';
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
-};
+  const formatTime = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  };
 </script>
 
 <style scoped>
-.prose :deep(p) { margin-top: 0.5em; margin-bottom: 0.5em; }
-.prose :deep(blockquote) { font-style: normal; color: #6B7280; border-left: 3px solid #E5E7EB; padding-left: 1em; background: #F9FAFB; border-radius: 4px; padding: 0.5em 1em; }
-.prose :deep(strong) { color: #111827; font-weight: 600; }
-.prose :deep(table) { margin-top: 0.5rem; margin-bottom: 0.5rem; }
-.prose :deep(th), .prose :deep(td) { padding: 0.5rem 1rem; border-bottom: 1px solid #E5E7EB; }
-.prose :deep(thead) { background-color: #F9FAFB; }
-.ai-analyze-body::-webkit-scrollbar {
-  width: 4px;
-}
-.ai-analyze-body::-webkit-scrollbar-thumb {
-  background: #E5E7EB;
-  border-radius: 4px;
-}
+  .prose :deep(p) {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+  }
+  .prose :deep(blockquote) {
+    font-style: normal;
+    color: #6b7280;
+    border-left: 3px solid #e5e7eb;
+    padding-left: 1em;
+    background: #f9fafb;
+    border-radius: 4px;
+    padding: 0.5em 1em;
+  }
+  .prose :deep(strong) {
+    color: #111827;
+    font-weight: 600;
+  }
+  .prose :deep(table) {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .prose :deep(th),
+  .prose :deep(td) {
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .prose :deep(thead) {
+    background-color: #f9fafb;
+  }
+  .ai-analyze-body::-webkit-scrollbar {
+    width: 4px;
+  }
+  .ai-analyze-body::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 4px;
+  }
 </style>

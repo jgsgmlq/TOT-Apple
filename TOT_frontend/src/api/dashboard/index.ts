@@ -34,6 +34,7 @@ export interface DashboardOverview {
 
 export const getDashboardOverview = (params: {
   taskId?: string;
+  platform?: string;
   rtm?: string;
   format?: string;
   dealerName?: string;
@@ -58,6 +59,7 @@ export interface HeatmapRow {
 /** GET /api/v1/dashboard/heatmap — 区域热力，含 avgCompletionTimeHours */
 export const getDashboardHeatmap = (params: {
   taskId: string;
+  platform?: string;
   rtmLevel?: string;
   rtm?: string;
   format?: string;
@@ -84,6 +86,7 @@ export interface TrendPoint {
 /** GET /api/v1/dashboard/trend — 按日/按小时完成人数趋势 */
 export const getDashboardTrend = (params: {
   taskId: string;
+  platform?: string;
   type: 'daily' | 'hourly';
   date?: string;
   rtm?: string;
@@ -108,6 +111,7 @@ export interface StoreRankRow {
 /** GET /api/v1/dashboard/store-rank — 门店排名下钻 */
 export const getDashboardStoreRank = (params: {
   taskId: string;
+  platform?: string;
   type: 'top' | 'bottom';
   limit?: number;
   rtm?: string;
@@ -140,6 +144,7 @@ export interface WarningStoreRow {
 /** GET /api/v1/dashboard/warnings — 预警门店下钻（临期 p0/p1 或起步异常 startDelay） */
 export const getDashboardWarnings = (params: {
   taskId: string;
+  platform?: string;
   warningLevel?: 'p0' | 'p1' | 'startDelay';
   pageNum?: number;
   pageSize?: number;
@@ -170,6 +175,7 @@ export interface NudgeConversionRow {
 /** GET /api/v1/dashboard/nudge-conversion — 催办转化率统计报表 */
 export const getDashboardNudgeConversion = (params: {
   taskId: string;
+  platform?: string;
   pageNum?: number;
   pageSize?: number;
   level?: string;
@@ -197,6 +203,7 @@ export type DashboardInsightType =
 export interface CreateDashboardInsightBody {
   insightType: DashboardInsightType;
   taskId?: string | null;
+  platform?: string;
   rtm?: string;
   format?: string;
   dealerName?: string;

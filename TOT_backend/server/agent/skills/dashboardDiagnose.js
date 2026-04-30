@@ -91,7 +91,25 @@ async function dashboardDiagnoseHandler(context) {
 
       for (const tc of response.tool_calls) {
         const toolName = tc.function.name;
-        const toolArgs = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+        let toolArgs = {};
+        try {
+          if (tc.function.arguments) {
+            let cleanArgs = tc.function.arguments;
+            // Basic cleanup for common unescaped newlines in JSON strings from LLMs
+            cleanArgs = cleanArgs.replace(/\\n/g, "\\n")  
+               .replace(/\\'/g, "\\'")
+               .replace(/\\"/g, '\\"')
+               .replace(/\\&/g, "\\&")
+               .replace(/\\r/g, "\\r")
+               .replace(/\\t/g, "\\t")
+               .replace(/\\b/g, "\\b")
+               .replace(/\\f/g, "\\f");
+            toolArgs = JSON.parse(cleanArgs);
+          }
+        } catch (e) {
+          console.error(`[Dashboard Agent] Error parsing arguments for ${toolName}: ${e.message}`);
+          toolArgs = { parse_error: true, raw_arguments: tc.function.arguments };
+        }
         console.log(`[Dashboard Agent] Calling tool ${toolName}`);
 
         let toolResult;

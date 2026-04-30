@@ -666,6 +666,21 @@
 
     <!-- 核心看板内容区（统计接口加载中） -->
     <section class="dashboard-content" v-if="activeTask">
+      <div v-if="enabledPlatformCount > 1" style="margin: 16px 24px 0 24px">
+        <n-tabs
+          :value="activePlatform || 'overall'"
+          type="segment"
+          animated
+          @update:value="handlePlatformChange"
+        >
+          <n-tab-pane name="overall" tab="整体看板" />
+          <n-tab-pane v-if="activeTask.hasMypal" name="MyPAL" tab="MyPAL" />
+          <n-tab-pane v-if="activeTask.hasSmartSell" name="SmartSales" tab="SmartSales" />
+          <n-tab-pane v-if="activeTask.hasAiDemo" name="AiDemo" tab="AiDemo" />
+          <n-tab-pane v-if="activeTask.hasLiveBroadcast" name="LiveBroadcast" tab="LiveBroadcast" />
+        </n-tabs>
+      </div>
+
       <n-spin :show="boardStatsLoading" class="board-stats-spin">
         <!-- 1. 概览 KPI（/dashboard/overview） -->
         <div class="north-star-container ai-hover-trigger" style="position: relative">
@@ -2006,8 +2021,13 @@
   });
 
   async function fetchDrillRows(taskId: string, level = 'store'): Promise<StoreDrillMetricRow[]> {
+    const platformParam = activePlatform.value || undefined;
     const promises: Promise<any>[] = [
-      getDashboardHeatmap({ taskId: String(taskId), rtmLevel: level }).send(),
+      getDashboardHeatmap({
+        taskId: String(taskId),
+        rtmLevel: level,
+        platform: platformParam,
+      }).send(),
     ];
 
     if (level === 'store') {
@@ -2032,7 +2052,7 @@
       heatRows.map(async (h) => {
         const name = String(h.rtmValue || '—');
 
-        let overviewParams: any = { taskId: String(taskId) };
+        let overviewParams: any = { taskId: String(taskId), platform: platformParam };
         if (level === 'store') {
           const storeId = byName.get(name.trim().toLowerCase());
           if (!storeId) return null; // fallback or skip if not found
@@ -2330,6 +2350,7 @@
         taskId: String(taskId),
         type,
         limit: 5,
+        platform: activePlatform.value || undefined,
       }).send();
       drillDownList.value = unwrapRankList(res);
     } catch (err: any) {
@@ -2358,6 +2379,7 @@
         warningLevel: level,
         pageNum: 1,
         pageSize: 50,
+        platform: activePlatform.value || undefined,
       }).send();
       drillDownList.value = unwrapWarningsList(res).map(normalizeWarningDrillRow);
     } catch (err: any) {
@@ -2855,6 +2877,10 @@
             void loadDashboardForTask(tid);
           }
         } else if (parsed.event === 'dashboard_updated') {
+          const pushPlatform = parsed.data?.platform || null;
+          if ((activePlatform.value || null) !== pushPlatform) {
+            return;
+          }
           void loadTasks().then(() => {
             if (activeTaskId.value) {
               const stillExists = taskList.value.find((t) => t.id === activeTaskId.value);
@@ -2862,6 +2888,7 @@
                 void loadDashboardForTask(activeTaskId.value);
               } else {
                 activeTaskId.value = taskList.value.length > 0 ? taskList.value[0].id : '';
+                activePlatform.value = null;
                 if (activeTaskId.value) void loadDashboardForTask(activeTaskId.value);
               }
             }
@@ -2887,9 +2914,32 @@
   // --- 数据响应式结构 ---
   const taskList = ref<any[]>([]);
   const activeTaskId = ref<string>('');
+  const activePlatform = ref<string | null>(null);
+
+  const handlePlatformChange = (val: string) => {
+    activePlatform.value = val === 'overall' ? null : val;
+    if (activeTaskId.value) {
+      void loadDashboardForTask(activeTaskId.value);
+    }
+  };
+
+  watch(activeTaskId, () => {
+    activePlatform.value = null;
+  });
+
   const activeTask = computed(
     () => taskList.value.find((t) => t.id === activeTaskId.value) || null
   );
+
+  const enabledPlatformCount = computed(() => {
+    if (!activeTask.value) return 0;
+    let count = 0;
+    if (activeTask.value.hasMypal) count++;
+    if (activeTask.value.hasSmartSell) count++;
+    if (activeTask.value.hasAiDemo) count++;
+    if (activeTask.value.hasLiveBroadcast) count++;
+    return count;
+  });
 
   const showDispatchedListModal = ref(false);
   const dispatchedListLoading = ref(false);
@@ -3068,10 +3118,19 @@
 
     boardStatsLoading.value = true;
     try {
+      const platformParam = activePlatform.value || undefined;
       const [overview, heatmap, trendDailyRes] = await Promise.all([
-        getDashboardOverview({ taskId: String(taskId) }).send(),
-        getDashboardHeatmap({ taskId: String(taskId), rtmLevel: 'rtm' }).send(),
-        getDashboardTrend({ taskId: String(taskId), type: 'daily' }).send(),
+        getDashboardOverview({ taskId: String(taskId), platform: platformParam }).send(),
+        getDashboardHeatmap({
+          taskId: String(taskId),
+          rtmLevel: 'rtm',
+          platform: platformParam,
+        }).send(),
+        getDashboardTrend({
+          taskId: String(taskId),
+          type: 'daily',
+          platform: platformParam,
+        }).send(),
       ]);
 
       const trendRows: TrendPoint[] = trendDailyRes?.trendData ?? [];
@@ -3101,6 +3160,10 @@
 
       taskList.value.splice(idx, 1, {
         ...row,
+        hasMypal: row.hasMypal,
+        hasSmartSell: row.hasSmartSell,
+        hasAiDemo: row.hasAiDemo,
+        hasLiveBroadcast: row.hasLiveBroadcast,
         northStar: {
           overallRate: overview.completionRate ?? 0,
           onTimeRate: overview.onTimeCompletionRate ?? 0,
@@ -3207,6 +3270,10 @@
           deadline: t.ddlAt ? t.ddlAt.substring(0, 10) : '无截止时间',
           createdAtLabel,
           autoNudgeRules: t.autoNudgeRules ?? null,
+          hasMypal: Boolean(t.hasMypal),
+          hasSmartSell: Boolean(t.hasSmartSell),
+          hasAiDemo: Boolean(t.hasAiDemo),
+          hasLiveBroadcast: Boolean(t.hasLiveBroadcast),
           ...emptyBoardStats(),
         };
         return base;
@@ -3217,6 +3284,7 @@
         (!activeTaskId.value || !taskList.value.find((t) => t.id === activeTaskId.value))
       ) {
         activeTaskId.value = taskList.value[0].id;
+        activePlatform.value = null;
       }
 
       if (activeTaskId.value) {
@@ -3232,6 +3300,7 @@
 
   const selectTask = (id: string) => {
     activeTaskId.value = id;
+    activePlatform.value = null;
     trendSelectedWeek.value = 'all'; // 切换任务时重置任务周筛选
     void loadDashboardForTask(id);
   };
@@ -3305,15 +3374,16 @@
   function buildBoardInsightRequestKey(section: BoardInsightSection): string {
     const tid = activeTaskId.value || '';
     const r = globalReasoningEnabled.value ? 'R1' : 'V3';
-    if (section === 'northStar') return `north_star::${tid}::${r}`;
+    const p = activePlatform.value || 'overall';
+    if (section === 'northStar') return `north_star::${tid}::${p}::${r}`;
     if (section === 'trend') {
       const dim = trendTimeDimension.value;
       const d = trendSelectedDay.value || new Date().toISOString().slice(0, 10);
       const w = trendSelectedWeek.value;
-      return `trend::${tid}::${dim}::${d}::${w}::${r}`;
+      return `trend::${tid}::${dim}::${d}::${w}::${p}::${r}`;
     }
-    if (section === 'rtm') return `channel::${tid}::${r}`;
-    return `funnel::${tid}::${r}`;
+    if (section === 'rtm') return `channel::${tid}::${p}::${r}`;
+    return `funnel::${tid}::${p}::${r}`;
   }
 
   function buildBoardInsightPayload(
@@ -3321,8 +3391,10 @@
   ): CreateDashboardInsightBody | null {
     const tid = activeTaskId.value;
     if (!tid) return null;
-    const base = {
+    const base: CreateDashboardInsightBody = {
+      insightType: 'north_star', // default, overwritten below
       reasoning: globalReasoningEnabled.value,
+      platform: activePlatform.value || undefined,
     };
     if (section === 'northStar') {
       return { ...base, insightType: 'north_star', taskId: tid };
