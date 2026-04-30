@@ -13,7 +13,7 @@
     getDashboardAgentInsight,
     streamDashboardInsight,
     postDashboardInsightVote,
-    type CreateDashboardInsightBody
+    type CreateDashboardInsightBody,
   } from '@/api/dashboard';
   import { marked } from 'marked';
   import { createDashboardChatSession, streamDashboardChatMessage } from '@/api/chat';
@@ -35,6 +35,33 @@
 
   const allTasks = ref<any[]>([]);
 
+  const taskCategory = ref<'current' | 'overdue'>('current');
+
+  const currentTasks = computed(() => {
+    const now = Date.now();
+    return allTasks.value.filter((t) => {
+      if (!t.fullDeadline) return true;
+      return new Date(t.fullDeadline.replace(/-/g, '/')).getTime() >= now;
+    });
+  });
+
+  const overdueTasks = computed(() => {
+    const now = Date.now();
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    const threeMonthsAgoTime = threeMonthsAgo.getTime();
+
+    return allTasks.value.filter((t) => {
+      if (!t.fullDeadline) return false;
+      const ddl = new Date(t.fullDeadline.replace(/-/g, '/')).getTime();
+      return ddl < now && ddl >= threeMonthsAgoTime;
+    });
+  });
+
+  const visibleTasks = computed(() =>
+    taskCategory.value === 'current' ? currentTasks.value : overdueTasks.value
+  );
+
   const loadTasks = async () => {
     try {
       const rawTasks = await getTaskList().send();
@@ -54,12 +81,17 @@
           fullDeadline: t.ddlAt,
           autoNudgeRules: t.autoNudgeRules, // 解析并保存任务的预警规则配置
           status: t.status, // 增加 status 字段以备渲染区分
+          hasMypal: Boolean(t.hasMypal),
+          hasSmartSell: Boolean(t.hasSmartSell),
+          hasAiDemo: Boolean(t.hasAiDemo),
+          hasLiveBroadcast: Boolean(t.hasLiveBroadcast),
+          startAt: t.startAt,
           completion_rate: null,
           severity: 'green', // Will be dynamically updated by background fetch
         };
       });
 
-      const dispatchedTasks = allTasks.value.filter(t => t.status === 'dispatched');
+      const dispatchedTasks = allTasks.value.filter((t) => t.status === 'dispatched');
 
       if (dispatchedTasks.length > 0) {
         // 仅为已下发的任务获取进度
@@ -95,18 +127,25 @@
         }
       });
 
-      if (allTasks.value.length > 0 && !currentTaskId.value) {
+      if (currentTasks.value.length > 0 && !currentTaskId.value) {
         // Pick the very first actionable diagnosis task from the agent's flow
         const firstActionableDiag = diagnosisData.value?.find(
-          (d) => d.action_type !== 'none' && d.related_task_id
+          (d) =>
+            d.action_type !== 'none' &&
+            d.related_task_id &&
+            currentTasks.value.some((t) => t.task_id === d.related_task_id)
         );
         if (firstActionableDiag) {
           currentTaskId.value = firstActionableDiag.related_task_id;
           isAutoCollapsed.value = true;
         } else {
-          currentTaskId.value = allTasks.value[0].task_id;
+          currentTaskId.value = currentTasks.value[0].task_id;
           isAutoCollapsed.value = true;
         }
+      } else if (!currentTaskId.value && overdueTasks.value.length > 0) {
+        currentTaskId.value = overdueTasks.value[0].task_id;
+        taskCategory.value = 'overdue';
+        isAutoCollapsed.value = true;
       }
     } catch (err) {
       console.error('获取任务列表失败', err);
@@ -114,6 +153,22 @@
   };
 
   const autoNudgeLoading = ref(false);
+  const isTaskOverdue = (task: any) => {
+    if (!task || !task.fullDeadline) return false;
+    const now = Date.now();
+    const ddl = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+    return ddl < now;
+  };
+
+  const isCurrentTaskOverdue = computed(() => {
+    if (!currentTaskId.value) return false;
+    const task = allTasks.value.find((t) => t.task_id === currentTaskId.value);
+    if (!task || !task.fullDeadline) return false;
+    const now = Date.now();
+    const ddl = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+    return ddl < now;
+  });
+
   const handleTriggerAutoNudge = async () => {
     if (!currentTaskId.value) {
       message.warning('请先选择一个任务');
@@ -203,18 +258,69 @@
       console.error('获取 Agent 洞察失败', err);
     } finally {
       isAgentLoading.value = false;
+      // Update tasks severity dynamically based on diagnosis
+      allTasks.value.forEach((task) => {
+        if (task.status === 'dispatched') {
+          const diag = diagnosisData.value.find((d) => d.related_task_id === task.task_id);
+          if (diag) {
+            task.severity = diag.severity;
+          } else {
+            task.severity = 'green';
+          }
+        }
+      });
     }
   };
 
   // ================= Global State =================
   const metricCompletionRateDelta = ref<number>(0);
   const currentTaskId = ref<string | null>(null);
+  const activePlatform = ref<string | null>(null);
   const isContentLoading = ref(false);
+
+  watch(currentTaskId, (newId) => {
+    activePlatform.value = null;
+    if (newId) {
+      const isCurrent = currentTasks.value.some((t) => t.task_id === newId);
+      if (!isCurrent) {
+        const isOverdue = overdueTasks.value.some((t) => t.task_id === newId);
+        if (isOverdue) taskCategory.value = 'overdue';
+      } else {
+        taskCategory.value = 'current';
+      }
+    }
+  });
+
+  const handlePlatformChange = (val: string) => {
+    activePlatform.value = val === 'overall' ? null : val;
+    if (currentTaskId.value) {
+      isContentLoading.value = true;
+      Promise.all([
+        fetchOverview(currentTaskId.value),
+        fetchAlerts(currentTaskId.value),
+        fetchRegionRanking(),
+      ]).finally(() => {
+        isContentLoading.value = false;
+      });
+    }
+  };
   const isDiagnosisCollapsed = ref(false);
   const lastUpdated = ref(new Date());
   const alertFilter = ref('P0');
   const isAiOpen = ref(false);
   const isFunnelModalOpen = ref(false);
+
+  const activeTask = computed(() => allTasks.value.find((t) => t.task_id === currentTaskId.value));
+  const enabledPlatformCount = computed(() => {
+    if (!activeTask.value) return 0;
+    let count = 0;
+    if (activeTask.value.hasMypal) count++;
+    if (activeTask.value.hasSmartSell) count++;
+    if (activeTask.value.hasAiDemo) count++;
+    if (activeTask.value.hasLiveBroadcast) count++;
+    return count;
+  });
+
   const isAlertModalOpen = ref(false);
   const selectedFunnelStage = ref<any>(null);
 
@@ -225,11 +331,27 @@
   const fetchAlerts = async (taskId: string) => {
     currentAlertsLoading.value = true;
     try {
+      const platformParam = activePlatform.value || undefined;
       const promises = [
-        getDashboardWarnings({ taskId, warningLevel: 'p2', pageSize: 100 }).send(),
-        getDashboardWarnings({ taskId, warningLevel: 'p1', pageSize: 100 }).send(),
-        getDashboardWarnings({ taskId, warningLevel: 'p0', pageSize: 100 }).send(),
-        getDashboardHeatmap({ taskId, rtmLevel: 'store' }).send(),
+        getDashboardWarnings({
+          taskId,
+          warningLevel: 'p2',
+          pageSize: 100,
+          platform: platformParam,
+        }).send(),
+        getDashboardWarnings({
+          taskId,
+          warningLevel: 'p1',
+          pageSize: 100,
+          platform: platformParam,
+        }).send(),
+        getDashboardWarnings({
+          taskId,
+          warningLevel: 'p0',
+          pageSize: 100,
+          platform: platformParam,
+        }).send(),
+        getDashboardHeatmap({ taskId, rtmLevel: 'store', platform: platformParam }).send(),
       ];
       const [p2Res, p1Res, p0Res, heatmapRes] = await Promise.all(promises);
 
@@ -285,16 +407,20 @@
       if (heatmapRes && (heatmapRes as any).heatmapData) {
         const heatmapData = (heatmapRes as any).heatmapData;
         const unfinishedStores = heatmapData.filter((h: any) => {
-           const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-           return uncompleted > 0;
+          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+          return uncompleted > 0;
         });
 
         // Check if global task is overdue to provide better description
         const currentTaskInfo = (allTasks.value || []).find((t: any) => t.task_id === taskId);
         let isTaskOverdue = false;
-        if (currentTaskInfo && currentTaskInfo.deadline && currentTaskInfo.deadline !== '无截止时间') {
-           const todayStr = new Date().toISOString().split('T')[0];
-           if (currentTaskInfo.deadline < todayStr) isTaskOverdue = true;
+        if (
+          currentTaskInfo &&
+          currentTaskInfo.deadline &&
+          currentTaskInfo.deadline !== '无截止时间'
+        ) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          if (currentTaskInfo.deadline < todayStr) isTaskOverdue = true;
         }
 
         combinedAlerts = combinedAlerts.concat(
@@ -304,7 +430,9 @@
             return {
               alert_id: h.rtmValue + '-unfinished',
               level: 'Unfinished',
-              description: isTaskOverdue ? `任务已逾期，仍有 ${uncompleted} 人未完成` : `目前仍有 ${uncompleted} 人未完成任务`,
+              description: isTaskOverdue
+                ? `任务已逾期，仍有 ${uncompleted} 人未完成`
+                : `目前仍有 ${uncompleted} 人未完成任务`,
               related_entity: h.rtmValue || '未知门店',
               storeName: h.rtmValue,
               total_employees: h.assignmentCount || 0,
@@ -336,35 +464,34 @@
 
   const fetchOverview = async (taskId: string) => {
     try {
+      const platformParam = activePlatform.value || undefined;
       const today = new Date();
       const yest = new Date(today);
       yest.setDate(yest.getDate() - 1);
       const todayStr = today.toISOString().split('T')[0];
       const yestStr = yest.toISOString().split('T')[0];
 
-      const [overviewData, trendDataRes, trendHourlyResToday, trendHourlyResYest] = await Promise.all([
-        getDashboardOverview({ taskId }).send(),
-        getDashboardTrend({ taskId, type: 'daily' })
-          .send()
-          .catch(() => null),
-        getDashboardTrend({ taskId, type: 'hourly', date: todayStr })
-          .send()
-          .catch(() => null),
-        getDashboardTrend({ taskId, type: 'hourly', date: yestStr })
-          .send()
-          .catch(() => null),
-      ]);
+      const [overviewData, trendDataRes, trendHourlyResToday, trendHourlyResYest] =
+        await Promise.all([
+          getDashboardOverview({ taskId, platform: platformParam }).send(),
+          getDashboardTrend({ taskId, type: 'daily', platform: platformParam })
+            .send()
+            .catch(() => null),
+          getDashboardTrend({ taskId, type: 'hourly', date: todayStr, platform: platformParam })
+            .send()
+            .catch(() => null),
+          getDashboardTrend({ taskId, type: 'hourly', date: yestStr, platform: platformParam })
+            .send()
+            .catch(() => null),
+        ]);
       currentOverview.value = overviewData;
 
       if (overviewData) {
         // Sync rate back to the allTasks object for UI presentation
-        const currentTaskInList = allTasks.value.find(t => t.task_id === taskId);
+        const currentTaskInList = allTasks.value.find((t) => t.task_id === taskId);
         if (currentTaskInList) {
           const rate = overviewData.completionRate / 100;
           currentTaskInList.completion_rate = rate;
-          if (rate < 0.5) currentTaskInList.severity = 'red';
-          else if (rate < 0.8) currentTaskInList.severity = 'yellow';
-          else currentTaskInList.severity = 'green';
         }
       }
 
@@ -396,18 +523,18 @@
         // Group by weeks backwards (latest 7 days, then previous 7 days...)
         const dataReversed = [...trendDataRes.trendData].reverse();
         const weeklyGroups: Record<string, any[]> = {};
-        
+
         let chunkIndex = 0;
         for (let i = 0; i < dataReversed.length; i += 7) {
           const chunk = dataReversed.slice(i, i + 7).reverse(); // reverse back to chronological order
           const startDateStr = chunk[0].timeKey.substring(5).replace('-', '.');
           const endDateStr = chunk[chunk.length - 1].timeKey.substring(5).replace('-', '.');
-          
+
           let label = `${startDateStr} - ${endDateStr}`;
           if (chunkIndex === 0) label += ' (本周)';
           else if (chunkIndex === 1) label += ' (上周)';
           else label += ` (-${chunkIndex}周)`;
-          
+
           weeklyGroups[label] = chunk.map((d: any) => ({
             time: d.timeKey.substring(5),
             increment: d.newCompleted || 0,
@@ -415,7 +542,7 @@
           }));
           chunkIndex++;
         }
-        
+
         Object.assign(newTrend.daily, weeklyGroups);
       } else {
         newTrend.daily['所有时间段'] = [];
@@ -449,7 +576,7 @@
 
       processHourly(trendHourlyResToday, `${todayStr} (今日)`);
       processHourly(trendHourlyResYest, `${yestStr} (昨日)`);
-      
+
       if (Object.keys(newTrend.hourly).length === 0) {
         newTrend.hourly['今日走势'] = [];
       }
@@ -510,10 +637,15 @@
 
   const alertSummary = computed(() => {
     if (currentOverview.value) {
-      const total = currentOverview.value.totalAssignments || 0;
-      const p0 = Math.round(total * (currentOverview.value.crisisP0Rate || 0) / 100);
-      const p1 = Math.round(total * (currentOverview.value.crisisP1Rate || 0) / 100);
-      const p2 = Math.round(total * (currentOverview.value.crisisP2Rate || 0) / 100);
+      // 从 alertFunnelData 中取数，确保统计口径绝对一致
+      const getCount = (stage: string) => {
+        const found = alertFunnelData.value.find((f: any) => f.stage === stage);
+        return found ? found.count : 0;
+      };
+
+      const p0 = getCount('P0');
+      const p1 = getCount('P1');
+      const p2 = getCount('P2');
 
       return {
         p0_count: p0,
@@ -546,18 +678,25 @@
       const unfinished = (o.pendingCount || 0) + (o.inProgressCount || 0);
 
       // 逻辑修复：漏斗逻辑严密化（P2 >= P1 >= P0 >= Unfinished）
-      // 如果未完成有 44 人，那他们必然正处于或已经过 P0, P1, P2。
       // 我们通过从下往上的最大值约束，确保“转化率”真正体现“被拯救/完成”的人数。
       const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
       if (task && task.fullDeadline) {
         const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+        const startAtTime = task.startAt
+          ? new Date(task.startAt.replace(/-/g, '/')).getTime()
+          : ddlTime - 7 * 24 * 3600 * 1000;
+
         const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
         const rules = task.autoNudgeRules?.deadlineCrisis || {};
         const p1Threshold = rules.p1 || 48;
         const p0Threshold = rules.p0 || 24;
 
-        // 仅当时间已经进入相应阶段，或者已经有历史数据时，才进行下级向上追溯修正
-        // 这样可以避免对“尚未开始”的阶段产生干扰
+        const totalDurationMs = ddlTime - startAtTime;
+        const passedMs = currentTimeMs.value - startAtTime;
+        const passedPercent = totalDurationMs > 0 ? (passedMs / totalDurationMs) * 100 : 100;
+        const p2ThresholdPercent = rules.p2 || 50;
+
+        // 仅当时间已经进入相应阶段，才进行下级向上追溯修正
         if (hoursLeft <= 0) {
           // 已过期：最终未完成人数就是底层指标
           p0 = Math.max(p0, unfinished);
@@ -565,9 +704,31 @@
           p2 = Math.max(p2, p1);
         } else {
           // 进行中：按时间窗口修正
+          // 如果时间尚未到达 P0 临界，P0 不应该强制托底 unfinished
           if (hoursLeft <= p0Threshold) p0 = Math.max(p0, unfinished);
-          if (hoursLeft <= p1Threshold) p1 = Math.max(p1, Math.max(p0, unfinished));
-          p2 = Math.max(p2, Math.max(p1, unfinished));
+          // 如果时间尚未到达 P1 临界，P1 不应该强制托底 p0 或 unfinished
+          if (hoursLeft <= p1Threshold)
+            p1 = Math.max(p1, Math.max(p0, hoursLeft <= p0Threshold ? unfinished : 0));
+
+          // 核心修复：只有当任务时间进度已经过半时，才将未完成人数计入 P2 风险
+          if (passedPercent >= p2ThresholdPercent) {
+            p2 = Math.max(p2, Math.max(p1, unfinished));
+          }
+        }
+      }
+
+      // 如果没有任何历史预警数据且任务还没过期，并且时间上不满足任何条件，应该保持为0
+      if (o.crisisP0Rate === 0 && o.crisisP1Rate === 0 && o.crisisP2Rate === 0) {
+        const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
+        if (task && task.fullDeadline) {
+          const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
+          const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
+          const rules = task.autoNudgeRules?.deadlineCrisis || {};
+          const p1Threshold = rules.p1 || 48;
+          const p0Threshold = rules.p0 || 24;
+
+          if (hoursLeft > p1Threshold) p1 = 0;
+          if (hoursLeft > p0Threshold) p0 = 0;
         }
       }
 
@@ -749,12 +910,15 @@
     if (section === 'northStar') return `north_star_kpi::${tid}::${r}`;
     if (section === 'funnel') return `north_star::${tid}::${r}`;
     if (section === 'warning') return `funnel_alerts::${tid}::${r}`;
-    if (section === 'trend') return `trend::${tid}::${currentDim.value}::${currentSubPeriod.value}::${r}`;
+    if (section === 'trend')
+      return `trend::${tid}::${currentDim.value}::${currentSubPeriod.value}::${r}`;
     if (section === 'rtm') return `channel_north_star::${tid}::${rrCurrentDimension.value}::${r}`;
     return `default::${tid}`;
   };
 
-  const buildBoardInsightPayload = (section: BoardInsightSection): CreateDashboardInsightBody | null => {
+  const buildBoardInsightPayload = (
+    section: BoardInsightSection
+  ): CreateDashboardInsightBody | null => {
     const tid = currentTaskId.value;
     if (!tid) return null;
     const base = { reasoning: globalReasoningEnabled.value };
@@ -767,7 +931,8 @@
       }
       return { ...base, insightType: 'completion_weekly', taskId: tid, trendType: 'daily' };
     }
-    if (section === 'rtm') return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
+    if (section === 'rtm')
+      return { ...base, insightType: 'channel_north_star', taskId: tid, rtmLevel: 'rtm' };
     return null;
   };
 
@@ -870,7 +1035,7 @@
       // 强制刷新 Agent 诊断数据和基础任务列表
       await loadAgentInsights(true);
       await loadTasks();
-      
+
       // 如果当前有选中的任务，同步刷新大盘、预警、趋势等数据
       if (currentTaskId.value) {
         await Promise.all([
@@ -911,7 +1076,7 @@
       hqWs.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          
+
           if (msg.type === 'dashboard_agent_updated' || msg.event === 'dashboard_agent_updated') {
             message.info('AI 诊断数据已更新');
             loadTasks();
@@ -979,7 +1144,7 @@
   };
 
   const handleTaskSelect = (taskId: string) => {
-    const task = allTasks.value.find(t => t.task_id === taskId);
+    const task = allTasks.value.find((t) => t.task_id === taskId);
     if (task && task.status === 'draft') {
       message.warning('草稿任务暂无学习数据，请先发布任务或点击右侧「管理」进行编辑');
       return;
@@ -1036,17 +1201,17 @@
   const metricCountdownFormatted = computed(() => {
     const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
     if (!task || !task.fullDeadline) return '00:00:00';
-    
+
     // Replace '-' with '/' for safe parsing in all browsers, e.g. "2026/04/20 23:59:59"
     const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
     const diffMs = ddlTime - currentTimeMs.value;
-    
+
     if (diffMs <= 0) return '已截止';
-    
+
     const h = Math.floor(diffMs / (1000 * 60 * 60));
     const m = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     const s = Math.floor((diffMs % (1000 * 60)) / 1000);
-    
+
     return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
   });
 
@@ -1086,15 +1251,24 @@
   const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
   const metricP0Count = computed(() => {
     if (!currentOverview.value) return 0;
-    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP0Rate || 0) / 100);
+    return Math.round(
+      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP0Rate || 0)) /
+        100
+    );
   });
   const metricP1Count = computed(() => {
     if (!currentOverview.value) return 0;
-    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP1Rate || 0) / 100);
+    return Math.round(
+      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP1Rate || 0)) /
+        100
+    );
   });
   const metricP2Count = computed(() => {
     if (!currentOverview.value) return 0;
-    return Math.round((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP2Rate || 0) / 100);
+    return Math.round(
+      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP2Rate || 0)) /
+        100
+    );
   });
   const metricTotalAlerts = computed(
     () => metricP0Count.value + metricP1Count.value + metricP2Count.value
@@ -1156,7 +1330,7 @@
   const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
   const getAlertPercentage = (stage: string) => {
     const count = getAlertStageCount(stage);
-    if (!alertTotalPeople.value || alertTotalPeople.value === 0) return '0%';
+    if (!alertTotalPeople.value || alertTotalPeople.value === 0 || count === 0) return '0%';
     return Math.round((count / alertTotalPeople.value) * 100) + '%';
   };
   const handleSelectAlertFilter = (level: string) => {
@@ -1166,7 +1340,7 @@
   // ... Alert Funnel
   const alertFunnelAnimated = ref(false);
   watch(
-    [() => currentTaskId.value, () => (alertFunnelData.value || []).map(s => s.count).join(',')],
+    [() => currentTaskId.value, () => (alertFunnelData.value || []).map((s) => s.count).join(',')],
     () => {
       alertFunnelAnimated.value = false;
       setTimeout(() => (alertFunnelAnimated.value = true), 50);
@@ -1175,7 +1349,7 @@
   );
   const alertFunnelMaxCount = computed(() => {
     if (!alertFunnelData.value || alertFunnelData.value.length === 0) return 1;
-    const max = Math.max(...alertFunnelData.value.map(s => s.count));
+    const max = Math.max(...alertFunnelData.value.map((s) => s.count));
     return max > 0 ? max : 1;
   });
   const getAlertFunnelWidth = (stage: any) => (stage.count / alertFunnelMaxCount.value) * 100;
@@ -1207,17 +1381,17 @@
       if (currentStage === 'Unfinished' && hoursLeft > 0) return null;
     }
 
-    if (prevCount === 0) return 0;
+    if (prevCount === 0) return '-';
 
     // 预警漏斗的转化含义是：在上一阶段的催办作用下，有多少人“被拯救”了（即没有恶化到当前阶段）
     // 公式：(上一阶段人数 - 当前阶段人数) / 上一阶段人数 * 100
     const saved = prevCount - currentCount;
-    if (saved < 0) return 0; // 理论上漏斗不应该出现逆势倒挂，如果有，算作0转化
+    if (saved < 0) return '-'; // 理论上漏斗不应该出现逆势倒挂，如果有说明存在未触发直接跳级的情况
     return (saved / prevCount) * 100;
   };
   const getOverallConversionRate = () => {
     if (!alertFunnelData.value || alertFunnelData.value.length < 2) return 0;
-    
+
     // 基数：最早进入预警池的人数 (P2)
     const first = alertFunnelData.value[0].count;
     if (first === 0) return null; // 连 P2 都还没人，说明预警都还没触发或者没异常，无法计算转化率
@@ -1230,7 +1404,7 @@
     if (task && task.fullDeadline) {
       const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
       hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
-      
+
       const rules = task.autoNudgeRules?.deadlineCrisis || {};
       p1Threshold = rules.p1 || 48;
       p0Threshold = rules.p0 || 24;
@@ -1253,7 +1427,7 @@
       // 或者说还没跨入下一阶段，没法检验上一阶段的效果
       return null;
     }
-    
+
     const saved = first - last;
     if (saved < 0) return 0;
     return (saved / first) * 100;
@@ -1321,8 +1495,30 @@
     const incrementData = activeData.map((d) => d.increment);
     const cumulativeData = activeData.map((d) => d.cumulative);
 
+    const hasData = activeData.length > 0;
+
     const option = {
-      grid: { top: 30, right: 10, left: 10, bottom: 20, containLabel: true },
+      graphic: !hasData
+        ? {
+            type: 'group',
+            left: 'center',
+            top: 'middle',
+            children: [
+              {
+                type: 'text',
+                z: 100,
+                left: 'center',
+                top: 'middle',
+                style: {
+                  fill: '#86868B',
+                  text: '暂无趋势数据',
+                  font: '14px "SF Pro Text", sans-serif',
+                },
+              },
+            ],
+          }
+        : [],
+      grid: { top: 40, right: 10, left: 10, bottom: 20, containLabel: true },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(0, 0, 0, 0.03)' } },
@@ -1356,14 +1552,16 @@
         {
           type: 'value',
           name: '累计完成',
-          nameTextStyle: { color: '#86868B', fontSize: 11, align: 'right' },
+          nameGap: 15,
+          nameTextStyle: { color: '#86868B', fontSize: 11, align: 'left' },
           splitLine: { lineStyle: { color: '#F5F5F7', type: 'dashed' } },
           axisLabel: { color: '#86868B', fontSize: 11 },
         },
         {
           type: 'value',
           name: '单期增量',
-          nameTextStyle: { color: '#86868B', fontSize: 11, align: 'left' },
+          nameGap: 15,
+          nameTextStyle: { color: '#86868B', fontSize: 11, align: 'right' },
           splitLine: { show: false },
           axisLabel: { color: '#86868B', fontSize: 11 },
         },
@@ -1456,6 +1654,7 @@
     if (!currentTaskId.value) return;
     isRtmLoading.value = true;
     try {
+      const platformParam = activePlatform.value || undefined;
       const params: any = {
         taskId: currentTaskId.value,
         rtmLevel:
@@ -1466,14 +1665,21 @@
             : rrCurrentDimension.value === 'dealer'
             ? 'dealerName'
             : 'store',
+        platform: platformParam,
       };
       if (rrSelectedRTM3.value)
         params.rtm = rrSelectedRTM3.value.region_name || rrSelectedRTM3.value.entity_name;
       if (rrSelectedRTM4.value)
         params.format = rrSelectedRTM4.value.region_name || rrSelectedRTM4.value.entity_name;
-      
-      const dName = rrSelectedDealer.value?.region_name || rrSelectedDealer.value?.entity_name || '';
-      if (rrSelectedDealer.value && dName !== '(未知)' && dName !== '(未知实体)' && dName !== '(未知门店)') {
+
+      const dName =
+        rrSelectedDealer.value?.region_name || rrSelectedDealer.value?.entity_name || '';
+      if (
+        rrSelectedDealer.value &&
+        dName !== '(未知)' &&
+        dName !== '(未知实体)' &&
+        dName !== '(未知门店)'
+      ) {
         params.dealerName = dName;
       }
 
@@ -1487,11 +1693,12 @@
         completion_rate: h.completionRate ? h.completionRate / 100 : 0,
         completed_count: h.completedCount || 0,
         employee_count: h.assignmentCount || 0,
-        avg_time: (h.avgCompletionTimeHours !== undefined && h.avgCompletionTimeHours !== null)
-          ? (h.avgCompletionTimeHours > 0 && h.avgCompletionTimeHours < 0.1 
-              ? '< 0.1h' 
-              : `${h.avgCompletionTimeHours.toFixed(1)}h`) 
-          : '-',
+        avg_time:
+          h.avgCompletionTimeHours !== undefined && h.avgCompletionTimeHours !== null
+            ? h.avgCompletionTimeHours > 0 && h.avgCompletionTimeHours < 0.1
+              ? '< 0.1h'
+              : `${h.avgCompletionTimeHours.toFixed(1)}h`
+            : '-',
       }));
     } catch (e) {
       console.error('Fetch RTM Ranking Failed', e);
@@ -1673,13 +1880,14 @@
           {
             class:
               'relative mt-4 mb-2 border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden group/chart',
-            style: { minHeight: '260px' }
+            style: { minHeight: '260px' },
           },
           [
             h(
               'div',
               {
-                class: 'absolute top-3 right-3 z-[900] opacity-0 group-hover/chart:opacity-100 transition-opacity duration-200',
+                class:
+                  'absolute top-3 right-3 z-[900] opacity-0 group-hover/chart:opacity-100 transition-opacity duration-200',
               },
               [
                 h(
@@ -1690,10 +1898,7 @@
                       'px-3 py-1.5 bg-white/90 hover:bg-white backdrop-blur-sm rounded-md text-[#0071E3] font-medium text-[12px] transition-colors shadow-sm border border-gray-200 flex items-center gap-1.5',
                     title: '下载图表为图片',
                   },
-                  [
-                    h('span', null, '⬇️'),
-                    h('span', null, '下载')
-                  ]
+                  [h('span', null, '⬇️'), h('span', null, '下载')]
                 ),
               ]
             ),
@@ -1854,7 +2059,10 @@
     if (!text) return '';
 
     // 1. Fix missing empty line before a table
-    text = text.replace(/([^\n])\n([ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-:| \t]+\|[ \t]*)/g, '$1\n\n$2');
+    text = text.replace(
+      /([^\n])\n([ \t]*\|[^\n]+\|[ \t]*\n[ \t]*\|[-:| \t]+\|[ \t]*)/g,
+      '$1\n\n$2'
+    );
 
     // 2. Fix malformed table separators
     text = text.replace(/\|([-: ]+)\|/g, (match) => {
@@ -1867,7 +2075,12 @@
       const headerCols = (headerLine.match(/\|/g) || []).length;
       const sepCols = (sepLine.match(/\|/g) || []).length;
       if (headerCols > 1 && headerCols !== sepCols) {
-        const newSep = '|' + Array(headerCols - 1).fill('---').join('|') + '|';
+        const newSep =
+          '|' +
+          Array(headerCols - 1)
+            .fill('---')
+            .join('|') +
+          '|';
         return headerLine + '\n' + newSep;
       }
       return match;
@@ -1995,7 +2208,6 @@
     }
   });
 
-  
   // ... Funnel Modal Logic
   const fmCurrentDimension = ref('rtm3');
   const fmSearchQuery = ref('');
@@ -2030,7 +2242,9 @@
   });
 
   const fmDimensionLabel = computed(() => {
-    return fmAvailableDimensions.value.find((d) => d.value === fmCurrentDimension.value)?.label || 'RTM3';
+    return (
+      fmAvailableDimensions.value.find((d) => d.value === fmCurrentDimension.value)?.label || 'RTM3'
+    );
   });
 
   const fmHandleSort = (key: string) => {
@@ -2096,11 +2310,18 @@
     if (!selectedFunnelStage.value) return;
     fmTableLoading.value = true;
     try {
+      const platformParam = activePlatform.value || undefined;
       const heatParams: any = {
         taskId: currentTaskId.value,
-        rtmLevel: fmCurrentDimension.value === 'rtm3' ? 'rtm' :
-                  fmCurrentDimension.value === 'rtm4' ? 'format' :
-                  fmCurrentDimension.value === 'dealer' ? 'dealerName' : 'store',
+        rtmLevel:
+          fmCurrentDimension.value === 'rtm3'
+            ? 'rtm'
+            : fmCurrentDimension.value === 'rtm4'
+            ? 'format'
+            : fmCurrentDimension.value === 'dealer'
+            ? 'dealerName'
+            : 'store',
+        platform: platformParam,
       };
       if (fmSelectedRTM3.value) heatParams.rtm = fmSelectedRTM3.value;
       if (fmSelectedRTM4.value) heatParams.format = fmSelectedRTM4.value;
@@ -2110,10 +2331,10 @@
       const entities = heatRes?.heatmapData || [];
 
       // Only fetch overview concurrently if we really need "read" or "in_progress"
-      // Wait, heatmap doesn't return 'in_progress'. 
+      // Wait, heatmap doesn't return 'in_progress'.
       // But let's check what the overview endpoints need:
       // For each entity, we need its specific data
-      
+
       const promises = entities.map(async (h: any) => {
         const ovParams = { ...heatParams };
         if (fmCurrentDimension.value === 'rtm3') ovParams.rtm = h.rtmValue;
@@ -2121,7 +2342,7 @@
         else if (fmCurrentDimension.value === 'dealer') ovParams.dealerName = h.rtmValue;
         else if (fmCurrentDimension.value === 'store') {
           // Heatmap API returns store name in rtmValue. Overview API only accepts storeId.
-          // Wait, heatmap API doesn't return storeId! Actually, if level=store, heatmap groups by s.id but returns MAX(s.name) AS rtm_value. 
+          // Wait, heatmap API doesn't return storeId! Actually, if level=store, heatmap groups by s.id but returns MAX(s.name) AS rtm_value.
           // Since we can't reliably map store name to storeId on the fly, for store level we might have to use only the heatmap data!
           // Heatmap provides assignmentCount and completedCount.
         }
@@ -2131,32 +2352,31 @@
         const st = selectedFunnelStage.value.stage;
         let count = 0;
         let total = h.assignmentCount || 1;
-        
+
         if (st === 'pushed' || st === 'delivered') {
           return { name: h.rtmValue, total, count: total, rate: 1 };
         } else if (st === 'completed') {
           return { name: h.rtmValue, total, count: h.completedCount, rate: h.completionRate / 100 };
         } else if (st === 'in_progress') {
-          // Heatmap now returns inProgressCount! 
+          // Heatmap now returns inProgressCount!
           // Funnel "in_progress" logic is inProgressCount + completedCount
           count = (h.inProgressCount || 0) + (h.completedCount || 0);
-          return { name: h.rtmValue, total, count, rate: total > 0 ? count/total : 0 };
+          return { name: h.rtmValue, total, count, rate: total > 0 ? count / total : 0 };
         } else {
           // 'read' - fallback to overview if possible, else 0.
           // For safety, let's just make the overview call if NOT store level
           if (fmCurrentDimension.value !== 'store') {
-             try {
-                const ov = await getDashboardOverview(ovParams).send();
-                if (st === 'read') count = ov.employeeReadCount || ov.totalReadCount || 0;
-             } catch(e){}
+            try {
+              const ov = await getDashboardOverview(ovParams).send();
+              if (st === 'read') count = ov.employeeReadCount || ov.totalReadCount || 0;
+            } catch (e) {}
           }
-          return { name: h.rtmValue, total, count, rate: total > 0 ? count/total : 0 };
+          return { name: h.rtmValue, total, count, rate: total > 0 ? count / total : 0 };
         }
       });
 
       const rawList = await Promise.all(promises);
       fmTableData.value = rawList;
-
     } catch (e) {
       fmTableData.value = [];
     } finally {
@@ -2317,10 +2537,17 @@
   const loadAlertModalData = async () => {
     amTableLoading.value = true;
     try {
+      const platformParam = activePlatform.value || undefined;
       if (alertFilter.value === 'Unfinished') {
         const heatmapParams: any = {
           taskId: currentTaskId.value,
-          rtmLevel: amCurrentDimension.value === 'rtm3' ? 'rtm' : amCurrentDimension.value === 'rtm4' ? 'format' : amCurrentDimension.value,
+          rtmLevel:
+            amCurrentDimension.value === 'rtm3'
+              ? 'rtm'
+              : amCurrentDimension.value === 'rtm4'
+              ? 'format'
+              : amCurrentDimension.value,
+          platform: platformParam,
         };
         // Heatmap API handles rtm, format, dealerName differently.
         if (amSelectedRTM3.value) heatmapParams.rtm = amSelectedRTM3.value;
@@ -2331,13 +2558,13 @@
         const heatmapData = (res as any)?.heatmapData || (res as any)?.data?.heatmapData || [];
 
         const unfinishedNodes = heatmapData.filter((h: any) => {
-           const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-           return uncompleted > 0;
+          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+          return uncompleted > 0;
         });
 
         amTableData.value = unfinishedNodes.map((h: any) => {
           const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-          const riskRate = h.assignmentCount > 0 ? (uncompleted / h.assignmentCount) : 0;
+          const riskRate = h.assignmentCount > 0 ? uncompleted / h.assignmentCount : 0;
           return {
             alert_id: h.rtmValue + '-unfinished',
             level: 'Unfinished',
@@ -2348,12 +2575,17 @@
             risk_rate: riskRate,
           };
         });
-
       } else {
         const params: any = {
           taskId: currentTaskId.value,
-          level: amCurrentDimension.value === 'rtm3' ? 'rtm' : amCurrentDimension.value === 'rtm4' ? 'format' : amCurrentDimension.value,
+          level:
+            amCurrentDimension.value === 'rtm3'
+              ? 'rtm'
+              : amCurrentDimension.value === 'rtm4'
+              ? 'format'
+              : amCurrentDimension.value,
           pageSize: 100,
+          platform: platformParam,
         };
         if (amSelectedRTM3.value) params.rtm = amSelectedRTM3.value;
         if (amSelectedRTM4.value) params.format = amSelectedRTM4.value;
@@ -2363,7 +2595,8 @@
         const rawList = res?.list || [];
 
         // Map backend response (red/orange/yellow objects) to table rows based on current alertFilter
-        const levelKey = alertFilter.value === 'P0' ? 'red' : alertFilter.value === 'P1' ? 'orange' : 'yellow';
+        const levelKey =
+          alertFilter.value === 'P0' ? 'red' : alertFilter.value === 'P1' ? 'orange' : 'yellow';
 
         amTableData.value = rawList
           .filter((a: any) => a[levelKey].nudged > 0) // Only show entities that actually have alerts at this level
@@ -2513,19 +2746,36 @@
           <!-- 一键催办扫描按钮 -->
           <button
             @click="handleTriggerAutoNudge"
-            :disabled="autoNudgeLoading"
-            class="px-4 py-2 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-600 transition-colors duration-200 relative group flex items-center gap-2 border border-orange-200 shadow-sm"
-            title="运行预警扫描"
+            :disabled="autoNudgeLoading || isCurrentTaskOverdue"
+            class="px-4 py-2 rounded-full relative group flex items-center gap-2 border shadow-sm transition-colors duration-200"
+            :class="
+              isCurrentTaskOverdue
+                ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+                : 'bg-orange-50 hover:bg-orange-100 text-orange-600 border-orange-200 cursor-pointer'
+            "
+            :title="isCurrentTaskOverdue ? '任务已过期，无法进行催办扫描' : '运行预警扫描'"
           >
             <svg
               v-if="autoNudgeLoading"
-              class="animate-spin h-4 w-4 text-orange-600"
+              class="animate-spin h-4 w-4"
+              :class="isCurrentTaskOverdue ? 'text-gray-400' : 'text-orange-600'"
               xmlns="http://www.w3.org/2000/svg"
               fill="none"
               viewBox="0 0 24 24"
             >
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
             </svg>
             <svg
               v-else
@@ -2539,8 +2789,8 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
             <span class="text-[13px] font-semibold">一键催办扫描</span>
           </button>
@@ -2770,14 +3020,25 @@
             v-if="expandedTasks"
             class="mt-4 glass-card overflow-hidden border-none shadow-lg ring-1 ring-black/5"
           >
-            <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-              <div class="text-[14px] font-bold font-outfit text-[#111827]"
-                >全部任务（{{ allTasks.length }}）</div
+            <div
+              class="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center"
+            >
+              <div class="flex items-center gap-2">
+                <div class="text-[14px] font-bold font-outfit text-[#111827]">
+                  {{ taskCategory === 'current' ? '当前任务' : '已过期任务' }}
+                </div>
+                <span class="text-[13px] text-gray-500">（{{ visibleTasks.length }}）</span>
+              </div>
+              <button
+                @click.stop="taskCategory = taskCategory === 'current' ? 'overdue' : 'current'"
+                class="text-[13px] text-blue-600 hover:text-blue-700 transition-colors"
               >
+                查看{{ taskCategory === 'current' ? '已过期' : '当前' }}任务
+              </button>
             </div>
             <div class="max-h-[260px] overflow-y-auto">
               <div
-                v-for="task in allTasks"
+                v-for="task in visibleTasks"
                 :key="task.task_id"
                 @click="handleTaskSelect(task.task_id)"
                 class="px-6 py-4 hover:bg-gray-50 cursor-pointer transition-colors duration-200 flex items-center gap-4 border-b border-gray-100 last:border-b-0"
@@ -2793,12 +3054,46 @@
                   :style="{ backgroundColor: severityColors[task.severity] }"
                 ></div>
                 <div v-else class="w-2 h-2 rounded-full flex-shrink-0 bg-gray-300 shadow-sm"></div>
-                
-                <div class="flex-1 text-[14px] text-[#111827] font-medium flex items-center gap-2">
-                  {{ task.task_title }}
-                  <span v-if="task.status === 'draft'" class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200">
-                    草稿
-                  </span>
+
+                <div class="flex-1 flex flex-col justify-center min-w-0 pr-4">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[14px] text-[#111827] font-medium truncate">{{
+                      task.task_title
+                    }}</span>
+                    <span
+                      v-if="task.status === 'draft'"
+                      class="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200"
+                    >
+                      草稿
+                    </span>
+                  </div>
+                  <div
+                    class="flex flex-wrap gap-1"
+                    v-if="
+                      task.hasMypal || task.hasSmartSell || task.hasAiDemo || task.hasLiveBroadcast
+                    "
+                  >
+                    <span
+                      v-if="task.hasMypal"
+                      class="px-1.5 py-0.5 text-[10px] leading-none rounded bg-blue-50 text-blue-600 border border-blue-100"
+                      >MyPAL</span
+                    >
+                    <span
+                      v-if="task.hasSmartSell"
+                      class="px-1.5 py-0.5 text-[10px] leading-none rounded bg-purple-50 text-purple-600 border border-purple-100"
+                      >SmartSales</span
+                    >
+                    <span
+                      v-if="task.hasAiDemo"
+                      class="px-1.5 py-0.5 text-[10px] leading-none rounded bg-emerald-50 text-emerald-600 border border-emerald-100"
+                      >AiDemo</span
+                    >
+                    <span
+                      v-if="task.hasLiveBroadcast"
+                      class="px-1.5 py-0.5 text-[10px] leading-none rounded bg-orange-50 text-orange-600 border border-orange-100"
+                      >LiveBroadcast</span
+                    >
+                  </div>
                 </div>
                 <div class="text-[12px] text-[#6B7280] whitespace-nowrap"
                   >截止 {{ task.deadline.slice(5) }}</div
@@ -2809,20 +3104,29 @@
                       <div
                         class="h-full rounded-full transition-all duration-300"
                         :style="{
-                          width: task.completion_rate !== null ? task.completion_rate * 100 + '%' : '0%',
+                          width:
+                            task.completion_rate !== null ? task.completion_rate * 100 + '%' : '0%',
                           backgroundColor: severityColors[task.severity],
                         }"
                       ></div>
                     </div>
-                    <div class="text-[12px] text-[#6B7280] font-medium w-10 text-right tabular-nums flex-shrink-0"
-                      >{{ task.completion_rate !== null ? Math.round(task.completion_rate * 100) + '%' : '-' }}</div
+                    <div
+                      class="text-[12px] text-[#6B7280] font-medium w-10 text-right tabular-nums flex-shrink-0"
+                      >{{
+                        task.completion_rate !== null
+                          ? Math.round(task.completion_rate * 100) + '%'
+                          : '-'
+                      }}</div
                     >
                   </template>
                   <template v-else>
-                    <div class="text-[12px] text-[#86868B] font-medium text-right mr-3 flex-shrink-0">待发布</div>
+                    <div
+                      class="text-[12px] text-[#86868B] font-medium text-right mr-3 flex-shrink-0"
+                      >待发布</div
+                    >
                   </template>
-                  
-                  <button 
+
+                  <button
                     v-if="task.status === 'draft'"
                     @click="handleEditTask(task, $event)"
                     class="ml-1 px-2.5 py-1 text-[11px] font-medium text-[#0071E3] bg-blue-50/50 hover:bg-blue-100 rounded-md transition-colors border border-blue-100 whitespace-nowrap flex-shrink-0"
@@ -2830,8 +3134,8 @@
                   >
                     编辑
                   </button>
-                  <button 
-                    v-else
+                  <button
+                    v-else-if="!isTaskOverdue(task)"
                     @click="handleRevokeTask(task, $event)"
                     class="ml-1 px-2.5 py-1 text-[11px] font-medium text-[#FF3B30] bg-red-50 hover:bg-red-100 rounded-md transition-colors border border-red-100 whitespace-nowrap flex-shrink-0"
                     title="撤销任务下发，退回草稿状态"
@@ -2852,6 +3156,24 @@
         :class="['transition-opacity duration-250', isContentLoading ? 'opacity-0' : 'opacity-100']"
       >
         <div class="w-full mx-auto px-6 sm:px-10 lg:px-12 xl:px-16">
+          <div v-if="enabledPlatformCount > 1" style="margin-top: 24px">
+            <n-tabs
+              :value="activePlatform || 'overall'"
+              type="segment"
+              animated
+              @update:value="handlePlatformChange"
+            >
+              <n-tab-pane name="overall" tab="整体看板" />
+              <n-tab-pane v-if="activeTask?.hasMypal" name="MyPAL" tab="MyPAL" />
+              <n-tab-pane v-if="activeTask?.hasSmartSell" name="SmartSales" tab="SmartSales" />
+              <n-tab-pane v-if="activeTask?.hasAiDemo" name="AiDemo" tab="AiDemo" />
+              <n-tab-pane
+                v-if="activeTask?.hasLiveBroadcast"
+                name="LiveBroadcast"
+                tab="LiveBroadcast"
+              />
+            </n-tabs>
+          </div>
           <!-- Layer 2: Core Metrics + Funnel -->
           <div class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
             <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10 group/card relative">
@@ -2859,14 +3181,18 @@
               <div class="glass-card flex flex-col h-full w-full border-none flex-1 relative">
                 <AiAnalyzePopover
                   class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
-                  :loading="boardInsightCard.northStar.loading"                  :content="boardInsightCard.northStar.content"
+                  :loading="boardInsightCard.northStar.loading"
+                  :content="boardInsightCard.northStar.content"
                   :generated-at="boardInsightCard.northStar.generatedAt"
                   :user-vote="boardInsightCard.northStar.userVote"
                   :is-reasoning="globalReasoningEnabled"
                   :copied="copiedStates.northStar"
                   :render-markdown="renderInsightMarkdown"
                   @open="ensureBoardInsightOnOpen('northStar')"
-                  @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('northStar')"
+                  @toggle-reasoning="
+                    globalReasoningEnabled = $event;
+                    ensureBoardInsightOnOpen('northStar');
+                  "
                   @feedback="handleAiFeedback('northStar', $event)"
                   @copy="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"
                 />
@@ -2901,35 +3227,91 @@
                     class="text-[36px] leading-none font-bold text-[#111827] font-outfit tracking-tight mb-3"
                     >{{ safeFormatRate(metricCompletionRate * 100, 2) }}</div
                   >
-                  <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-x-3 gap-y-2 mt-2 w-full px-4 text-[11px]">
+                  <div
+                    class="grid grid-cols-[1fr_auto_1fr] items-center gap-x-3 gap-y-2 mt-2 w-full px-4 text-[11px]"
+                  >
                     <!-- Row 1: Delta | Avg Time -->
-                    <div class="flex items-center justify-end gap-1 font-semibold" :style="{ color: getTrendColor(metricCompletionRateDelta) }">
+                    <div
+                      class="flex items-center justify-end gap-1 font-semibold"
+                      :style="{ color: getTrendColor(metricCompletionRateDelta) }"
+                    >
                       <span>较昨天</span>
-                      <span>{{ metricCompletionRateDelta > 0 ? '+' : '' }}{{ safeFormatRate(Math.abs(metricCompletionRateDelta * 100), 1, 'pp') }}</span>
-                      <svg v-if="metricCompletionRateDelta > 0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <span
+                        >{{ metricCompletionRateDelta > 0 ? '+' : ''
+                        }}{{
+                          safeFormatRate(Math.abs(metricCompletionRateDelta * 100), 1, 'pp')
+                        }}</span
+                      >
+                      <svg
+                        v-if="metricCompletionRateDelta > 0"
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
                         <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
                         <polyline points="16 7 22 7 22 13" />
                       </svg>
-                      <svg v-else-if="metricCompletionRateDelta < 0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <svg
+                        v-else-if="metricCompletionRateDelta < 0"
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
                         <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
                         <polyline points="16 17 22 17 22 11" />
                       </svg>
-                      <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <svg
+                        v-else
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
                         <line x1="5" y1="12" x2="19" y2="12" />
                       </svg>
                     </div>
                     <div class="w-px h-3 bg-gray-200"></div>
-                    <div class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap">
-                      人均耗时 <span class="font-semibold text-[#111827] ml-1">{{ metricAvgCompletionTime }}h</span>
+                    <div
+                      class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap"
+                    >
+                      人均耗时
+                      <span class="font-semibold text-[#111827] ml-1"
+                        >{{ metricAvgCompletionTime }}h</span
+                      >
                     </div>
 
                     <!-- Row 2: Deadline | Countdown -->
-                    <div class="text-[#6B7280] flex items-center justify-end text-right whitespace-nowrap">
+                    <div
+                      class="text-[#6B7280] flex items-center justify-end text-right whitespace-nowrap"
+                    >
                       截止 {{ metricDeadlineFormatted }}
                     </div>
                     <div class="w-px h-3 bg-gray-200"></div>
-                    <div class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap">
-                      剩 <span class="font-bold text-[#FF3B30] w-[62px] inline-block text-left tabular-nums ml-1">{{ metricCountdownFormatted }}</span>
+                    <div
+                      class="text-[#6B7280] flex items-center justify-start text-left whitespace-nowrap"
+                    >
+                      剩
+                      <span
+                        class="font-bold text-[#FF3B30] w-[62px] inline-block text-left tabular-nums ml-1"
+                        >{{ metricCountdownFormatted }}</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -3051,7 +3433,10 @@
                 :copied="copiedStates.funnel"
                 :render-markdown="renderInsightMarkdown"
                 @open="ensureBoardInsightOnOpen('funnel')"
-                @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('funnel')"
+                @toggle-reasoning="
+                  globalReasoningEnabled = $event;
+                  ensureBoardInsightOnOpen('funnel');
+                "
                 @feedback="handleAiFeedback('funnel', $event)"
                 @copy="handleCopyAiInsight(boardInsightCard.funnel.content, 'funnel')"
               />
@@ -3418,7 +3803,10 @@
                   :copied="copiedStates.warning"
                   :render-markdown="renderInsightMarkdown"
                   @open="ensureBoardInsightOnOpen('warning')"
-                  @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('warning')"
+                  @toggle-reasoning="
+                    globalReasoningEnabled = $event;
+                    ensureBoardInsightOnOpen('warning');
+                  "
                   @feedback="handleAiFeedback('warning', $event)"
                   @copy="handleCopyAiInsight(boardInsightCard.warning.content, 'warning')"
                 />
@@ -3462,6 +3850,9 @@
                         <template v-if="getAlertConversionRate(index) === null">
                           <span class="text-[11px] font-medium text-[#86868B]">阶段未触发</span>
                         </template>
+                        <template v-else-if="getAlertConversionRate(index) === '-'">
+                          <span class="text-[14px] font-bold font-outfit text-[#86868B]">-</span>
+                        </template>
                         <template v-else>
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -3476,8 +3867,15 @@
                           >
                             <path d="m6 9 6 6 6-6" />
                           </svg>
-                          <span class="text-[11px] font-medium" :class="getAlertConversionRate(index) === 0 ? 'text-[#FF3B30]' : 'text-[#34C759]'">
-                            转化率 {{ safeFormatRate(getAlertConversionRate(index) as number, 1) }}
+                          <span
+                            class="text-[11px] font-medium"
+                            :class="
+                              getAlertConversionRate(index) === 0
+                                ? 'text-[#FF3B30]'
+                                : 'text-[#34C759]'
+                            "
+                          >
+                            转化率 {{ safeFormatRate(Number(getAlertConversionRate(index)), 1) }}
                           </span>
                         </template>
                       </div>
@@ -3606,7 +4004,9 @@
 
           <!-- Layer 4: Trend Chart + Region Ranking -->
           <div class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
-            <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card">
+            <div
+              class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card"
+            >
               <!-- Trend Chart Container -->
               <div class="w-full flex flex-col h-full z-10">
                 <div
@@ -3649,7 +4049,10 @@
                       :copied="copiedStates.trend"
                       :render-markdown="renderInsightMarkdown"
                       @open="ensureBoardInsightOnOpen('trend')"
-                      @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('trend')"
+                      @toggle-reasoning="
+                        globalReasoningEnabled = $event;
+                        ensureBoardInsightOnOpen('trend');
+                      "
                       @feedback="handleAiFeedback('trend', $event)"
                       @copy="handleCopyAiInsight(boardInsightCard.trend.content, 'trend')"
                     />
@@ -3705,7 +4108,10 @@
             </div>
             <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
               <!-- Region Ranking Component Inlined -->
-              <div v-if="true" class="w-full flex flex-col h-full min-h-[380px] flex-1 relative z-10">
+              <div
+                v-if="true"
+                class="w-full flex flex-col h-full min-h-[380px] flex-1 relative z-10"
+              >
                 <!-- Loading Overlay -->
                 <div
                   v-if="isRtmLoading"
@@ -3765,7 +4171,10 @@
                           :copied="copiedStates.rtm"
                           :render-markdown="renderInsightMarkdown"
                           @open="ensureBoardInsightOnOpen('rtm')"
-                          @toggle-reasoning="globalReasoningEnabled = $event; ensureBoardInsightOnOpen('rtm')"
+                          @toggle-reasoning="
+                            globalReasoningEnabled = $event;
+                            ensureBoardInsightOnOpen('rtm');
+                          "
                           @feedback="handleAiFeedback('rtm', $event)"
                           @copy="handleCopyAiInsight(boardInsightCard.rtm.content, 'rtm')"
                         />
@@ -4035,255 +4444,262 @@
                         </div>
                       </div>
                     </div>
-                    
+
                     <div
                       v-if="rrCurrentNodes.length === 0"
-                    class="py-12 text-center text-[#86868B] text-[13px] border border-dashed border-[#E5E5E7] rounded-lg mt-4"
-                  >
-                    该维度下暂无数据
-                  </div>
-                  <div v-else class="space-y-2 pb-2">
-                    <!-- Region Row Inline -->
-                    <template v-for="region in rrTopRegions" :key="region.id || region.region_id">
-                      <div
-                        @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
-                        :class="[
-                          'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#F0FFF4] min-w-max',
-                          rrCurrentDimension !== 'store'
-                            ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
-                            : '',
-                        ]"
-                      >
+                      class="py-12 text-center text-[#86868B] text-[13px] border border-dashed border-[#E5E5E7] rounded-lg mt-4"
+                    >
+                      该维度下暂无数据
+                    </div>
+                    <div v-else class="space-y-2 pb-2">
+                      <!-- Region Row Inline -->
+                      <template v-for="region in rrTopRegions" :key="region.id || region.region_id">
                         <div
-                          class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
-                          style="color: #34c759"
-                          ><span>{{ region.rank }}</span></div
+                          @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
+                          :class="[
+                            'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#F0FFF4] min-w-max',
+                            rrCurrentDimension !== 'store'
+                              ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
+                              : '',
+                          ]"
                         >
+                          <div
+                            class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
+                            style="color: #34c759"
+                            ><span>{{ region.rank }}</span></div
+                          >
+                          <div
+                            class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                            ><svg
+                              v-if="rrCurrentDimension !== 'store'"
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              class="lg:w-4 lg:h-4"
+                            >
+                              <path d="m9 18 6-6-6-6" /></svg
+                          ></div>
+                          <div
+                            class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
+                            :title="region.region_name || region.entity_name"
+                            >{{ region.region_name || region.entity_name }}</div
+                          >
+                          <div
+                            class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
+                          >
+                            <div
+                              class="h-full rounded-full transition-all duration-500"
+                              :style="{
+                                width: region.completion_rate * 100 + '%',
+                                backgroundColor:
+                                  region.completion_rate === 0
+                                    ? '#FF3B30'
+                                    : region.completion_rate < 0.3
+                                    ? '#FF9500'
+                                    : '#34C759',
+                              }"
+                            ></div>
+                          </div>
+                          <div
+                            class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
+                            >{{ Math.round(region.completion_rate * 100) }}%</div
+                          >
+                          <div
+                            class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
+                            >{{ (region.completed_count || 0).toLocaleString() }}/{{
+                              (region.employee_count || 0).toLocaleString()
+                            }}</div
+                          >
+                          <div
+                            class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
+                            >{{ region.avg_time || '-' }}</div
+                          >
+                        </div>
+                      </template>
+
+                      <div v-if="rrMiddleRegions.length > 0">
                         <div
-                          class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
-                          ><svg
-                            v-if="rrCurrentDimension !== 'store'"
+                          @click="rrExpandedMiddle = !rrExpandedMiddle"
+                          class="w-full flex items-center justify-between px-4 py-3 bg-[#F5F5F7] hover:bg-[#E5E5E7] cursor-pointer rounded-lg transition-colors duration-200 min-w-max"
+                        >
+                          <span class="text-[13px] text-[#86868B] font-medium"
+                            >{{ rrExpandedMiddle ? '收起' : '展开' }}其余
+                            {{ rrMiddleRegions.length }} 个节点</span
+                          >
+                          <svg
                             xmlns="http://www.w3.org/2000/svg"
-                            width="14"
-                            height="14"
+                            width="16"
+                            height="16"
                             viewBox="0 0 24 24"
                             fill="none"
                             stroke="currentColor"
                             stroke-width="2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
-                            class="lg:w-4 lg:h-4"
-                          >
-                            <path d="m9 18 6-6-6-6" /></svg
-                        ></div>
-                        <div
-                          class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
-                          :title="region.region_name || region.entity_name"
-                          >{{ region.region_name || region.entity_name }}</div
-                        >
-                        <div
-                          class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
-                        >
-                          <div
-                            class="h-full rounded-full transition-all duration-500"
-                            :style="{
-                              width: region.completion_rate * 100 + '%',
-                              backgroundColor:
-                                region.completion_rate === 0
-                                  ? '#FF3B30'
-                                  : region.completion_rate < 0.3
-                                  ? '#FF9500'
-                                  : '#34C759',
-                            }"
-                          ></div>
-                        </div>
-                        <div
-                          class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
-                          >{{ Math.round(region.completion_rate * 100) }}%</div
-                        >
-                        <div class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
-                          >{{ (region.completed_count || 0).toLocaleString() }}/{{
-                            (region.employee_count || 0).toLocaleString()
-                          }}</div
-                        >
-                        <div
-                          class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
-                          >{{ region.avg_time || '-' }}</div
-                        >
-                      </div>
-                    </template>
-
-                    <div v-if="rrMiddleRegions.length > 0">
-                      <div
-                        @click="rrExpandedMiddle = !rrExpandedMiddle"
-                        class="w-full flex items-center justify-between px-4 py-3 bg-[#F5F5F7] hover:bg-[#E5E5E7] cursor-pointer rounded-lg transition-colors duration-200 min-w-max"
-                      >
-                        <span class="text-[13px] text-[#86868B] font-medium"
-                          >{{ rrExpandedMiddle ? '收起' : '展开' }}其余 {{ rrMiddleRegions.length }} 个节点</span
-                        >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          :class="['text-[#86868B] transition-transform duration-200', rrExpandedMiddle ? 'rotate-180' : '']"
-                        >
-                          <path d="m6 9 6 6 6-6" />
-                        </svg>
-                      </div>
-
-                      <!-- Expanded Middle Regions -->
-                      <div v-if="rrExpandedMiddle" class="mt-2 space-y-2">
-                        <template v-for="region in rrMiddleRegions" :key="region.id || region.region_id">
-                          <div
-                            @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
                             :class="[
-                              'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-white border border-gray-100 min-w-max',
-                              rrCurrentDimension !== 'store' ? 'cursor-pointer hover:bg-blue-50/30' : 'hover:bg-gray-50/50',
+                              'text-[#86868B] transition-transform duration-200',
+                              rrExpandedMiddle ? 'rotate-180' : '',
                             ]"
                           >
-                            <div
-                              class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0 text-[#86868B]"
-                              ><span>{{ region.rank }}</span></div
-                            >
-                            <div
-                              class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
-                              ><svg
-                                v-if="rrCurrentDimension !== 'store'"
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                class="opacity-0 group-hover:opacity-100 transition-opacity"
-                              >
-                                <path d="m9 18 6-6-6-6" />
-                              </svg></div
-                            >
-                            <div
-                              class="w-24 lg:w-32 text-[14px] font-semibold text-[#111827] truncate flex-shrink-0"
-                              :title="region.region_name || region.entity_name"
-                              >{{ region.region_name || region.entity_name }}</div
-                            >
-                            <div class="flex-1 min-w-[60px] hidden sm:flex items-center gap-3">
-                              <div class="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                                <div
-                                  class="h-full rounded-full transition-all duration-500 bg-[#86868B]"
-                                  :style="{ width: region.completion_rate * 100 + '%' }"
-                                ></div>
-                              </div>
-                            </div>
-                            <div
-                              class="w-12 lg:w-16 text-right text-[14px] lg:text-[15px] font-bold font-outfit text-[#111827] flex-shrink-0"
-                              >{{ Math.round(region.completion_rate * 100) }}%</div
-                            >
-                            <div
-                              class="text-[13px] text-[#6B7280] font-medium w-16 lg:w-20 text-right flex-shrink-0"
-                              >{{ (region.completed_count || 0).toLocaleString() }} /
-                              {{
-                                (region.employee_count || 0).toLocaleString()
-                              }}</div
-                            >
-                            <div
-                              class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
-                              >{{ region.avg_time || '-' }}</div
-                            >
-                          </div>
-                        </template>
-                      </div>
-                    </div>
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </div>
 
-                    <template
-                      v-for="region in rrBottomRegions"
-                      :key="region.id || region.region_id"
-                    >
-                      <div
-                        @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
-                        :class="[
-                          'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#FFF5F5] min-w-max',
-                          rrCurrentDimension !== 'store'
-                            ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
-                            : '',
-                        ]"
+                        <!-- Expanded Middle Regions -->
+                        <div v-if="rrExpandedMiddle" class="mt-2 space-y-2">
+                          <template
+                            v-for="region in rrMiddleRegions"
+                            :key="region.id || region.region_id"
+                          >
+                            <div
+                              @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
+                              :class="[
+                                'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-white border border-gray-100 min-w-max',
+                                rrCurrentDimension !== 'store'
+                                  ? 'cursor-pointer hover:bg-blue-50/30'
+                                  : 'hover:bg-gray-50/50',
+                              ]"
+                            >
+                              <div
+                                class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                                ><span>{{ region.rank }}</span></div
+                              >
+                              <div
+                                class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                                ><svg
+                                  v-if="rrCurrentDimension !== 'store'"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <path d="m9 18 6-6-6-6" /></svg
+                              ></div>
+                              <div
+                                class="w-24 lg:w-32 text-[14px] font-semibold text-[#111827] truncate flex-shrink-0"
+                                :title="region.region_name || region.entity_name"
+                                >{{ region.region_name || region.entity_name }}</div
+                              >
+                              <div class="flex-1 min-w-[60px] hidden sm:flex items-center gap-3">
+                                <div class="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                  <div
+                                    class="h-full rounded-full transition-all duration-500 bg-[#86868B]"
+                                    :style="{ width: region.completion_rate * 100 + '%' }"
+                                  ></div>
+                                </div>
+                              </div>
+                              <div
+                                class="w-12 lg:w-16 text-right text-[14px] lg:text-[15px] font-bold font-outfit text-[#111827] flex-shrink-0"
+                                >{{ Math.round(region.completion_rate * 100) }}%</div
+                              >
+                              <div
+                                class="text-[13px] text-[#6B7280] font-medium w-16 lg:w-20 text-right flex-shrink-0"
+                                >{{ (region.completed_count || 0).toLocaleString() }} /
+                                {{ (region.employee_count || 0).toLocaleString() }}</div
+                              >
+                              <div
+                                class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
+                                >{{ region.avg_time || '-' }}</div
+                              >
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+
+                      <template
+                        v-for="region in rrBottomRegions"
+                        :key="region.id || region.region_id"
                       >
                         <div
-                          class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
-                          style="color: #ff3b30"
-                          ><span>{{ region.rank }}</span></div
-                        >
-                        <div
-                          class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
-                          ><svg
-                            v-if="rrCurrentDimension !== 'store'"
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            class="lg:w-4 lg:h-4"
-                          >
-                            <path d="m9 18 6-6-6-6" /></svg
-                        ></div>
-                        <div
-                          class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
-                          :title="region.region_name || region.entity_name"
-                          >{{ region.region_name || region.entity_name }}</div
-                        >
-                        <div
-                          class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
+                          @click="rrCurrentDimension !== 'store' && rrHandleDrillDown(region)"
+                          :class="[
+                            'flex items-center gap-2 lg:gap-3 px-2 lg:px-4 py-2 lg:py-3 rounded-lg transition-all duration-200 bg-[#FFF5F5] min-w-max',
+                            rrCurrentDimension !== 'store'
+                              ? 'cursor-pointer hover:opacity-80 hover:bg-[#F5F5F7]'
+                              : '',
+                          ]"
                         >
                           <div
-                            class="h-full rounded-full transition-all duration-500"
-                            :style="{
-                              width: region.completion_rate * 100 + '%',
-                              backgroundColor:
-                                region.completion_rate === 0
-                                  ? '#FF3B30'
-                                  : region.completion_rate < 0.3
-                                  ? '#FF9500'
-                                  : '#34C759',
-                            }"
+                            class="text-[14px] lg:text-[15px] font-bold w-5 lg:w-6 text-center flex items-center justify-center flex-shrink-0"
+                            style="color: #ff3b30"
+                            ><span>{{ region.rank }}</span></div
+                          >
+                          <div
+                            class="w-3 lg:w-4 flex items-center justify-center flex-shrink-0 text-[#86868B]"
+                            ><svg
+                              v-if="rrCurrentDimension !== 'store'"
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              class="lg:w-4 lg:h-4"
+                            >
+                              <path d="m9 18 6-6-6-6" /></svg
                           ></div>
+                          <div
+                            class="text-[13px] lg:text-[14px] font-semibold text-[#1D1D1F] w-24 lg:w-32 truncate flex-shrink-0"
+                            :title="region.region_name || region.entity_name"
+                            >{{ region.region_name || region.entity_name }}</div
+                          >
+                          <div
+                            class="flex-1 min-w-[60px] h-1.5 bg-[#E5E5E7] rounded-full overflow-hidden hidden sm:block"
+                          >
+                            <div
+                              class="h-full rounded-full transition-all duration-500"
+                              :style="{
+                                width: region.completion_rate * 100 + '%',
+                                backgroundColor:
+                                  region.completion_rate === 0
+                                    ? '#FF3B30'
+                                    : region.completion_rate < 0.3
+                                    ? '#FF9500'
+                                    : '#34C759',
+                              }"
+                            ></div>
+                          </div>
+                          <div
+                            class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
+                            >{{ Math.round(region.completion_rate * 100) }}%</div
+                          >
+                          <div
+                            class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
+                            >{{ (region.completed_count || 0).toLocaleString() }}/{{
+                              (region.employee_count || 0).toLocaleString()
+                            }}</div
+                          >
+                          <div
+                            class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
+                            >{{ region.avg_time || '-' }}</div
+                          >
                         </div>
-                        <div
-                          class="text-[14px] font-bold text-[#1D1D1F] w-12 lg:w-16 text-right flex-shrink-0"
-                          >{{ Math.round(region.completion_rate * 100) }}%</div
-                        >
-                        <div class="text-[12px] text-[#86868B] w-20 lg:w-24 text-right flex-shrink-0"
-                          >{{ (region.completed_count || 0).toLocaleString() }}/{{
-                            (region.employee_count || 0).toLocaleString()
-                          }}</div
-                        >
-                        <div
-                          class="text-[13px] text-[#1D1D1F] font-bold w-16 lg:w-24 text-right flex-shrink-0"
-                          >{{ region.avg_time || '-' }}</div
-                        >
-                      </div>
-                    </template>
+                      </template>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        </div>
       </div>
     </div>
 
-    
     <!-- Funnel Modal -->
     <div
       v-if="isFunnelModalOpen"
@@ -4456,7 +4872,8 @@
                   v-for="dim in fmAvailableDimensions"
                   :key="dim.value"
                   @click="fmChangeDimension(dim.value)"
-                  :class="[                    'px-4 py-1.5 text-[13px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                  :class="[
+                    'px-4 py-1.5 text-[13px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
                     fmCurrentDimension === dim.value
                       ? 'bg-white text-[#111827] shadow-sm'
                       : 'text-[#6B7280] hover:text-[#111827]',
@@ -4777,7 +5194,8 @@
                     v-for="dim in amAvailableDimensions"
                     :key="dim.value"
                     @click="amChangeDimension(dim.value)"
-                    :class="[                      'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
+                    :class="[
+                      'px-3 py-1.5 text-[12px] font-semibold rounded-md transition-all duration-200 whitespace-nowrap',
                       amCurrentDimension === dim.value
                         ? 'bg-white text-[#111827] shadow-sm'
                         : 'text-[#6B7280] hover:text-[#111827]',
@@ -4845,12 +5263,16 @@
                       <th
                         class="w-20 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none"
                         @click="amHandleSort('completed_count')"
-                        ><div class="flex items-center justify-end">{{ alertFilter === 'Unfinished' ? '已完成' : '转化人数' }}</div></th
+                        ><div class="flex items-center justify-end">{{
+                          alertFilter === 'Unfinished' ? '已完成' : '转化人数'
+                        }}</div></th
                       >
                       <th
                         class="w-24 text-right py-3 px-4 text-[13px] font-medium text-[#6E6E73] cursor-pointer hover:text-[#111827] select-none whitespace-nowrap"
                         @click="amHandleSort('risk_count')"
-                        ><div class="flex items-center justify-end">{{ alertFilter === 'Unfinished' ? '预警人数' : '累计催办' }}</div></th
+                        ><div class="flex items-center justify-end">{{
+                          alertFilter === 'Unfinished' ? '预警人数' : '累计催办'
+                        }}</div></th
                       >
                       <th
                         v-if="alertFilter === 'P0'"
@@ -4957,21 +5379,22 @@
                       <td class="py-4 px-4 text-right text-[14px] font-bold text-[#111827]">{{
                         (alert.completed_count || 0).toLocaleString()
                       }}</td>
-                      <td class="py-4 px-4 text-right text-[14px] font-bold"
-                          :style="{ color: alert.total_employees - alert.completed_count > 0 ? '#FF3B30' : '#111827' }">
-                        {{ ((alert.total_employees || 0) - (alert.completed_count || 0)).toLocaleString() }}
-                      </td>
                       <td
-                        class="py-4 px-4 text-right text-[14px] font-medium"
+                        class="py-4 px-4 text-right text-[14px] font-bold"
                         :style="{
                           color:
-                            alert.risk_rate > 0.5
+                            alert.total_employees - alert.completed_count > 0
                               ? '#FF3B30'
-                              : alert.risk_rate > 0.2
-                              ? '#FF9500'
-                              : '#34C759',
+                              : '#111827',
                         }"
                       >
+                        {{
+                          (
+                            (alert.total_employees || 0) - (alert.completed_count || 0)
+                          ).toLocaleString()
+                        }}
+                      </td>
+                      <td class="py-4 px-4 text-right text-[14px] font-medium text-[#111827]">
                         {{ (alert.risk_rate * 100).toFixed(1) }}%
                       </td>
                     </tr>
