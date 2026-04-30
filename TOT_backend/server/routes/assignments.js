@@ -9,6 +9,7 @@ const { broadcastToUser, broadcastToUsers, broadcastToDashboard } = require('../
 const { batchCreateAssignments } = require('../services/assignmentBatch');
 const { getConfiguredPlatformColumns, computeAssignmentProgressStatus } = require('../services/assignmentProgress');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
+const { getPlatformDefinition } = require('../utils/platforms');
 
 const router = express.Router();
 
@@ -127,16 +128,8 @@ function ensureTaskAssignedEventId(assignment, now) {
 }
 
 function mapPlatformToColumn(platform) {
-  const key = String(platform || '').trim().toLowerCase();
-  const dict = {
-    mypal: 'mypal_completed',
-    smartsell: 'smartsell_completed',
-    'ai demo': 'ai_demo_completed',
-    aidemo: 'ai_demo_completed',
-    'live broadcast': 'live_broadcast_completed',
-    livebroadcast: 'live_broadcast_completed',
-  };
-  return dict[key] || null;
+  const platformDef = getPlatformDefinition(platform);
+  return platformDef ? platformDef.completedColumn : null;
 }
 
 // ─── GET /api/v1/assignments ──────────────────────────────────────────────────
@@ -587,6 +580,26 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
     const { employeeId } = req.user;
     const assignment = db.get('SELECT * FROM task_assignments WHERE id = ?', [req.params.id]);
     if (!assignment) throw createError(404, 'Assignment 不存在', 'ASSIGN_001');
+    const platformDef = req.query.platform ? getPlatformDefinition(req.query.platform) : null;
+    if (req.query.platform && !platformDef) {
+      throw createError(400, 'platform 非法', 'ASSIGN_012');
+    }
+
+    if (platformDef) {
+      const task = db.get(
+        `SELECT ${platformDef.taskFlagColumn} AS platform_enabled
+         FROM tasks
+         WHERE id = ?`,
+        [assignment.task_id]
+      );
+      if (!task) throw createError(404, '任务不存在', 'TASK_002');
+      if (task.platform_enabled !== 1) {
+        throw createError(400, '该任务未配置此平台', 'ASSIGN_015');
+      }
+    }
+    const receiptSource = platformDef
+      ? `task_detail_open:${platformDef.sourceLabel}`
+      : 'task_detail_open';
 
     // 仅允许 assignment 所属用户操作
     if (employeeId && assignment.user_id !== employeeId) {
@@ -614,8 +627,8 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
 
       const existing = userId
         ? db.get(
-            'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ?',
-            [eventId, userId]
+            'SELECT * FROM read_receipts WHERE event_id = ? AND user_id = ? AND source = ?',
+            [eventId, userId, receiptSource]
           )
         : null;
       if (existing) {
@@ -624,8 +637,8 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
         receiptId = nanoid();
         db.run(
           `INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
-           VALUES (?, ?, ?, ?, 'task_detail_open')`,
-          [receiptId, eventId, userId, now]
+           VALUES (?, ?, ?, ?, ?)`,
+          [receiptId, eventId, userId, now, receiptSource]
         );
         dashboardNotify = true;
       }
@@ -637,6 +650,7 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
         data: {
           taskId: assignment.task_id,
           assignmentId: assignment.id,
+          platform: platformDef ? platformDef.sourceLabel : null,
           operationType: 'assignment_viewed',
         },
       });
@@ -651,6 +665,8 @@ router.post('/:id/viewed', authenticate, (req, res, next) => {
         assignmentId: assignment.id,
         receivedAt: finalRow.received_at,
         receiptId,
+        source: receiptSource,
+        platform: platformDef ? platformDef.sourceLabel : null,
         alreadyViewed,
       },
       requestId: req.requestId,

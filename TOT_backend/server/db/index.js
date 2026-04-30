@@ -41,6 +41,7 @@ function getDb() {
     migrateNudgeRecordsConstraints(_db);
     migrateNotificationEventsConstraints(_db);
     repairReadReceiptsNotificationForeignKey(_db);
+    migrateReadReceiptsPlatformSources(_db);
     migrateNotificationEventsContent(_db);
     migrateUsersExecutiveScope(_db);
     migrateUsersLastLoginAt(_db);
@@ -324,7 +325,7 @@ function repairReadReceiptsNotificationForeignKey(database) {
         event_id TEXT NOT NULL REFERENCES notification_events(id),
         user_id  TEXT NOT NULL REFERENCES employees(id),
         read_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-        source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open'))
+        source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open') OR source LIKE 'task_detail_open:%')
       )
     `);
     database.exec(`
@@ -333,7 +334,70 @@ function repairReadReceiptsNotificationForeignKey(database) {
       FROM read_receipts_old
     `);
     database.exec('DROP TABLE read_receipts_old');
-    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user ON read_receipts(event_id, user_id)');
+    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user_source ON read_receipts(event_id, user_id, source)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_rr_user_id ON read_receipts(user_id)');
+    database.exec('COMMIT');
+  } catch (err) {
+    database.exec('ROLLBACK');
+    throw err;
+  } finally {
+    database.pragma('foreign_keys = ON');
+  }
+}
+
+/**
+ * read_receipts 既要保留旧的 task_detail_open 口径，也要支持
+ * task_detail_open:MyPAL / task_detail_open:SmartSales 等平台级回执。
+ * 这里不新增列，只放宽 source CHECK，并将幂等索引扩展到 source 粒度。
+ */
+function migrateReadReceiptsPlatformSources(database) {
+  const tableRow = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='read_receipts'")
+    .get();
+  if (!tableRow) return;
+
+  const ddl = tableRow.sql || '';
+  const hasPlatformSourceCheck = ddl.includes("source LIKE 'task_detail_open:%'");
+  const indexRows = database.prepare('PRAGMA index_list(read_receipts)').all();
+  const hasSourceUniqueIndex = indexRows.some((idx) => {
+    if (!idx.unique) return false;
+    const cols = database
+      .prepare(`PRAGMA index_info(${JSON.stringify(idx.name)})`)
+      .all()
+      .map((c) => c.name);
+    return cols.join(',') === 'event_id,user_id,source';
+  });
+
+  if (hasPlatformSourceCheck && hasSourceUniqueIndex) {
+    database.exec('DROP INDEX IF EXISTS idx_rr_event_user');
+    database.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user_source ON read_receipts(event_id, user_id, source)'
+    );
+    return;
+  }
+
+  database.pragma('foreign_keys = OFF');
+  database.exec('BEGIN');
+  try {
+    database.exec('ALTER TABLE read_receipts RENAME TO read_receipts_migration_tmp');
+    database.exec(`
+      CREATE TABLE read_receipts (
+        id       TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES notification_events(id),
+        user_id  TEXT NOT NULL REFERENCES employees(id),
+        read_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        source   TEXT NOT NULL CHECK (source IN ('notification_click', 'task_detail_open') OR source LIKE 'task_detail_open:%')
+      )
+    `);
+    database.exec(`
+      INSERT INTO read_receipts (id, event_id, user_id, read_at, source)
+      SELECT id, event_id, user_id, read_at, source
+      FROM read_receipts_migration_tmp
+    `);
+    database.exec('DROP TABLE read_receipts_migration_tmp');
+    database.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_event_user_source ON read_receipts(event_id, user_id, source)'
+    );
     database.exec('CREATE INDEX IF NOT EXISTS idx_rr_user_id ON read_receipts(user_id)');
     database.exec('COMMIT');
   } catch (err) {

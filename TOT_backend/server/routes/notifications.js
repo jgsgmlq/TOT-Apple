@@ -9,6 +9,12 @@ const { formatNowSqliteLocal } = require('../utils/ddlAt');
 
 const router = express.Router();
 
+const READ_RECEIPT_ANY_SUBQUERY = `(
+  SELECT event_id, user_id, MIN(id) AS id, MIN(read_at) AS read_at
+  FROM read_receipts
+  GROUP BY event_id, user_id
+)`;
+
 // ─── 辅助：计算 isActive / resolvedAt（基于 assignment 状态）──────────────────
 
 function computeIsActive(eventType, assignmentStatus) {
@@ -73,7 +79,7 @@ router.get('/unread-count', authenticate, (req, res, next) => {
     const row = db.get(
       `SELECT COUNT(*) AS cnt
        FROM notification_events ne
-       LEFT JOIN read_receipts rr
+       LEFT JOIN ${READ_RECEIPT_ANY_SUBQUERY} rr
          ON rr.event_id = ne.id AND rr.user_id = ?
        LEFT JOIN task_assignments ta
          ON ta.id = ne.assignment_id
@@ -167,7 +173,7 @@ router.get('/', authenticate, (req, res, next) => {
       `SELECT COUNT(*) AS cnt
        FROM notification_events ne
        LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
-       LEFT JOIN read_receipts rr
+       LEFT JOIN ${READ_RECEIPT_ANY_SUBQUERY} rr
          ON rr.event_id = ne.id AND rr.user_id = ?
        ${whereClause}`,
       [currentEmployeeId, ...params]
@@ -184,7 +190,7 @@ router.get('/', authenticate, (req, res, next) => {
          rr.read_at
        FROM notification_events ne
        LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
-       LEFT JOIN read_receipts rr
+       LEFT JOIN ${READ_RECEIPT_ANY_SUBQUERY} rr
          ON rr.event_id = ne.id AND rr.user_id = ?
        ${whereClause}
        ORDER BY ne.created_at DESC
