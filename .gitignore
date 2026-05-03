@@ -1,0 +1,43 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+TOT_frontend/build/
+TOT_frontend/dist/
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db.bak*
+*.db.corrupt
+*.sqlite
+*.sqlite3
+
+# PM2
+.pm2/
+
+# Temporary files
+*.tmp
+*.temp
