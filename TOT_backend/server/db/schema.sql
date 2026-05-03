@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   tool_calls  TEXT,
   tool_call_id TEXT,
   client_message_id TEXT UNIQUE, -- 幂等键，关联前端生成的 messageId
+  chart_payload TEXT,            -- 图表数据 JSON（AiChartRenderer 渲染用，历史记录恢复）
   created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 

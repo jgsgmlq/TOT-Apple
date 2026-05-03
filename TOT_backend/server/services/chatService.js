@@ -58,8 +58,12 @@ function buildExecutiveMessageApiData(result) {
     typeof result.markdownContent === 'string' && result.markdownContent.trim() !== ''
       ? result.markdownContent.trim()
       : null;
+  const extra = {
+    chartPayload: result?.chartPayload || null,
+    highlightInsight: result?.highlightInsight || '',
+  };
   if (md) {
-    return { replyContent: null, markdownContent: md };
+    return { replyContent: null, markdownContent: md, ...extra };
   }
   const replyContent = {
     overview: typeof result.overview === 'string' ? result.overview : '',
@@ -86,6 +90,8 @@ function buildSseFinalPayload(result, sessionId, requestId, responseTime, timest
     data: {
       messageId: result?.messageId || nanoid(),
       ...payload,
+      chartPayload: result?.chartPayload || null,
+      highlightInsight: result?.highlightInsight || '',
       responseTime,
       contextId: sessionId,
       timestamp,
@@ -564,6 +570,8 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       _safetyCheck: finalState.safety,
       markdownContent: finalMarkdown,
       replyContent: null,
+      chartPayload: finalState.chartPayload || null,
+      highlightInsight: finalState.highlightInsight || '',
       _toolMeta: { toolCalls: [] }
     };
 
@@ -745,7 +753,9 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       _safetyCheck: finalState.safety,
       markdownContent: finalMarkdown,
       replyContent: null,
-      _toolMeta: { toolCalls: [] } 
+      chartPayload: finalState.chartPayload || null,
+      highlightInsight: finalState.highlightInsight || '',
+      _toolMeta: { toolCalls: [] }
     };
 
     const responseTime = Date.now() - startMs;
@@ -901,7 +911,7 @@ function getHistory(sessionId, pageNum, pageSize) {
   const total = totalRow ? totalRow.total : 0;
 
   const rows = db.all(
-    `SELECT cm.id, cm.role, cm.content, cm.intent_type, cm.created_at, cmf.feedback_type
+    `SELECT cm.id, cm.role, cm.content, cm.intent_type, cm.chart_payload, cm.created_at, cmf.feedback_type
      FROM chat_messages cm
      LEFT JOIN chat_message_feedback cmf ON cm.id = cmf.message_id AND cmf.user_id = (SELECT user_id FROM chat_sessions WHERE id = ?)
      WHERE cm.session_id = ?
@@ -939,12 +949,17 @@ function getHistory(sessionId, pageNum, pageSize) {
         replyContent = null;
       }
     }
+    let chartPayload = null;
+    if (r.chart_payload) {
+      try { chartPayload = JSON.parse(r.chart_payload); } catch {}
+    }
     return {
       messageId: r.id,
       role: r.role,
       content: markdownContent || r.content,
       markdownContent,
       replyContent,
+      chartPayload,
       intentType: r.intent_type,
       userFeedback: r.role === 'assistant' ? (r.feedback_type || null) : undefined,
       timestamp: r.created_at,

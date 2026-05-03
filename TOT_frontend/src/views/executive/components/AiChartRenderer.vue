@@ -1,5 +1,9 @@
 <template>
-  <div ref="chartRef" :style="{ height, width }"></div>
+  <div v-if="data.type === 'big_number'" class="big-number-card">
+    <div class="bn-value">{{ displayValue }}<span class="bn-unit">{{ displayUnit }}</span></div>
+    <div class="bn-label">{{ data.title || '' }}</div>
+  </div>
+  <div v-else ref="chartRef" :style="{ height, width }"></div>
 </template>
 
 <script lang="ts" setup>
@@ -22,7 +26,15 @@
   const chartRef = ref<HTMLDivElement | null>(null);
   const { setOptions } = useECharts(chartRef as any);
 
+  const displayValue = computed(() => props.data?.series?.[0]?.data?.[0] ?? '--');
+  const displayUnit = computed(() => {
+    const name = props.data?.series?.[0]?.name || '';
+    const m = name.match(/\((.+)\)$/);
+    return m ? m[1] : '';
+  });
+
   const options = computed(() => {
+    if (props.data?.type === 'big_number') return {};
     const { type = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
 
     const isCartesian = ['bar', 'line', 'scatter'].includes(type);
@@ -129,6 +141,33 @@
   );
 
   onMounted(() => {
-    setOptions(options.value);
+    if (props.data?.type !== 'big_number') setOptions(options.value);
   });
 </script>
+
+<style lang="less" scoped>
+.big-number-card {
+  text-align: center;
+  padding: 20px 24px;
+  margin: 8px 0;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.04), rgba(37, 99, 235, 0.01));
+  border-radius: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.08);
+}
+.bn-value {
+  font-size: 42px;
+  font-weight: 700;
+  color: #2563eb;
+  line-height: 1.2;
+}
+.bn-unit {
+  font-size: 20px;
+  font-weight: 500;
+  margin-left: 2px;
+}
+.bn-label {
+  font-size: 14px;
+  color: #64748b;
+  margin-top: 6px;
+}
+</style>

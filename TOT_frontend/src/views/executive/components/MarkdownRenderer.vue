@@ -207,39 +207,64 @@
 
     .markdown-body {
       font-size: 15px;
+      line-height: 1.55;
+
+      /* 首段不要上 margin */
+      :deep(*:first-child) {
+        margin-top: 0;
+      }
 
       :deep(p) {
         margin-top: 0;
-        margin-bottom: 1em;
+        margin-bottom: 0.15em;
+        &:last-child { margin-bottom: 0; }
+      }
 
-        &:last-child {
-          margin-bottom: 0;
-        }
+      :deep(h1),
+      :deep(h2),
+      :deep(h3),
+      :deep(h4) {
+        margin-top: 0.3em;
+        margin-bottom: 0.1em;
+        font-size: 1em;
+        font-weight: 600;
       }
 
       :deep(strong) {
         font-weight: 600;
-        color: #0f172a; /* Darker bold text for contrast */
+        color: #0f172a;
+      }
+
+      :deep(table) {
+        margin-top: 0.15em;
+        margin-bottom: 0.15em;
+        th, td {
+          padding: 0.25em 0.6em;
+        }
+      }
+
+      :deep(hr) {
+        margin: 0.2em 0;
       }
 
       /* Lists */
       :deep(ul),
       :deep(ol) {
         margin-top: 0;
-        margin-bottom: 1em;
+        margin-bottom: 0.3em;
         padding-left: 24px;
 
         li {
-          margin-bottom: 0.25em;
+          margin-bottom: 0.1em;
           &::marker {
-            color: #94a3b8; /* Softer bullet points */
+            color: #94a3b8;
           }
         }
       }
 
       /* Blockquotes */
       :deep(blockquote) {
-        margin: 1em 0;
+        margin: 0.5em 0;
         padding: 12px 16px;
         color: #475569;
         background: #f8fafc;
@@ -263,7 +288,7 @@
       }
 
       :deep(pre) {
-        margin: 1em 0;
+        margin: 0.4em 0;
         padding: 16px;
         background-color: #f8fafc;
         border: 1px solid #e2e8f0;

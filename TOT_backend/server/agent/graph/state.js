@@ -58,9 +58,17 @@ const ExecChatGraphState = Annotation.Root({
   
   // ─── 最终回答 ───
   finalMessageId: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
-  finalResponse: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }), 
+  finalResponse: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   reply_markdown: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   reply_structured: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+
+  // FinalResponseAgent 输入（fc_LlmToolCallStep 产出，LLM 原始分析文本）
+  fcRawAnalysis: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+
+  // FinalResponseAgent 输出（四件套新增字段）
+  chartPayload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  highlightInsight: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  citations: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
   
   // ─── 人在回路 (HITL) ───
   human_in_the_loop_status: Annotation({ reducer: (x, y) => y ?? x, default: () => "idle" }), // idle | pending_interrupt | resumed

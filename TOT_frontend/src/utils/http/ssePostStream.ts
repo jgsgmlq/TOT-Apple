@@ -84,11 +84,16 @@ export async function streamSsePostJson(options: {
           try {
             const parsed = JSON.parse(dataStr) as Record<string, unknown>;
             if (currentEvent === 'delta') {
+              console.log('[TRACE-FE] recv delta', { phase: parsed.phase, text: typeof parsed.text === 'string' ? parsed.text.slice(0, 60) : '' });
               onDelta(parsed);
             } else if (currentEvent === 'done') {
               const resultData = parsed.data !== undefined ? parsed.data : parsed;
+              const md = (resultData as any)?.markdownContent;
+              const cp = (resultData as any)?.chartPayload;
+              console.log('[TRACE-FE] recv done', { hasMarkdown: !!md, mdPreview: typeof md === 'string' ? md.slice(0, 80) : '', hasChart: !!cp, chartType: cp?.type || 'none' });
               onDone(resultData);
             } else if (currentEvent === 'clarify') {
+              console.log('[TRACE-FE] recv clarify');
               onClarify?.(parsed);
             } else if (currentEvent === 'error') {
               const msg =

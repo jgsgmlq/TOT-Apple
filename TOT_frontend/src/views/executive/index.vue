@@ -228,13 +228,25 @@
                     <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
+                  <!-- 一句话洞察置顶 -->
+                  <div v-if="msg.highlightInsight && !msg.streaming" class="exec-insight-banner">
+                    {{ msg.highlightInsight }}
+                  </div>
+
                   <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
                     v-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
-                    :content="msg.streamContent || msg.content"
+                    :content="msg.content || msg.streamContent"
                     :thinking="msg.thinking"
                     :streaming="!msg.done"
                     @suggestion-click="fillComposerWithSuggestion"
+                  />
+
+                  <!-- 大数字卡片 / 图表渲染 -->
+                  <AiChartRenderer
+                    v-if="msg.chartPayload && msg.done"
+                    :data="msg.chartPayload"
+                    class="exec-chart-item"
                   />
 
                   <!-- 旧版/兼容模式：结构化卡片渲染（流式结束后仍保留思考过程，与 Markdown 分支一致） -->
@@ -324,6 +336,19 @@
                   <!-- AI Feedback Actions -->
                   <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
                     <n-space size="small" align="center">
+                      <n-button
+                        quaternary
+                        size="small"
+                        @click="handleCopy(msg)"
+                        class="action-btn"
+                      >
+                        <template #icon>
+                          <CheckOutlined v-if="msg._copied" style="color: #18a058" />
+                          <CopyOutlined v-else />
+                        </template>
+                        {{ msg._copied ? '已复制' : '复制' }}
+                      </n-button>
+
                       <n-button
                         v-if="index === messages.length - 1"
                         quaternary
@@ -492,6 +517,8 @@
     DislikeOutlined,
     DislikeFilled,
     SyncOutlined,
+    CopyOutlined,
+    CheckOutlined,
   } from '@vicons/antd';
 
   interface ChatHistory {
@@ -645,7 +672,10 @@
         lastMsg.done = true;
         lastMsg.activeToolName = undefined;
         lastMsg.content = result.markdownContent || '';
+        lastMsg.streamContent = undefined;
         lastMsg.thinking = thinkingSnapshot?.trim() || undefined;
+        lastMsg.highlightInsight = result.highlightInsight || '';
+        lastMsg.chartPayload = result.chartPayload || null;
       }
     } catch (e) {
       console.error('[sendClarificationResponse] 错误详情:', e);
@@ -775,6 +805,7 @@
           role: 'ai',
           content: displayText,
           replyContent: structured,
+          chartPayload: (item.chartPayload as any) || null,
           userFeedback: item.userFeedback,
           done: true,
         });
@@ -1019,8 +1050,11 @@
         lastMsg.activeToolName = undefined;
         // FC 模式用 markdownContent，旧模式格式化 replyContent
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
+        lastMsg.streamContent = undefined;
         lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
+        lastMsg.highlightInsight = result.highlightInsight || '';
+        lastMsg.chartPayload = result.chartPayload || null;
       }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
       const existing = historyList.value.find((h) => h.id === sid);
@@ -1122,6 +1156,30 @@
       scrollToBottom();
     }
   };
+  const handleCopy = async (msg: ChatMessage) => {
+    const text = msg.content || (msg.replyContent ? formatReplyContentText(msg.replyContent) : '');
+    if (!text) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // 降级：非 HTTPS 环境（内网 IP 访问）
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      msg._copied = true;
+      setTimeout(() => { msg._copied = false; }, 2000);
+    } catch {
+      message.error('复制失败');
+    }
+  };
+
   const handleFeedback = async (msg: ChatMessage, type: 'like' | 'dislike') => {
     if (!msg.id || msg.isFeedbackLoading) return;
     msg.isFeedbackLoading = true;
@@ -1526,6 +1584,7 @@
           color: #1d1d1f;
           border-radius: 4px 18px 18px 18px;
           border: none;
+          white-space: normal;
         }
       }
 
@@ -1589,6 +1648,42 @@
           .exec-k-value {
             font-weight: 600;
             color: #1d1d1f;
+          }
+
+          .exec-insight-banner {
+            margin: 0 0 10px;
+            padding: 8px 12px;
+            background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(99, 102, 241, 0.03));
+            border-left: 3px solid #2563eb;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #1e40af;
+            line-height: 1.5;
+            white-space: pre-wrap;
+          }
+
+          .exec-big-number {
+            text-align: center;
+            padding: 16px 24px;
+            margin: 8px 0;
+            background: linear-gradient(180deg, rgba(37, 99, 235, 0.03), rgba(37, 99, 235, 0.01));
+            border-radius: 12px;
+
+            .big-number-value {
+              font-size: 36px;
+              font-weight: 700;
+              color: #2563eb;
+              line-height: 1.2;
+            }
+            .big-number-unit {
+              font-size: 18px;
+              font-weight: 500;
+            }
+            .big-number-label {
+              font-size: 13px;
+              color: #64748b;
+              margin-top: 4px;
+            }
           }
 
           .exec-attn {

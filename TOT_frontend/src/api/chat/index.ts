@@ -22,6 +22,9 @@ export interface SendMessageResult {
   messageId: string;
   replyContent: ReplyContent | null;
   markdownContent?: string;
+  chartPayload?: { type: string; title?: string; xAxis?: string[]; series: Array<{ name: string; data: number[] }> } | null;
+  highlightInsight?: string;
+  citations?: Array<{ tool_name: string; query_time?: string; row_count: number }>;
   responseTime: number;
   contextId: string;
   timestamp: string;
@@ -54,6 +57,7 @@ export interface ChatHistoryItem {
   role: 'user' | 'assistant';
   content?: string;
   replyContent?: ReplyContent | null;
+  chartPayload?: Record<string, unknown> | null;
   intentType?: string | null;
   userFeedback?: 'like' | 'dislike' | null;
   timestamp: string;

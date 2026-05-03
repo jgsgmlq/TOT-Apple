@@ -123,7 +123,12 @@ Your task is to analyze the user's message and strictly output valid JSON matchi
 }
 SAFETY RULES:
 1. If the user asks to send emails, nudge people, write, update, or delete any data, set "risk_flags": true, "global_safety_decision": "deny", and "mode": "deny". Executive Chat is strictly read-only.
-2. ONLY set mode to "chat_only" for pure greetings/smalltalk (hello, hi, thanks, who are you). If the user mentions ANY task name, product, store, region, or business metric — even without a question — use "tool_action" and infer the appropriate intent. Task/product names → query_metrics, store/region names → drill_down.
+2. ONLY set mode to "chat_only" for pure greetings/smalltalk (hello, hi, thanks, who are you). If the user mentions ANY task name, product, store, region, or business metric — even without a question — use "tool_action" and infer the appropriate intent.
+### Intent classification rules:
+- "warning_query": user asks about risks, warnings, problems, "重点关注", "预警", "有问题", "滞后", "异常", "最差", "最低", "which stores need attention", "逾期"。Intent is to find things that need attention.
+- "drill_down": user specifies a region or store to see their detailed data ("华东区完成率", "浦东店员工明细"). Intent is to see details of a specific entity.
+- "project_status": user asks about task list, task progress, "有哪些任务", "哪些在进行中". Intent is to list tasks.
+- "query_metrics": user asks about completion rate, progress, or other aggregate metrics. Intent is to get numbers.
 3. OUTPUT RAW JSON ONLY. NEVER wrap your response in markdown code blocks.
 
 ${state.memoryContext || ''}
@@ -375,17 +380,14 @@ ${state.memoryContext || ''}`;
       return { role, content };
     });
 
+    // FC 循环中的 LLM 文本不再向前端流式推送。
+    // 最终回答由 FinalResponseAgent 生成并通过 SSE done 事件发送，FC 文本仅作为 fcRawAnalysis 内部传递。
+    // 工具调用通知（tool_start/tool_end）由 chatService 的 sseEmitter.handleToolStart/handleToolEnd 独立处理。
     const result = await chatWithToolsStream({
       messages: plainMessages,
       tools: toolSchemas,
       tool_choice: toolSchemas.length > 0 ? 'auto' : undefined,
-      onDelta: (token, info = {}) => {
-        if (info.phase === 'reasoning' && emitter && typeof emitter.handleLLMNewToken === 'function') {
-          emitter.handleLLMNewToken(token, { isReasoning: true });
-        } else if (token && emitter && typeof emitter.handleLLMNewToken === 'function') {
-          emitter.handleLLMNewToken(token, { isReasoning: false });
-        }
-      },
+      onDelta: () => {},
       signal,
     });
 
@@ -410,12 +412,12 @@ ${state.memoryContext || ''}`;
 
     if (hasTools) {
       // 有工具调用时，将 AIMessage(tool_calls) 写入 messages，供后续节点处理
-      finalUpdates.messages = [aiMessage];
+            finalUpdates.messages = [aiMessage];
     } else {
-      // 最终总结（无工具调用）：只写 reply_markdown/finalResponse，
-      // 由 finalResponseStep 统一写入 AIMessage，避免重复。
-      finalUpdates.reply_markdown = fullContent;
-      finalUpdates.finalResponse = fullContent;
+      // 无工具调用 = LLM 已完成初步分析。不再直接生成最终回答，
+      // 改为写入 fcRawAnalysis 供 FinalResponseAgent 使用。
+            finalUpdates.fcRawAnalysis = fullContent;
+      finalUpdates.fc_next_action = 'finalize';
     }
 
     return finalUpdates;
@@ -425,16 +427,16 @@ ${state.memoryContext || ''}`;
       const abortMsg = "\n[已中止生成]";
       return {
         messages: [new AIMessage({ content: abortMsg })],
-        reply_markdown: abortMsg,
-        finalResponse: abortMsg
+        fcRawAnalysis: abortMsg,
+        fc_next_action: 'finalize'
       };
     }
     console.error("[fc_LlmToolCallStep] 大模型调用失败:", err);
     const errMsg = `系统异常: 大模型响应失败 ${err.message}`;
     return {
       messages: [new AIMessage({ content: errMsg })],
-      reply_markdown: errMsg,
-      finalResponse: errMsg
+      fcRawAnalysis: errMsg,
+      fc_next_action: 'finalize'
     };
   }
 };
@@ -914,177 +916,292 @@ const humanInTheLoopGate = async (state) => {
   };
 };
 
-const renderToolResultsMarkdown = (toolResults, intent) => {
-  const keys = Object.keys(toolResults || {});
-  if (keys.length === 0) return '';
-  const taskRows = [];
-  const summaryMetrics = [];
-  let totalRecordCount = 0;
-  let hasError = false;
+// ── FinalResponseAgent（LLM Agent）──
+// 替代旧 FinalResponseStep（模板渲染节点）。
+// deny / chat_only 快速路径不调 LLM；tool_action 路径调用 LLM 生成四件套。
 
-  keys.forEach((key, idx) => {
-    const raw = toolResults[key]?.data || '';
-    try {
-      const parsed = JSON.parse(raw);
-      // 格式1: { error: {...} }
-      if (parsed?.error) {
-        hasError = true;
-        return;
-      }
-      // 格式2: { success: true/false, data: [...] }
-      if (parsed?.success !== undefined) {
-        if (parsed.success === false) { hasError = true; return; }
-        const inner = parsed.data;
-        if (Array.isArray(inner)) {
-          totalRecordCount += inner.length;
-          inner.forEach(item => { if (item && typeof item === 'object') taskRows.push(item); });
-        } else if (inner && typeof inner === 'object') {
-          totalRecordCount += 1;
-          taskRows.push(inner);
-        }
-        return;
-      }
-      // 格式3: { data: [...] } or { data: {...} }
-      if (Array.isArray(parsed?.data)) {
-        totalRecordCount += parsed.data.length;
-        parsed.data.forEach(item => { if (item && typeof item === 'object') taskRows.push(item); });
-      } else if (parsed?.data && typeof parsed.data === 'object') {
-        totalRecordCount += 1;
-        taskRows.push(parsed.data);
-      } else {
-        // 格式4: 扁平对象 { totalAssignments, completionRate, ... }
-        totalRecordCount += 1;
-        summaryMetrics.push(parsed);
-      }
-    } catch {
-      // 非 JSON 字符串，尝试作为纯文本展示
-      if (raw && typeof raw === 'string' && raw.trim()) {
-        totalRecordCount += 1;
-        summaryMetrics.push({ _text: raw.trim().slice(0, 200) });
-      }
-    }
-  });
-
-  // 渲染项目状态表格
-  if (intent === 'project_status' && taskRows.length > 0) {
-    const preview = taskRows.slice(0, 6).map((task, idx) => {
-      const title = task.title || `任务 ${idx + 1}`;
-      const ddlAt = task.ddlAt || '未提供截止时间';
-      const rate = Number.isFinite(Number(task.completionRate))
-        ? `${Number(task.completionRate)}%`
-        : '暂无';
-      return `- ${title}（完成率：${rate}；截止：${ddlAt}）`;
-    });
-    return [
-      '我为您整理了当前进行中的培训任务：',
-      '',
-      ...preview,
-      '',
-      taskRows.length > preview.length
-        ? `已找到 ${taskRows.length} 个任务。可继续追问"按完成率从低到高排序"或"仅看本周到期任务"。`
-        : '可继续追问"按完成率从低到高排序"或"仅看本周到期任务"。',
-    ].join('\n');
-  }
-
-  // 渲染汇总指标（query_metrics / progress_query 等）
-  if (summaryMetrics.length > 0) {
-    const lines = [];
-    for (const m of summaryMetrics) {
-      if (m._text) { lines.push(m._text); continue; }
-      // 常见指标的中文映射
-      const labelMap = {
-        totalAssignments: '总任务量', completedCount: '已完成', inProgressCount: '进行中',
-        pendingCount: '待开始', completionRate: '完成率(%)', onTimeCompletionRate: '按时完成率(%)',
-        avgCompletionTimeHours: '平均耗时(小时)', total: '总数', completed: '已完成',
-        rowCount: '记录数',
-      };
-      const entries = Object.entries(m).filter(([, v]) => v !== null && v !== undefined);
-      if (entries.length === 0) continue;
-      lines.push(entries.map(([k, v]) => {
-        const label = labelMap[k] || k;
-        if (v === null || v === undefined) return '';
-        if (typeof v === 'object') return `${label}: ${JSON.stringify(v)}`;
-        return typeof v === 'number' ? `${label}: ${v}` : `${label}: ${v}`;
-      }).filter(Boolean).join('，'));
-    }
-    if (lines.length > 0) {
-      return `📊 查询结果：\n\n${lines.join('\n\n')}\n\n可继续追问更多细节。`;
-    }
-  }
-
-  // 渲染有行数据的表格（通用）
-  if (taskRows.length > 0) {
-    const preview = taskRows.slice(0, 5);
-    const headers = Object.keys(preview[0] || {}).filter(k => !k.startsWith('_')).slice(0, 4);
-    const headerRow = '| ' + headers.join(' | ') + ' |';
-    const sepRow = '|' + headers.map(() => '---').join('|') + '|';
-    const dataRows = preview.map(row =>
-      '| ' + headers.map(h => String(row[h] ?? '')).join(' | ') + ' |'
-    );
-    return [
-      `查询到 ${taskRows.length} 条记录：`,
-      '',
-      headerRow,
-      sepRow,
-      ...dataRows,
-      '',
-      taskRows.length > 5 ? `（仅展示前5条，共${taskRows.length}条。可继续追问以缩小范围）` : '',
-    ].join('\n');
-  }
-
-  if (totalRecordCount > 0) {
-    return `查询到 ${totalRecordCount} 条数据，但无法解析为表格。建议换个更具体的问题。`;
-  }
-
-  if (hasError) {
-    return '查询时部分数据源返回异常。建议缩小范围（如指定大区或门店）后重试。';
-  }
-
-  return '';
+// ── 指标元数据 ──
+// 统一驱动表格列名、图表标签、单位显示的底层映射。
+// 新增工具字段时在此处注册即可，无需改动 prompt 或 buildChartPayload。
+const METRIC_META = {
+  totalTasks:         { label: '任务数',    unit: '个',   chartLabel: '任务数(个)' },
+  totalAssignments:   { label: '总人次',    unit: '人次', chartLabel: '总人次' },
+  completedCount:     { label: '已完成',    unit: '人',   chartLabel: '已完成(人)' },
+  inProgressCount:    { label: '进行中',    unit: '人',   chartLabel: '进行中(人)' },
+  pendingCount:       { label: '待开始',    unit: '人',   chartLabel: '待开始(人)' },
+  completionRate:     { label: '完成率',    unit: '%',    chartLabel: '完成率(%)' },
+  onTimeCompletionRate: { label: '按时完成率', unit: '%', chartLabel: '按时完成率(%)' },
+  avgCompletionTimeHours: { label: '平均耗时', unit: '小时', chartLabel: '平均耗时(h)' },
+  crisisP0Rate:       { label: 'P0预警率',  unit: '%',    chartLabel: 'P0预警率(%)' },
+  crisisP1Rate:       { label: 'P1预警率',  unit: '%',    chartLabel: 'P1预警率(%)' },
 };
 
-const sanitizeUserFacingMarkdown = (content) => {
-  const text = typeof content === 'string' ? content : '';
-  if (!text) return text;
-  const hasInternalMarkers =
-    text.includes('执行已达到复杂度上限') ||
-    text.includes('工具查询片段');
-  if (!hasInternalMarkers) return text;
-  return '我已完成查询并提取了核心数据。若需更精确结果，可指定时间范围、大区或门店，我会继续为您细化。';
-};
+// 归一化 key：snake_case → camelCase，兼容 tool 返回的字段名格式
+function normalizeMetricKey(key) {
+  if (METRIC_META[key]) return key;
+  const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  if (METRIC_META[camel]) return camel;
+  return key;
+}
+function metricLabel(key) { return METRIC_META[normalizeMetricKey(key)]?.label || key; }
+function metricUnit(key)  { return METRIC_META[normalizeMetricKey(key)]?.unit  || ''; }
+function metricChartLabel(key) { return METRIC_META[normalizeMetricKey(key)]?.chartLabel || key; }
 
+const { generateTextDeepSeek } = require('../../utils/ai');
+
+const DENY_RESPONSE = "### ⚠️ 请求被拒绝\n\n抱歉，Executive Chat 目前仅支持**只读查询**。我无法帮您执行修改数据、发送催办通知或直接处理业务流等操作。\n\n💡 *建议您可以在系统中手动处理，或询问我当前的数据完成情况。*";
+const GREETING_RESPONSE = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。\n\n例如，您可以问我：\n- 本月华东区的新品培训完成率是多少？\n- 有哪些门店需要重点关注？";
+const CHAT_ONLY_RESPONSE = "我不太确定您想查什么。您可以直接问我，例如：\n- 某个培训任务的完成率是多少？\n- 华东区有哪些门店需要关注？\n- 当前进行中的任务有哪些？";
 const CHAT_ONLY_GREETING_RE = /^(你好|您好|hi|hello|谢谢|thanks|你是谁|你能做什么|help)([!！,.。?？\s]|$)/i;
 
-const isGreetingLikeMessage = (message) => {
-  if (typeof message !== 'string') return false;
-  const text = message.trim();
-  if (!text) return false;
-  return CHAT_ONLY_GREETING_RE.test(text);
-};
+function isGreetingLike(message) {
+  return typeof message === 'string' && CHAT_ONLY_GREETING_RE.test(message.trim());
+}
 
-const finalResponseStep = async (state) => {
-  let response = state.reply_markdown || state.finalResponse || "";
-  if (!response) {
-    if (state.mode === "deny" || state.global_safety_decision === "deny") {
-      response = "### ⚠️ 请求被拒绝\n\n抱歉，Executive Chat 目前仅支持**只读查询**。我无法帮您执行修改数据、发送催办通知或直接处理业务流等操作。\n\n💡 *建议您可以在系统中手动处理，或询问我当前的数据完成情况。*";
-    } else if (
-      (state.mode === "chat_only" || state.intent === "chat_only") &&
-      isGreetingLikeMessage(state.userMessage)
-    ) {
-      response = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。\n\n例如，您可以问我：\n- 本月华东区的新品培训完成率是多少？\n- 有哪些门店需要重点关注？";
-    } else if (state.mode === "chat_only" || state.intent === "chat_only") {
-      // Router 误判为 chat_only 但用户其实问了业务相关内容，引导用户换个问法
-      console.warn('[FinalResponseStep] chat_only_non_greeting', {
-        message: (state.userMessage || '').slice(0, 80),
-        toolResultCount: Object.keys(state.toolResults || {}).length
-      });
-      response = "我不太确定您想查什么。您可以直接问我，例如：\n- 某个培训任务的完成率是多少？\n- 华东区有哪些门店需要关注？\n- 当前进行中的任务有哪些？";
-    } else {
-      response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || "抱歉，我暂时无法回答这个问题，或者执行过程中遇到了错误。请稍后重试或尝试缩小查询范围。";
-    }
+function buildChartPayload(toolResults, intent) {
+  const values = Object.values(toolResults || {});
+  console.log(`[CHART] buildChartPayload: values=${values.length}`);
+  if (values.length === 0) return null;
+  let rows = [];
+  for (const result of values) {
+    try {
+      let parsed = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+      if (!parsed || typeof parsed !== 'object') continue;
+      // 解包 {success, data: [...], summary: {...}} 格式
+      if (parsed.data && Array.isArray(parsed.data)) {
+        rows = parsed.data;
+      } else if (parsed.summary && typeof parsed.summary === 'object') {
+        // summary 是扁平对象如 {completionRate: 6, total: 100}
+        rows.push(parsed.summary);
+      } else if (Array.isArray(parsed)) {
+        rows = parsed;
+      } else {
+        rows.push(parsed);
+      }
+    } catch {}
   }
-  response = sanitizeUserFacingMarkdown(response);
-  return { finalResponse: response, reply_markdown: response, messages: [new AIMessage({ content: response })] };
+  console.log(`[CHART] rows=${rows.length}, firstRow keys=${Object.keys(rows[0]||{}).join(',')}`);
+  if (rows.length === 0) return null;
+
+  const firstRow = rows[0];
+  const keys = Object.keys(firstRow).filter(k => !k.startsWith('_'));
+
+  // ── 意图 + 数据形状 联合决策图表类型 ──
+  // 单值查询：大数字卡片，不画柱状图
+  if (intent === 'query_metrics' && rows.length === 1 && keys.length >= 1) {
+    const singleKey = keys.find(k => /完成率|completionRate|completion_rate/i.test(k))
+      || keys.find(k => /rate|Rate/i.test(k))
+      || keys[0];
+    const singleVal = firstRow[singleKey];
+    const displayVal = typeof singleVal === 'number' ? singleVal : (parseFloat(singleVal) || 0);
+    return { type: 'big_number', title: metricLabel(singleKey), xAxis: [], series: [{ name: metricChartLabel(singleKey), data: [displayVal] }] };
+  }
+  // 超过 8 条不画图（图表太挤，表格更清晰）
+  if (rows.length > 8) return null;
+  // 预警查询超过 6 条不画图（关注点在前几名）
+  if (intent === 'warning_query' && rows.length > 6) return null;
+
+  // 确定 label 字段和 value 字段（基于 METRIC_META 元数据优先级）
+  // 优先用门店名/任务名，避免取到 S00X 这类 ID
+  const labelKey = keys.find(k => /name|名称|title|门店|storeName|store_name/i.test(k))
+    || keys.find(k => /区域|任务|store|region|渠道/i.test(k) && !/id|Id|ID/i.test(k))
+    || keys[0];
+  const valueKey = keys.find(k => /完成率|completionRate|completion_rate/i.test(k))
+    || keys.find(k => /progress|rate/i.test(k))
+    || keys.find(k => /Count|count$|人数/i.test(k))
+    || keys[1] || keys[0];
+
+  const xAxis = rows.map(r => String(r[labelKey] || '').slice(0, 12));
+  const data = rows.map(r => {
+    const v = r[valueKey];
+    return typeof v === 'number' ? v : parseFloat(v) || 0;
+  });
+
+  // 使用 METRIC_META 驱动图表标签和单位
+  const chartTitle = rows.length === 1 ? '' : metricChartLabel(valueKey);
+  const series = [{ name: metricChartLabel(valueKey), data }];
+
+  return { type: 'bar', title: chartTitle, xAxis, series };
+}
+
+function isAllToolResultsEmpty(toolResults) {
+  const values = Object.values(toolResults || {});
+  if (values.length === 0) return true;
+  return values.every(r => {
+    try {
+      const d = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      return !d || (Array.isArray(d) && d.length === 0) || (typeof d === 'object' && Object.keys(d).length === 0);
+    } catch { return false; }
+  });
+}
+
+const FINAL_RESPONSE_SYSTEM_PROMPT = `你是 **TOT Executive Chat** 的输出 Agent，将培训任务查询数据转化为管理层可直接决策的「四件套」回复。
+
+## 一、运行环境
+- 当前时间：{{ CURRENT_TIME }}
+- 用户偏好：{{ USER_MEMORIES }}
+
+## 二、上游数据
+- 工具查询结果（toolResults）：{{ TOOL_RESULTS }}
+- 用户原始问题：{{ USER_MESSAGE }}
+- 初步分析（来自 FC Agent）：{{ FC_RAW_ANALYSIS }}
+- 识别到的实体：{{ ENTITIES }}
+- 查询意图：{{ INTENT }}
+
+## 三、输出格式（根据意图自适应）
+
+**核心要求：输出应像简洁的业务汇报，禁止 ### / # 标题、禁止 1️⃣2️⃣3️⃣ 编号、禁止竖向 key-value 表、禁止英文列名。**
+
+{{ IS_EMPTY_START }}📋 本次查询条件下未获取到有效数据{{ IS_EMPTY_END }}
+
+### 意图专属格式
+
+**当前意图：{{ INTENT }}**。严格按以下规则输出：
+
+{{ INTENT_FORMAT }}
+
+### 通用规则（所有意图适用）
+- 数值忠实于工具数据，百分比保留 1 位小数
+- 列名用中文+单位（完成率(%)、已完成(人)）
+- 最后以 💡 开头写一句话洞察（≤50 字）
+- 全文只有表格前和表格后各空一行
+
+## 四、空集三段式（所有工具结果为空或全零时触发）
+不输出表格。按以下自然段落结构输出：
+开头说明"根据过滤条件 [列出条件]，本次查询未获取到有效数据"。
+接着列出 ≥1 条可能原因（任务未下发/条件过窄/数据延迟/维度无数据）。
+然后给出 ≥1 条可执行建议（放宽区域/移除过滤/查看其他任务）。
+最后以 💡 开头给出建设性洞察。
+
+## 五、硬约束
+1. **数值忠实**：禁止编造数字
+2. **长度限制**：单条回复 ≤500 字（含 Markdown 表格）
+3. **区域维度**：使用区域名称（如华东/华南/华北），不使用渠道分类
+4. **严禁业务建议**
+5. **客观描述**：仅做数据归纳，不做因果推测
+6. **禁止 Markdown 标题**：不要使用 ###、##、# 等标题标记
+7. **输出格式**：必须输出严格 JSON，字段为 reply_markdown、highlight_insight、citations`;
+
+const finalResponseAgent = async (state, config) => {
+  console.log(`[TRACE-FRA] enter mode=${state.mode} intent=${state.intent} toolResultsKeys=${Object.keys(state.toolResults||{}).length} fcRawLen=${(state.fcRawAnalysis||'').length}`);
+  // ── 快速路径：deny / chat_only 不调 LLM ──
+  if (state.mode === "deny" || state.global_safety_decision === "deny") {
+    console.log(`[TRACE-FRA] fast path: deny`);
+    return {
+      finalResponse: DENY_RESPONSE,
+      reply_markdown: DENY_RESPONSE,
+      messages: [new AIMessage({ content: DENY_RESPONSE })],
+      highlightInsight: "请求已被安全策略拒绝",
+      chartPayload: null,
+      citations: [],
+    };
+  }
+
+  if (state.mode === "chat_only" || state.intent === "chat_only") {
+    console.log(`[TRACE-FRA] fast path: chat_only`);
+    const response = isGreetingLike(state.userMessage) ? GREETING_RESPONSE : CHAT_ONLY_RESPONSE;
+    return {
+      finalResponse: response,
+      reply_markdown: response,
+      messages: [new AIMessage({ content: response })],
+      highlightInsight: "",
+      chartPayload: null,
+      citations: [],
+    };
+  }
+
+  // ── Agent 路径 ──
+  const toolResults = state.toolResults || {};
+  const fcRawAnalysis = state.fcRawAnalysis || '';
+  const hasToolData = Object.keys(toolResults).filter(k => !k.startsWith('dynamic_clarify_')).length > 0;
+
+  // 无工具数据但有 fcRawAnalysis（LLM 基于上下文直接回答），透传
+  if (!hasToolData && fcRawAnalysis && !fcRawAnalysis.includes('系统异常')) {
+    console.log(`[TRACE-FRA] passthrough fcRawAnalysis (no tool data), len=${fcRawAnalysis.length}`);
+    return {
+      finalResponse: fcRawAnalysis,
+      reply_markdown: fcRawAnalysis,
+      messages: [new AIMessage({ content: fcRawAnalysis })],
+      highlightInsight: "",
+      chartPayload: null,
+      citations: [],
+    };
+  }
+
+  // 有工具数据 → 调 LLM 流式生成四件套
+  const allEmpty = isAllToolResultsEmpty(toolResults);
+  const chartPayload = allEmpty ? null : buildChartPayload(toolResults, state.intent);
+
+  // 意图 → 输出格式指令
+  const INTENT_FORMATS = {
+    project_status: `- 开头：一句话总结任务总数和整体状态
+- 正文：用 Markdown 表格列出每项任务（任务名称 | 截止时间 | 总人次 | 已完成(人) | 完成率(%)）`,
+    warning_query: `- 开头：一句话总结有多少门店完成率过低需关注
+- 正文：用 Markdown 表格列出风险门店（门店名称 | 关联任务 | 完成率(%) | 截止时间），按完成率升序。任务名用 taskName 不要用 taskId。`,
+    drill_down: `- 开头：一句话总结该维度数据
+- 正文：用 Markdown 表格列出明细（名称 | 完成率(%) | 总人次 | 已完成(人)），按完成率升序排列`,
+    query_metrics: `- 单一数值查询（如"XX完成率多少"）：reply_markdown 仅输出一句简洁结论（≤30字），highlight_insight 输出可操作的下一步建议（如"建议推动XX区域完成"），不要和结论重复同样的数字。
+- 多维度查询：用 Markdown 表格呈现。`,
+    default: `- 开头：一句话结论
+- 正文：根据数据复杂度决定是否用表格。数据 ≤3 条时不要用表格，直接用文字描述。`,
+  };
+  const intentFormat = INTENT_FORMATS[state.intent] || INTENT_FORMATS.default;
+
+  const filledPrompt = FINAL_RESPONSE_SYSTEM_PROMPT
+    .replace(/\{\{ CURRENT_TIME \}\}/g, new Date().toISOString())
+    .replace(/\{\{ USER_MEMORIES \}\}/g, (state.memoryContext || '（无）').slice(0, 500))
+    .replace(/\{\{ TOOL_RESULTS \}\}/g, JSON.stringify(toolResults, null, 2).slice(0, 4000))
+    .replace(/\{\{ USER_MESSAGE \}\}/g, state.userMessage || '')
+    .replace(/\{\{ FC_RAW_ANALYSIS \}\}/g, fcRawAnalysis.slice(0, 1000) || '（无）')
+    .replace(/\{\{ ENTITIES \}\}/g, JSON.stringify(state.entities || {}).slice(0, 500))
+    .replace(/\{\{ INTENT \}\}/g, state.intent || '')
+    .replace(/\{\{ INTENT_FORMAT \}\}/g, intentFormat)
+    .replace(/{{ IS_EMPTY_START }}[\s\S]*?{{ IS_EMPTY_END }}/, allEmpty ? '\u{1F4CB} 本次查询条件下未获取到有效数据' : '');
+
+  try {
+    const userPrompt = `## 用户问题\n${state.userMessage}\n\n## 工具查询数据\n${JSON.stringify(toolResults, null, 2)}\n\n## 初步分析\n${fcRawAnalysis || '（无）'}\n\n${allEmpty ? '⚠️ 当前所有查询结果均为空或全零，请执行三段式空集解释。' : '请基于以上数据生成 JSON 回复。'}`;
+
+    // 非流式生成（调试模式）
+    const result = await generateTextDeepSeek(userPrompt, {
+      system: filledPrompt,
+      temperature: 0.3,
+      maxTokens: 2000,
+      responseFormat: { type: "json_object" },
+    });
+
+    const rawText = typeof result === 'string' ? result : (result?.content || '');
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      throw new Error('JSON parse failed');
+    }
+
+    const replyMarkdown = parsed.reply_markdown || fcRawAnalysis || '抱歉，生成回答时出现问题，请重试。';
+    const highlightInsight = parsed.highlight_insight || '';
+
+    return {
+      finalResponse: replyMarkdown,
+      reply_markdown: replyMarkdown,
+      messages: [new AIMessage({ content: replyMarkdown })],
+      highlightInsight,
+      chartPayload,
+      citations: [],
+    };
+
+  } catch (err) {
+    console.error('[FinalResponseAgent] LLM 调用失败:', err.message);
+    const fallback = fcRawAnalysis
+      || `查询到 ${Object.keys(toolResults).length} 条结果，但生成回答失败。请缩小查询范围后重试。`;
+    return {
+      finalResponse: fallback,
+      reply_markdown: fallback,
+      messages: [new AIMessage({ content: fallback })],
+      highlightInsight: '',
+      chartPayload: null,
+      citations: [],
+    };
+  }
 };
 
 const persistAndEmit = async (state, config) => {
@@ -1097,9 +1214,10 @@ const persistAndEmit = async (state, config) => {
 
   try {
     db.transaction(() => {
+      const chartJson = state.chartPayload ? JSON.stringify(state.chartPayload) : null;
       db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [assistMsgId, sessionId, 'assistant', replyContent, state.intent || null, now]
+        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, chart_payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [assistMsgId, sessionId, 'assistant', replyContent, state.intent || null, chartJson, now]
       );
       db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
     });
@@ -1157,6 +1275,5 @@ module.exports = {
   fc_MergeToolResults,
   persistAndEmit,
   humanInTheLoopGate,
-  finalResponseStep,
-  renderToolResultsMarkdown
+  finalResponseAgent
 };

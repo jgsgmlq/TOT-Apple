@@ -51,6 +51,7 @@ function getDb() {
     ensureUserMemoriesTable(db);
     migrateDashboardInsightCounts(db);
     migrateDashboardInsightModuleTypes(db);
+    migrateChatMessagesChartPayload(db);
     ensureAgentGuidelinesTable(db);
 
     // T1: 自动初始化 LangGraph 的 SqliteSaver 所需三张表
@@ -72,6 +73,13 @@ function migrateChatMessagesIdempotency(database) {
     database.exec('ALTER TABLE chat_messages ADD COLUMN client_message_id TEXT');
     database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_client_msg_id ON chat_messages(client_message_id)');
   }
+}
+
+/** 旧库补 `chat_messages.chart_payload` 列（图表数据持久化，历史记录恢复用）。 */
+function migrateChatMessagesChartPayload(database) {
+  const cols = database.prepare('PRAGMA table_info(chat_messages)').all();
+  if (cols.some((c) => c.name === 'chart_payload')) return;
+  database.exec('ALTER TABLE chat_messages ADD COLUMN chart_payload TEXT');
 }
 
 /** 确保 `user_memories` 表存在。 */

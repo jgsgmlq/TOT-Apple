@@ -1,6 +1,6 @@
 const { StateGraph, END, START } = require("@langchain/langgraph");
 const { ExecChatGraphState } = require("./state");
-const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmToolCallStep, fc_CheckDuplicate, fc_ValidateParams, fc_ParamRepair, fc_ExecuteTool, fc_MergeToolResults, persistAndEmit, humanInTheLoopGate, finalResponseStep } = require("./nodes");
+const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmToolCallStep, fc_CheckDuplicate, fc_ValidateParams, fc_ParamRepair, fc_ExecuteTool, fc_MergeToolResults, persistAndEmit, humanInTheLoopGate, finalResponseAgent } = require("./nodes");
 
 // 路由条件分支
 const routeAfterRouter = (state) => {
@@ -14,7 +14,7 @@ const RoutingPolicy = require('./routingPolicy');
 
 const routeAfterFcCheckSteps = (state) => {
   const nextAction = state.fc_next_action;
-  if (nextAction === 'finalize') return 'FinalResponseStep';
+  if (nextAction === 'finalize') return 'FinalResponseAgent';
   if (nextAction === 'hitl') return 'HumanInTheLoopGate';
   if (nextAction === 'repair') return 'fc_ParamRepair';
   if (nextAction === 'validate') return 'fc_ValidateParams';
@@ -24,7 +24,7 @@ const routeAfterFcCheckSteps = (state) => {
   if (state.fc_super_step_count === 0) return 'fc_LlmToolCallStep';
 
   const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
-  if (state.fc_super_step_count >= maxSteps) return 'FinalResponseStep';
+  if (state.fc_super_step_count >= maxSteps) return 'FinalResponseAgent';
   return 'fc_LlmToolCallStep';
 };
 
@@ -33,7 +33,7 @@ const routeAfterFcLlm = (state) => {
   if (lastMsg && lastMsg.tool_calls && lastMsg.tool_calls.length > 0) {
     return 'fc_CheckDuplicate';
   }
-  return 'FinalResponseStep';
+  return 'FinalResponseAgent';
 };
 
 const routeAfterCheckDuplicate = (state) => {
@@ -42,16 +42,16 @@ const routeAfterCheckDuplicate = (state) => {
 };
 
 const routeAfterValidateParams = (state) => {
-  if (state.fc_next_action === 'finalize') return 'FinalResponseStep';
+  if (state.fc_next_action === 'finalize') return 'FinalResponseAgent';
   if (state.fc_next_action === 'hitl') return 'HumanInTheLoopGate';
   if (state.fc_next_action === 'repair') return 'fc_ParamRepair';
   if (state.fc_next_action === 'execute') return 'fc_ExecuteTool';
   if (state.fc_next_action === 're_route') return 'ContextAnalyzerRouter';
-  return 'FinalResponseStep';
+  return 'FinalResponseAgent';
 };
 
 const routeAfterMerge = (state) => {
-  if (state.fc_next_action === 'finalize') return 'FinalResponseStep';
+  if (state.fc_next_action === 'finalize') return 'FinalResponseAgent';
   return 'fc_CheckSteps';
 };
 
@@ -59,7 +59,7 @@ const routeAfterHumanInTheLoop = (state) => {
   if (state.fc_next_action === 're_route') return 'ContextAnalyzerRouter';
   if (state.fc_next_action === 'validate') return 'fc_ValidateParams';
   if (state.fc_next_action === 'llm_direct') return 'fc_LlmToolCallStep';
-  if (state.fc_next_action === 'finalize') return 'FinalResponseStep';
+  if (state.fc_next_action === 'finalize') return 'FinalResponseAgent';
   return 'fc_CheckSteps';
 };
 
@@ -79,7 +79,7 @@ const buildGraph = () => {
     .addNode("fc_MergeToolResults", fc_MergeToolResults)
     .addNode("PersistAndEmit", persistAndEmit)
     .addNode("HumanInTheLoopGate", humanInTheLoopGate)
-    .addNode("FinalResponseStep", finalResponseStep);
+    .addNode("FinalResponseAgent", finalResponseAgent);
 
   // 定义边
   workflow.addEdge(START, "LoadContext");
@@ -87,15 +87,15 @@ const buildGraph = () => {
 
   // Router 三路分流
   workflow.addConditionalEdges("ContextAnalyzerRouter", routeAfterRouter, {
-    deny: "FinalResponseStep",
-    chat_only: "FinalResponseStep",
+    deny: "FinalResponseAgent",
+    chat_only: "FinalResponseAgent",
     tool_action: "ToolRetrieve"
   });
 
   workflow.addEdge("ToolRetrieve", "fc_CheckSteps");
   workflow.addConditionalEdges("fc_CheckSteps", routeAfterFcCheckSteps, {
     "fc_LlmToolCallStep": "fc_LlmToolCallStep",
-    "FinalResponseStep": "FinalResponseStep",
+    "FinalResponseAgent": "FinalResponseAgent",
     "HumanInTheLoopGate": "HumanInTheLoopGate",
     "fc_ParamRepair": "fc_ParamRepair",
     "fc_ValidateParams": "fc_ValidateParams",
@@ -105,7 +105,7 @@ const buildGraph = () => {
 
   workflow.addConditionalEdges("fc_LlmToolCallStep", routeAfterFcLlm, {
     "fc_CheckDuplicate": "fc_CheckDuplicate",
-    "FinalResponseStep": "FinalResponseStep"
+    "FinalResponseAgent": "FinalResponseAgent"
   });
 
   workflow.addConditionalEdges("fc_CheckDuplicate", routeAfterCheckDuplicate, {
@@ -116,7 +116,7 @@ const buildGraph = () => {
   workflow.addConditionalEdges("fc_ValidateParams", routeAfterValidateParams, {
     "fc_ExecuteTool": "fc_ExecuteTool",
     "fc_ParamRepair": "fc_ParamRepair",
-    "FinalResponseStep": "FinalResponseStep",
+    "FinalResponseAgent": "FinalResponseAgent",
     "HumanInTheLoopGate": "HumanInTheLoopGate",
     "ContextAnalyzerRouter": "ContextAnalyzerRouter"
   });
@@ -125,17 +125,17 @@ const buildGraph = () => {
   workflow.addEdge("fc_ExecuteTool", "fc_MergeToolResults");
   workflow.addConditionalEdges("fc_MergeToolResults", routeAfterMerge, {
     "fc_CheckSteps": "fc_CheckSteps",
-    "FinalResponseStep": "FinalResponseStep"
+    "FinalResponseAgent": "FinalResponseAgent"
   });
 
   workflow.addConditionalEdges("HumanInTheLoopGate", routeAfterHumanInTheLoop, {
     "ContextAnalyzerRouter": "ContextAnalyzerRouter",
     "fc_ValidateParams": "fc_ValidateParams",
     "fc_LlmToolCallStep": "fc_LlmToolCallStep",
-    "FinalResponseStep": "FinalResponseStep",
+    "FinalResponseAgent": "FinalResponseAgent",
     "fc_CheckSteps": "fc_CheckSteps"
   });
-  workflow.addEdge("FinalResponseStep", "PersistAndEmit");
+  workflow.addEdge("FinalResponseAgent", "PersistAndEmit");
   workflow.addEdge("PersistAndEmit", END);
 
   return workflow;

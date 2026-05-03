@@ -32,13 +32,14 @@ module.exports = {
     const taskParams = taskId ? [taskId] : [];
 
     const warningRows = db.all(
-      `SELECT ta.task_id, s.id AS store_id, s.name AS store_name, s.region, t.ddl_at, COUNT(*) AS total, SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed FROM task_assignments ta JOIN stores s ON s.id = ta.store_id JOIN tasks t ON t.id = ta.task_id WHERE 1=1 ${taskFilter} ${filter.sql} GROUP BY ta.task_id, ta.store_id HAVING CAST(completed AS FLOAT) / total < ${WARNING_COMPLETION_THRESHOLD} ORDER BY CAST(completed AS FLOAT) / total ASC LIMIT 20`,
+      `SELECT ta.task_id, t.title AS task_name, s.id AS store_id, s.name AS store_name, s.region, t.ddl_at, COUNT(*) AS total, SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed FROM task_assignments ta JOIN stores s ON s.id = ta.store_id JOIN tasks t ON t.id = ta.task_id WHERE 1=1 ${taskFilter} ${filter.sql} GROUP BY ta.task_id, ta.store_id HAVING CAST(completed AS FLOAT) / total < ${WARNING_COMPLETION_THRESHOLD} ORDER BY CAST(completed AS FLOAT) / total ASC LIMIT 20`,
       [...taskParams, ...filter.params]
     );
 
     if (warningRows.length) {
       return warningRows.map((r) => ({
         taskId: r.task_id,
+        taskName: r.task_name,
         storeId: r.store_id,
         storeName: r.store_name,
         region: r.region,
@@ -52,7 +53,7 @@ module.exports = {
     }
 
     const rankRows = db.all(
-      `SELECT ta.task_id, s.id AS store_id, s.name AS store_name, s.region, COUNT(*) AS total, SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed
+      `SELECT ta.task_id, t.title AS task_name, s.id AS store_id, s.name AS store_name, s.region, COUNT(*) AS total, SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed
        FROM task_assignments ta
        JOIN stores s ON s.id = ta.store_id
        JOIN tasks t ON t.id = ta.task_id
@@ -66,6 +67,7 @@ module.exports = {
     if (rankRows.length) {
       return rankRows.map((r) => ({
         taskId: r.task_id,
+        taskName: r.task_name,
         storeId: r.store_id,
         storeName: r.store_name,
         region: r.region,
