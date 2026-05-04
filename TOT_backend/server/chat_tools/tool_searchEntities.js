@@ -2,6 +2,7 @@
 
 const { db } = require('../db');
 const { buildRegionFilter } = require('../utils/chatUtils');
+const { tokenizeMixedScript } = require('../agent/graph/decisionRules');
 
 /**
  * tool_searchEntities.js (v1.0)
@@ -64,13 +65,16 @@ function searchTasks(keyword, limit) {
     `SELECT id, title AS name, mypal_product_name, ddl_at, status FROM tasks WHERE title LIKE ? OR mypal_product_name LIKE ? OR id = ? ORDER BY created_at DESC LIMIT ?`,
     [`%${kw}%`, `%${kw}%`, kw, limit]
   );
-  // 2. 无结果 → 分词匹配（处理 "iPhone新品培训" 无法匹配 "iPhone 17 新品培训" 的情况）
+  // 2. 无结果 → 分词匹配
   if (rows.length === 0) {
-    const tokens = kw.replace(/[^一-龥a-zA-Z0-9]/g, ' ').split(/\s+/).filter(t => t.length >= 2);
+    const tokens = tokenizeMixedScript(kw);
     if (tokens.length > 0) {
-      const conditions = tokens.map(() => '(title LIKE ? OR mypal_product_name LIKE ?)').join(' AND ');
+      // OR 匹配 + 按命中数排序：至少命中 1 个 token 就返回，命中越多排越前
+      const conditions = tokens.map(() => '(title LIKE ? OR mypal_product_name LIKE ?)').join(' OR ');
+      const scoreExpr = tokens.map(() => `(CASE WHEN title LIKE ? OR mypal_product_name LIKE ? THEN 1 ELSE 0 END)`).join(' + ');
       const params = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
-      rows = db.all(`SELECT id, title AS name, mypal_product_name, ddl_at, status FROM tasks WHERE ${conditions} ORDER BY created_at DESC LIMIT ?`, [...params, limit]);
+      const scoreParams = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
+      rows = db.all(`SELECT id, title AS name, mypal_product_name, ddl_at, status, (${scoreExpr}) AS match_score FROM tasks WHERE ${conditions} ORDER BY match_score DESC, created_at DESC LIMIT ?`, [...scoreParams, ...params, limit]);
     }
   }
   return rows;
@@ -175,7 +179,7 @@ async function handler(args, regionScope) {
       };
     }
 
-    const limit = Math.max(1, Math.min(50, Number.isFinite(args.limit) ? Math.floor(args.limit) : 10));
+    const limit = Math.max(1, Math.min(50, Number.isFinite(args.limit) ? Math.floor(args.limit) : 20));
     const keyword = args.keyword || '';
 
     let candidates = [];

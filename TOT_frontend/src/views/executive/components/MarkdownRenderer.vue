@@ -220,6 +220,14 @@
         &:last-child { margin-bottom: 0; }
       }
 
+      /* 表格标题：与上文有间距，居中加粗，紧贴下方表格 */
+      :deep(p:has(strong):has(+ table)) {
+        text-align: center;
+        margin-top: 0.6em;
+        margin-bottom: 0.3em;
+        line-height: 1;
+      }
+
       :deep(h1),
       :deep(h2),
       :deep(h3),
@@ -233,14 +241,6 @@
       :deep(strong) {
         font-weight: 600;
         color: #0f172a;
-      }
-
-      :deep(table) {
-        margin-top: 0;
-        margin-bottom: 0.8em;
-        th, td {
-          padding: 0.35em 0.8em;
-        }
       }
 
       :deep(hr) {
@@ -306,7 +306,7 @@
       /* Tables */
       :deep(table) {
         width: 100%;
-        margin: 1.5em 0;
+        margin: 0 0 1.5em 0;
         border-collapse: separate;
         border-spacing: 0;
         border-radius: 8px;

@@ -693,8 +693,21 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
        });
     }
 
+    // 检查上轮是否有未完成的澄清——如有，重建完整上下文注入 userMessage
+    let enrichedMessage = userMessage;
+    let pendingClarification = null;
+    try {
+      const lastState = await app.getState({ configurable: { thread_id: sessionId } });
+      pendingClarification = lastState?.values?.pending_clarification;
+      if (pendingClarification) {
+        const ctx = pendingClarification;
+        enrichedMessage = `（接上一轮澄清：原问题是「${ctx.originalQuery}」，已确认信息：任务="${ctx.taskName}"(ID:${ctx.taskId})${ctx.channelLevel ? '，渠道层级='+ctx.channelLevel : ''}${ctx.storeName ? '，门店='+ctx.storeName : ''}。用户补充：「${userMessage}」。请基于这些完整信息直接调用查询工具，不要反问已确认的信息。）`;
+        console.log(`[ChatService] 重建澄清上下文: ${enrichedMessage.slice(0, 200)}`);
+      }
+    } catch (e) { /* checkpoint 不存在或读取失败，忽略 */ }
+
     const inputState = {
-      userMessage,
+      userMessage: enrichedMessage,
       sessionId,
       userId: session.user_id.toString(),
       regionScope,
@@ -706,6 +719,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       fc_repair_attempts: 0,
       pending_tool_calls: [],
       fc_next_action: '',
+      pending_clarification: null,   // 新查询清除旧澄清状态（graph 内部用 ...oldCtx 累积同轮多次澄清）
+      is_clarification: false,
     };
 
     const thread = { 

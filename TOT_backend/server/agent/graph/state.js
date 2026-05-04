@@ -95,6 +95,12 @@ const ExecChatGraphState = Annotation.Root({
   interrupt_payload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
   hitl_payload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }), // 兼容旧字段
   hitl_resume_payload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+
+  // ─── 澄清往返 (Clarification Round-Trip) ───
+  // FC Agent 反问用户后，记录上下文以便下一轮重建
+  pending_clarification: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => null }),
+  // FC Agent 当前输出是否为反问（toolCalls=0 + 问句），避免用正则猜测
+  is_clarification: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => false }),
   clarification_response: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
 
   // ─── 元数据与跟踪 ───

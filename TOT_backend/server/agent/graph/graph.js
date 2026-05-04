@@ -60,6 +60,7 @@ const routeAfterHumanInTheLoop = (state) => {
   if (state.fc_next_action === 'validate') return 'fc_ValidateParams';
   if (state.fc_next_action === 'llm_direct') return 'fc_LlmToolCallStep';
   if (state.fc_next_action === 'finalize') return 'FinalResponseAgent';
+  if (state.fc_next_action === 'execute') return 'fc_ExecuteTool';
   return 'fc_CheckSteps';
 };
 
@@ -133,7 +134,8 @@ const buildGraph = () => {
     "fc_ValidateParams": "fc_ValidateParams",
     "fc_LlmToolCallStep": "fc_LlmToolCallStep",
     "FinalResponseAgent": "FinalResponseAgent",
-    "fc_CheckSteps": "fc_CheckSteps"
+    "fc_CheckSteps": "fc_CheckSteps",
+    "fc_ExecuteTool": "fc_ExecuteTool"
   });
   workflow.addEdge("FinalResponseAgent", "PersistAndEmit");
   workflow.addEdge("PersistAndEmit", END);
