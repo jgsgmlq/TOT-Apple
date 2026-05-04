@@ -36,10 +36,13 @@
   const options = computed(() => {
     if (props.data?.type === 'big_number') return {};
     const { type = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
-
     const isCartesian = ['bar', 'line', 'scatter'].includes(type);
 
+    // 多系列配色（区分度好、色盲友好）
+    const colorPalette = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#84cc16', '#ec4899'];
+
     const option: any = {
+      color: colorPalette,
       title: {
         text: title,
         left: 'center',
@@ -111,15 +114,16 @@
         item.symbolSize = 6;
       }
 
-      // 动态高亮逻辑 (Safely handle highlights array index)
+      // 颜色策略：单系列→统一蓝，多系列→ECharts 内置调色板自动区分
+      // 内置调色板: ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc']
       if (highlights.length && type === 'bar') {
         item.itemStyle.color = (params: any) => {
           return highlights.includes(params.dataIndex) ? '#f59e0b' : '#3b82f6';
         };
-      } else if (type === 'bar') {
-        // default uniform color for bars if no highlights
+      } else if (type === 'bar' && series.length === 1) {
         item.itemStyle.color = '#3b82f6';
       }
+      // 多系列不设 color，让 ECharts 内置调色板自动分配不同颜色
 
       return item;
     });

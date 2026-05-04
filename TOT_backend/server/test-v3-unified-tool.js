@@ -55,7 +55,8 @@ async function test() {
       const result = await executiveMetricsQueryService.query(tc.params, tc.scope);
       
       let actualStatus = "SUCCESS";
-      if (result.error === 'INVALID_PARAMETERS') {
+      // v4.0：缺 task 信息走 TASK_REQUIRED 路径，仍归类为 INVALID_PARAMETERS 以保持测试期望兼容
+      if (result.error === 'INVALID_PARAMETERS' || result.error === 'TASK_REQUIRED') {
         actualStatus = "ERROR_INVALID_PARAMETERS";
       } else if (result.error) {
         actualStatus = `ERROR_${result.error}`;

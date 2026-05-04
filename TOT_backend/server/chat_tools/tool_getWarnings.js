@@ -20,7 +20,7 @@ module.exports = {
     }
   },
   meta: { 
-    enabled: true,
+    enabled: false,
     requiredRole: ['executive'],
     scopePolicy: 'any',
     timeoutMs: 8000

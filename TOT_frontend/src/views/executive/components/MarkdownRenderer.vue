@@ -216,7 +216,7 @@
 
       :deep(p) {
         margin-top: 0;
-        margin-bottom: 0.15em;
+        margin-bottom: 0.25em;
         &:last-child { margin-bottom: 0; }
       }
 
@@ -236,10 +236,10 @@
       }
 
       :deep(table) {
-        margin-top: 0.15em;
-        margin-bottom: 0.15em;
+        margin-top: 0;
+        margin-bottom: 0.8em;
         th, td {
-          padding: 0.25em 0.6em;
+          padding: 0.35em 0.8em;
         }
       }
 

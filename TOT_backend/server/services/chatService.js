@@ -60,7 +60,7 @@ function buildExecutiveMessageApiData(result) {
       : null;
   const extra = {
     chartPayload: result?.chartPayload || null,
-    highlightInsight: result?.highlightInsight || '',
+    headline: result?.headline || '',
   };
   if (md) {
     return { replyContent: null, markdownContent: md, ...extra };
@@ -91,7 +91,7 @@ function buildSseFinalPayload(result, sessionId, requestId, responseTime, timest
       messageId: result?.messageId || nanoid(),
       ...payload,
       chartPayload: result?.chartPayload || null,
-      highlightInsight: result?.highlightInsight || '',
+      headline: result?.headline || '',
       responseTime,
       contextId: sessionId,
       timestamp,
@@ -571,7 +571,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
       markdownContent: finalMarkdown,
       replyContent: null,
       chartPayload: finalState.chartPayload || null,
-      highlightInsight: finalState.highlightInsight || '',
+      headline: finalState.headline || '',
       _toolMeta: { toolCalls: [] }
     };
 
@@ -700,7 +700,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       regionScope,
       reply_markdown: '',
       finalResponse: '',
-      toolResults: {},
+      toolResults: { __clear: true },
       fc_super_step_count: 0,
       fc_current_step: 0,
       fc_repair_attempts: 0,
@@ -754,7 +754,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       markdownContent: finalMarkdown,
       replyContent: null,
       chartPayload: finalState.chartPayload || null,
-      highlightInsight: finalState.highlightInsight || '',
+      headline: finalState.headline || '',
       _toolMeta: { toolCalls: [] }
     };
 

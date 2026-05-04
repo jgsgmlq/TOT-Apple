@@ -23,7 +23,7 @@ const routeAfterFcCheckSteps = (state) => {
 
   if (state.fc_super_step_count === 0) return 'fc_LlmToolCallStep';
 
-  const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
+  const maxSteps = state.router_max_steps || 3;
   if (state.fc_super_step_count >= maxSteps) return 'FinalResponseAgent';
   return 'fc_LlmToolCallStep';
 };

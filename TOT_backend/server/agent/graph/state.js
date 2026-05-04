@@ -33,15 +33,33 @@ const ExecChatGraphState = Annotation.Root({
   entities_raw: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
   entities_confidence: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
 
+  // ─── v6.0 Router 输出（3+8 + 信号驱动复杂度） ─────────────────────────
+  router_main_intent: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  router_modifiers: Annotation({
+    reducer: (x, y) => y ?? x,
+    default: () => ({
+      needs_lookup: false,
+      needs_ranking: false,
+      needs_comparison: false,
+      needs_distribution: false,
+      needs_timeseries: false,
+      needs_funnel: false,
+      needs_analytics: false,
+      needs_detail: false,
+    }),
+  }),
+  router_max_steps: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 3 }),
+
   // ─── 记忆注入 (LoadContext) ───
   memory_snippets: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
   memoryContext: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }), // 兼容旧字段
   
   // ─── 工具执行与 FC 循环 ───
   candidateTools: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
-  toolResults: Annotation({ 
-    reducer: (x, y) => ({ ...x, ...y }), 
-    default: () => ({}) 
+  toolResults: Annotation({
+    // __clear 信号：新对话轮次开始时全量清空旧的工具结果，避免跨轮泄漏
+    reducer: (x, y) => (y && y.__clear === true) ? {} : { ...x, ...y },
+    default: () => ({})
   }),
   calledTools: Annotation({ 
     reducer: (x, y) => (x || []).concat(y || []), 
@@ -66,9 +84,10 @@ const ExecChatGraphState = Annotation.Root({
   fcRawAnalysis: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
 
   // FinalResponseAgent 输出（四件套新增字段）
-  chartPayload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
-  highlightInsight: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
-  citations: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  chartPayload: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => null }),
+  headline: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => "" }),
+  // 用 y !== undefined 而非 y ?? x：透传路径显式返回 null 时需要清掉旧图表数据
+  citations: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => [] }),
   
   // ─── 人在回路 (HITL) ───
   human_in_the_loop_status: Annotation({ reducer: (x, y) => y ?? x, default: () => "idle" }), // idle | pending_interrupt | resumed

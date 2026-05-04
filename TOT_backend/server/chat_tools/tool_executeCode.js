@@ -35,7 +35,7 @@ const schema = {
 };
 
 const meta = {
-  enabled: true,
+  enabled: false,
   requiredRole: ['executive', 'central', 'admin'],
   scopePolicy: 'any',
   timeoutMs: 15000 // 云沙盒执行通常需要更长超时时间

@@ -20,7 +20,7 @@ module.exports = {
       }
     }
   },
-  meta: { enabled: true },
+  meta: { enabled: false },
   handler: async (args, regionScope) => {
     const region = (args.region || '').trim();
     const taskId = args.taskId || null;

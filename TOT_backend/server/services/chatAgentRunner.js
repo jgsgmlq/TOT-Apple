@@ -25,7 +25,7 @@ const CHAT_SESSION_STATE_ENABLED = process.env.CHAT_SESSION_STATE_ENABLED !== '0
 
 // §5.10：升级 System Prompt 时同步 bump 版本号。
 const SUPERVISOR_PROMPT_VERSION = 'executive-chat-supervisor/v4.0';
-const FC_PROMPT_VERSION = 'executive-chat-fc/v4.0';
+const FC_PROMPT_VERSION = 'executive-chat-fc/v5.0';
 
 // 2026-04-21 v3.0 升级：弱化正则拦截，改为语义监工
 const CHIT_CHAT_RE = /^(你好|您好|hi|hello|谢谢|thanks|你是谁|你能做什么|help)([!！,.。?？\s]|$)/i;
@@ -99,25 +99,29 @@ function classifyExecutionMode(message) {
 }
 
 function inferIntentFromMessage(message) {
-  if (!message || typeof message !== 'string') return 'unknown';
-  if (/(对比|排行|名次|表现|维度|指标|汇总|业态|经销商)/.test(message)) return 'matrix_query';
+  if (!message || typeof message !== 'string') return 'chat_only';
+  // v5.0：归并到 5 主意图
+  if (/(漏斗|催办|挽回|转化|funnel|p[012]\s*转化)/i.test(message)) return 'funnel_query';
   if (ANALYTICS_HINT_RE.test(message)) return 'analytics_query';
-  if (/(预警|风险|关注)/.test(message)) return 'warning_query';
-  if (/(门店|最差|下钻|店|区域|大区|华东|华南|华北|西南|东北|西北)/.test(message)) return 'drill_down';
-  if (/(任务|项目|进行中|状态)/.test(message)) return 'project_status';
-  if (/(完成率|进度|达成)/.test(message)) return 'progress_query';
-  return 'unknown';
+  if (/(对比|排行|名次|表现|维度|指标|汇总|业态|经销商|完成率|预警|触达|风险|关注|门店|区域|大区|任务|进度|达成)/.test(message)) return 'metric_query';
+  return 'chat_only';
 }
 
 function deriveIntentType(calledToolNames, fallbackIntent) {
-  if (calledToolNames.has('queryExecutiveMetrics')) return 'matrix_query';
+  // v5.0: 工具 → 5 主意图（与 chatIntentService 保持一致）
+  if (calledToolNames.has('queryConversionFunnel')) return 'funnel_query';
+  if (calledToolNames.has('searchEntities')) return 'entity_search';
+  if (calledToolNames.has('queryExecutiveMetrics')) return 'metric_query';
+  if (calledToolNames.has('queryMetricsTimeseries')) return 'metric_query';
+  if (calledToolNames.has('compareMetrics')) return 'metric_query';
   if (calledToolNames.has('runAnalytics')) return 'analytics_query';
-  if (calledToolNames.has('getWarningsData')) return 'warning_query';
-  if (calledToolNames.has('getRegionDetailData')) return 'drill_down';
-  if (calledToolNames.has('getStoreDetailData')) return 'drill_down';
-  if (calledToolNames.has('getTaskListData')) return 'project_status';
-  if (calledToolNames.has('getOverviewData')) return 'progress_query';
-  return fallbackIntent || 'unknown';
+  // 旧专用工具一律归并到 metric_query（v5.0 把它们视为 metric_query 的快捷形态）
+  if (calledToolNames.has('getWarningsData')) return 'metric_query';
+  if (calledToolNames.has('getRegionDetailData')) return 'metric_query';
+  if (calledToolNames.has('getStoreDetailData')) return 'metric_query';
+  if (calledToolNames.has('getTaskListData')) return 'metric_query';
+  if (calledToolNames.has('getOverviewData')) return 'metric_query';
+  return fallbackIntent || 'chat_only';
 }
 
 function normalizeReplyContent(content, fallbackOverview) {
@@ -274,12 +278,25 @@ async function run(userMessage, history, regionScope, options = {}) {
 // ─── Intent Routing mode (Fallback) ───────────────────────────────────────────
 async function runIntentRouting(userMessage, history, regionScope, options = {}) {
   const trace = options.trace || NOOP_TRACE;
-  let { intentType, entities } = await chatIntentService.classify(userMessage, history, { trace });
+  // v5.0: classify 现在返回 { intentType, mainIntent, modifiers, entities, entitiesConfidence, riskFlags }
+  const classifyResult = await chatIntentService.classify(userMessage, history, { trace });
+  const { intentType, mainIntent = intentType, modifiers = {}, entities, riskFlags = false } = classifyResult;
   let routeToolMeta = { toolName: null, cacheHit: null, skipped: false };
   let toolResult = null;
 
-  if (userMessage.includes('[绘图]') && intentType === 'analytics_query') {
-    const lastValidMsg = [...history].reverse().find(m => 
+  // 安全风险拦截（chatAgentRunner 入口已过 supervisor，这里是 defense-in-depth）
+  if (riskFlags) {
+    return attachToolMeta({
+      overview: '此操作涉及对外发送或数据写入，Executive Chat 仅支持只读查询。',
+      keyNumbers: [],
+      attentionPoints: ['请改为查询类问题，例如"华东区完成率"或"P0 预警门店有哪些"。'],
+      followUpSuggestions: [],
+      _intentType: 'chat_only',
+    }, { toolName: null, cacheHit: null, skipped: true }, 'intent_llm');
+  }
+
+  if (userMessage.includes('[绘图]') && mainIntent === 'analytics_query') {
+    const lastValidMsg = [...history].reverse().find(m =>
       m.role === 'assistant' && m._intentType === 'analytics_query' && m.content
     );
     if (lastValidMsg) {
@@ -299,7 +316,7 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
     }
   }
 
-  if (intentType === 'analytics_query' && !entities?.analysisType && !toolResult) {
+  if (mainIntent === 'analytics_query' && !entities?.analysisType && !toolResult) {
     return attachToolMeta({
       overview: '当前问题属于统计分析，但缺少 analysisType。请明确分析口径后重试。',
       keyNumbers: [],
@@ -313,7 +330,13 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
     }, { toolName: null, cacheHit: null, skipped: false }, 'intent_llm');
   }
 
-  if (intentType === 'drill_down' && !entities?.region && !entities?.storeId && !entities?.storeName) {
+  // v5.0：metric_query + needs_drilldown 但实体缺失 → 引导补充
+  if (
+    mainIntent === 'metric_query' &&
+    modifiers.needs_drilldown &&
+    !entities?.region && !entities?.storeId && !entities?.storeName &&
+    !entities?.dealerName && !entities?.format && !entities?.rtm
+  ) {
     const reply = {
       ...normalizeReplyContent({
         overview: '请提供更具体的区域或门店信息，以便为您查询。',
@@ -325,44 +348,76 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
           '可追问：哪个区域完成率最低？',
         ],
       }, '请提供区域或门店信息'),
-      _intentType: 'drill_down',
+      _intentType: 'metric_query',
     };
     return attachToolMeta(reply, { toolName: null, cacheHit: null, skipped: true }, 'intent_llm');
   }
 
-  if (intentType !== 'unknown' && !toolResult) {
-    const toolMap = {
-      progress_query: 'getOverviewData',
-      matrix_query:   'queryExecutiveMetrics',
-      project_status: 'getTaskListData',
-      warning_query:  'getWarningsData',
-      drill_down: (entities?.region && !entities?.storeId && !entities?.storeName)
-        ? 'getRegionDetailData'
-        : 'getStoreDetailData',
-      analytics_query: 'runAnalytics',
+  // v5.0：funnel_query / metric_query / entity_search 都强制要求 task 信息
+  if (
+    (mainIntent === 'metric_query' || mainIntent === 'funnel_query') &&
+    !entities?.taskId && !entities?.taskName && !entities?.productName
+  ) {
+    const reply = {
+      ...normalizeReplyContent({
+        overview: '取数以「一个任务」为基本单位。请告诉我您要查询的任务名称或产品。',
+        keyNumbers: [],
+        attentionPoints: ['例如："iPhone 17 新品任务"、"Apple Watch 培训"。'],
+        followUpSuggestions: [
+          '可追问：iPhone 17 新品任务整体完成率',
+          '可追问：Apple Watch 任务催办漏斗',
+        ],
+      }, '请提供任务名称或产品'),
+      _intentType: mainIntent,
     };
-    const toolName = toolMap[intentType];
+    return attachToolMeta(reply, { toolName: null, cacheHit: null, skipped: true }, 'intent_llm');
+  }
+
+  if (mainIntent !== 'chat_only' && !toolResult) {
+    // v5.0：主工具按 修饰标签 + 主意图 决定（与 routingPolicy.pickPrimaryTool 一致）
+    let toolName;
+    if (mainIntent === 'entity_search') {
+      toolName = 'searchEntities';
+    } else if (mainIntent === 'funnel_query') {
+      toolName = 'queryConversionFunnel';
+    } else if (mainIntent === 'analytics_query') {
+      toolName = 'runAnalytics';
+    } else if (mainIntent === 'metric_query') {
+      if (modifiers.needs_compare) toolName = 'compareMetrics';
+      else if (modifiers.needs_timeseries) toolName = 'queryMetricsTimeseries';
+      else toolName = 'queryExecutiveMetrics';
+    }
+
     if (toolName) {
       if (CHAT_SESSION_STATE_ENABLED && options.sessionId) {
         await chatSessionStateService.hydrateIfNeeded(options.sessionId, regionScope);
       }
 
-      // v3.0: 针对矩阵查询做参数归一化
+      // v5.0：所有走 queryExecutiveMetrics / 衍生工具的请求统一转换 schema 形式
       let toolArgs = entities;
-      if (intentType === 'matrix_query') {
+      if (toolName === 'queryExecutiveMetrics' || toolName === 'queryConversionFunnel'
+          || toolName === 'queryMetricsTimeseries' || toolName === 'compareMetrics') {
         toolArgs = {
-          dimensions: entities.dimensions,
-          metrics: entities.metrics,
+          taskId: entities.taskId,
           taskName: entities.taskName,
           productName: entities.productName,
+          dimensions: entities.dimensions,
+          metrics: entities.metrics,
           filters: {
-            region: entities.region,
             rtm: entities.rtm,
             format: entities.format,
             dealerName: entities.dealerName,
             storeId: entities.storeId,
+            ...(entities.time ? { time: entities.time } : {}),
           },
-          sort: entities.sort || (entities.topN ? { sortBy: entities.metrics?.[0], order: 'desc' } : null)
+          sort: entities.sort || (entities.topN ? { sortBy: entities.metrics?.[0], order: 'desc' } : null),
+          ...(entities.topN ? { aggregation: { type: 'topn', n: entities.topN, target_metric: entities.metrics?.[0] } } : {}),
+          ...(toolName === 'queryMetricsTimeseries' ? { granularity: entities.time?.granularity || 'day', time: entities.time } : {}),
+          ...(toolName === 'compareMetrics' && Array.isArray(entities.compare_targets) ? {
+            mode: 'horizontal',
+            horizontal_dim: entities.dimensions?.[0] || 'channel_l3',
+            horizontal_values: entities.compare_targets,
+          } : {}),
         };
       }
 
@@ -460,26 +515,100 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
 }
 
 // ─── Function Calling mode (Main) ─────────────────────────────────────────────
-// FC System Prompt 静态模板：内嵌 ${memorySection} 占位，promptHash 对「空记忆版」求值一次即可稳定聚合。
+// FC System Prompt v5.0：5 主意图 + 13 工具 + 4 个新工具 few-shot。
+// 静态模板：内嵌 ${memorySection} 占位，promptHash 对「空记忆版」求值一次即可稳定聚合。
 function buildFcSystemPrompt(memorySection = '') {
   return `【角色定义】
-  你是苹果零售培训系统的高管数据分析助手。服务对象是 VP 和区域总监。
-  你的能力范围：培训完成率查询、矩阵式多维分析（对比、排行、多指标并列）、项目状态、预警门店、区域/门店下钻（支持大区、渠道RTM、业态Format等过滤）、统计分析（分位数/分布/相关性/预测）。
-  你没有能力：发送邮件、催办、修改数据。
-  ${memorySection}
-  【工具使用指导】
-  1. 优先使用 queryExecutiveMetrics：当你需要查询【完成率、预警率（P0/P1）、耗时、起步异常率】等核心指标，且涉及【大区对比、业态对比、门店排行、渠道对比】或【多度量组合】时，必须优先调用 queryExecutiveMetrics 工具。该工具支持通过 filters 参数按 rtm (如 Carrier, Monobrand) 或 format 进行过滤。
-  2. 实体继承：若用户问题中缺少区域/门店/任务信息，但历史对话中有，必须自动继承。
-  3. 主动澄清：若问题模糊且无法从历史推断，先用自然语言问一个澄清问题，不要猜测调用工具。
+你是苹果零售培训系统的高管数据分析助手 v5.0。服务对象是 CEO / VP / 区域总监。
+你的能力范围：培训触达 / 完成 / 未完成 / 平均耗时 / P0-P1-P2 预警率 / 催办转化率 等指标查询，多维下钻（RTM channel_l3 / 业态 channel_l4 / 经销商 dealer / 门店 store）、时间序列趋势、横纵对比、催办漏斗、统计分析。
+你没有能力：发送邮件、催办、修改数据。如用户提出此类需求，请明确拒绝。
+${memorySection}
+【硬约束】
+- 取数以「**一个任务**」为基本单位。所有 metric/funnel/timeseries/compare 类工具调用，必须提供 taskName / productName / taskId 三选一，否则工具会返回 TASK_REQUIRED 错误。
+- 任务名模糊（如"那个 Watch 任务"）→ **先调 searchEntities 拿候选 → 再用 taskId 精确查询**，不要靠猜。
+- 维度命名：channel_l3=RTM L3(Monobrand/Multibrand/Carrier)，channel_l4=业态 L4(MONO/Lifestyle/Mass Merchant)，dealer=经销商，store=门店。
 
-  【输出格式规则】
-  1. 所有回答用流式 Markdown 输出，先给一句结论，再展开数据。
-  2. 数字数据用 Markdown 表格呈现，不要用 JSON 对象。
-  3. 有图表时，把图表配置放在文末的 \`\`\`echarts 代码块中。
-  4. 有追问建议时，把建议列表放在文末的 \`\`\`suggestions 代码块中。
+【工具选择决策树】
+1. 闲聊/打招呼/询问能力 → 不调任何工具，直接答复。
+2. 用户提到模糊实体（"那个 X 任务"、"上海有哪些门店"）→ searchEntities
+3. 用户问"催办挽回了多少人 / P 级转化 / 漏斗" → queryConversionFunnel
+4. 用户问"近 N 天 / 每日 / 趋势" → queryMetricsTimeseries
+5. 用户问"vs / 对比 / 上周和本周 / Monobrand和Multibrand" → compareMetrics
+6. 用户问 P90 / 分布 / 相关性 / 预测 → runAnalytics（必要时配 fetchRawDataset + executeCode）
+7. 其余取数（完成率 / 预警率 / 排行 / TopN / 维度对比）→ queryExecutiveMetrics
+
+【可用工具与参数要点（13 个）】
+新工具（v5.0 增）：
+- searchEntities         (entityType: task|channel_l3|channel_l4|dealer|store, keyword, limit)
+- queryConversionFunnel  (taskName/taskId 必填, dimensions, filters, sort)
+- queryMetricsTimeseries (taskName/taskId 必填, metrics[], granularity: hour|day|week|month, time, filters, group_by)
+- compareMetrics         (taskName/taskId 必填, metrics[], mode: horizontal|vertical, horizontal_dim+horizontal_values 或 vertical_periods)
+
+主力工具：
+- queryExecutiveMetrics  (taskName/taskId 必填, metrics[], dimensions, filters{rtm,format,dealerName,storeId,time}, sort, aggregation{type:topn|bottomn|mean|distribution,n,bins,target_metric})
+
+旧专用工具（仍可用，但优先用上面的统一工具）：
+- getOverviewData / getRegionDetailData / getStoreDetailData / getTaskListData / getWarningsData
+- runAnalytics / fetchRawDataset / executeCode
+
+【可用指标编码（19 个）】
+基础：reach_count / reach_rate / complete_count / complete_rate / incomplete_count / incomplete_rate / avg_duration_sec
+预警：p0/p1/p2_warning_count / p0/p1/p2_warning_rate
+转化：p0/p1/p2_conversion_count / p0/p1/p2_conversion_rate（分母 = 总人数）
+
+【few-shot 示例 — 必须严格参考工具选择】
+
+例 1：用户问"iPhone 17 任务各业态 P0 预警率排前 5"
+→ 调用 queryExecutiveMetrics:
+   { "taskName":"iPhone 17", "dimensions":["channel_l4"], "metrics":["p0_warning_rate"],
+     "sort":{"sortBy":"p0_warning_rate","order":"desc"},
+     "aggregation":{"type":"topn","n":5,"target_metric":"p0_warning_rate"} }
+
+例 2：用户问"iPhone 17 催办挽回了多少人"
+→ 调用 queryConversionFunnel:
+   { "taskName":"iPhone 17" }
+
+例 3：用户问"近 7 天 iPhone 17 每日完成数趋势"
+→ 调用 queryMetricsTimeseries:
+   { "taskName":"iPhone 17", "metrics":["complete_count"], "granularity":"day" }
+
+例 4：用户问"Monobrand vs Multibrand iPhone 17 完成率对比"
+→ 调用 compareMetrics:
+   { "taskName":"iPhone 17", "metrics":["complete_rate"], "mode":"horizontal",
+     "horizontal_dim":"channel_l3", "horizontal_values":["Monobrand","Multibrand"] }
+
+例 5：用户问"那个 Watch 相关的任务"（任务名模糊）
+→ 第一步调用 searchEntities: { "entityType":"task", "keyword":"Watch", "limit":5 }
+→ 第二步用返回的 taskId 调对应工具
+
+例 6：用户问"Apple Watch 任务催办漏斗按经销商看"
+→ 调用 queryConversionFunnel:
+   { "taskName":"Apple Watch", "dimensions":["dealer"], "sort":{"sortBy":"p0_conversion_rate","order":"asc"} }
+
+例 7：用户问"iPhone 17 完成率最差 5 家门店"
+→ 调用 queryExecutiveMetrics:
+   { "taskName":"iPhone 17", "dimensions":["store"], "metrics":["complete_rate"],
+     "aggregation":{"type":"bottomn","n":5,"target_metric":"complete_rate"} }
+
+例 8：用户问"iPad Pro 任务完成耗时 P90"
+→ 调用 runAnalytics: { "analysisType":"quantile_duration", "taskId":"<resolved>" }
+
+【避坑要点】
+- 千万不要给 queryExecutiveMetrics 不传 taskName/taskId（即使用户没说，也要先 searchEntities 找一个）。
+- 时间字段 filters.time.field 取值仅限：received_at / completed_at / started_at / created_at。
+- 转化率分母统一是「总人数」（task_assignments 全体），不是 P 级前一阶段人数。
+- 实体继承：若用户上一轮问过 X 任务，本轮没说任务但提了维度过滤 → 自动继承 X 任务。
+- 主动澄清：若不能从对话推断且 searchEntities 也找不到候选，用自然语言问一个具体问题，不要猜调工具。
+
+【输出格式规则】
+1. 所有回答用流式 Markdown 输出，先给一句结论，再展开数据。
+2. 数字数据用 Markdown 表格呈现，不要用 JSON 对象。
+3. 有图表时，把图表配置放在文末的 \`\`\`echarts 代码块中。
+4. 有追问建议时，把建议列表放在文末的 \`\`\`suggestions 代码块中。
    - \`\`\`suggestions 围栏内必须是一个合法的 JSON 字符串数组，如：["可追问：问题1", "可追问：问题2"]。
-  5. 严禁向用户输出任何裸 JSON 对象。
-  `;
+5. 严禁向用户输出任何裸 JSON 对象。
+6. 提到 P 级转化率时，必须明确是"占任务总人数比例"（避免 CEO 误读）。
+`;
 }
 
 // 对「无记忆版」FC prompt 求 hash，避免每个用户因 memorySection 不同导致 hash 分叉、失去聚合意义。

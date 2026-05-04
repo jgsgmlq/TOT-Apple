@@ -228,9 +228,9 @@
                     <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
-                  <!-- 一句话洞察置顶 -->
-                  <div v-if="msg.highlightInsight && !msg.streaming" class="exec-insight-banner">
-                    {{ msg.highlightInsight }}
+                  <!-- headline 置顶 -->
+                  <div v-if="msg.headline && !msg.streaming" class="exec-headline-banner">
+                    {{ msg.headline }}
                   </div>
 
                   <!-- 新版：Markdown 渲染器 -->
@@ -674,7 +674,7 @@
         lastMsg.content = result.markdownContent || '';
         lastMsg.streamContent = undefined;
         lastMsg.thinking = thinkingSnapshot?.trim() || undefined;
-        lastMsg.highlightInsight = result.highlightInsight || '';
+        lastMsg.headline = result.headline || '';
         lastMsg.chartPayload = result.chartPayload || null;
       }
     } catch (e) {
@@ -1053,7 +1053,7 @@
         lastMsg.streamContent = undefined;
         lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
-        lastMsg.highlightInsight = result.highlightInsight || '';
+        lastMsg.headline = result.headline || '';
         lastMsg.chartPayload = result.chartPayload || null;
       }
       const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
@@ -1494,7 +1494,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 32px;
     scroll-behavior: smooth;
 
     .empty-chat {
@@ -1560,10 +1560,26 @@
       }
     }
 
+    .exec-headline-banner {
+      margin: 0 0 14px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e40af;
+      line-height: 1.5;
+      text-align: center;
+      box-shadow: 0 1px 3px rgba(37, 99, 235, 0.08);
+      white-space: pre-wrap;
+    }
+
     .message-row {
       display: flex;
       gap: 16px;
       max-width: 85%;
+      margin-bottom: 28px;
 
       &.is-user {
         align-self: flex-end;
@@ -1589,10 +1605,10 @@
       }
 
       .message-content {
-        padding: 12px 16px;
+        padding: 16px 18px;
         font-size: 15px;
-        line-height: 1.47;
-        letter-spacing: -0.374px;
+        line-height: 1.65;
+        letter-spacing: 0;
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
           Arial, sans-serif;
         word-wrap: break-word;
@@ -1650,17 +1666,9 @@
             color: #1d1d1f;
           }
 
-          .exec-insight-banner {
-            margin: 0 0 10px;
-            padding: 8px 12px;
-            background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(99, 102, 241, 0.03));
-            border-left: 3px solid #2563eb;
-            border-radius: 6px;
-            font-size: 13px;
-            color: #1e40af;
-            line-height: 1.5;
-            white-space: pre-wrap;
-          }
+          
+
+          
 
           .exec-big-number {
             text-align: center;
@@ -2102,7 +2110,7 @@
 
     .chat-body {
       padding: 20px 16px;
-      gap: 20px;
+      gap: 28px;
 
       .message-row {
         max-width: 100%;

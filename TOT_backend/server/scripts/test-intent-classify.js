@@ -10,7 +10,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 
 const path = require('path');
 const fs = require('fs');
-const { classify } = require('../services/chatIntentService');
+const { classify, normalizeMainIntent } = require('../services/chatIntentService');
 
 async function runGolden() {
   const key = process.env.DEEPSEEK_API_KEY;
@@ -26,7 +26,10 @@ async function runGolden() {
 
   for (const c of cases) {
     const r = await classify(c.input, []);
-    let pass = r.intentType === c.expectIntent;
+    // v5.0：fixture 仍保留旧 7 类，断言时把 expectIntent 与 r.intentType 同时归一化到 5 主意图
+    const expectMain = normalizeMainIntent(c.expectIntent);
+    const gotMain = normalizeMainIntent(r.intentType);
+    let pass = expectMain === gotMain;
     if (pass && c.expectAnalysisType != null) {
       pass = r.entities && r.entities.analysisType === c.expectAnalysisType;
     }
@@ -36,8 +39,9 @@ async function runGolden() {
       failures.push({
         input: c.input,
         expectIntent: c.expectIntent,
+        expectMain,
         expectAnalysisType: c.expectAnalysisType,
-        got: { intentType: r.intentType, analysisType: r.entities?.analysisType },
+        got: { intentType: r.intentType, mainIntent: gotMain, analysisType: r.entities?.analysisType },
       });
     }
   }

@@ -18,7 +18,7 @@ module.exports = {
       }
     }
   },
-  meta: { enabled: true },
+  meta: { enabled: false },
   handler: async (args, regionScope) => {
     const taskId = args.taskId || null;
     const filter = buildRegionFilter(regionScope);

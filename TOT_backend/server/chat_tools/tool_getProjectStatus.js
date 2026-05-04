@@ -12,7 +12,7 @@ module.exports = {
       parameters: { type: 'object', properties: {} }
     }
   },
-  meta: { enabled: true },
+  meta: { enabled: false },
   handler: async (args, regionScope) => {
     const filter = buildRegionFilter(regionScope);
 

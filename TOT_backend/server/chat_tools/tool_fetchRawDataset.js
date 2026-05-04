@@ -29,7 +29,7 @@ const schema = {
 };
 
 const meta = {
-  enabled: true,
+  enabled: false,
   requiredRole: ['executive', 'central', 'admin'],
   scopePolicy: 'any',
   timeoutMs: 5000
