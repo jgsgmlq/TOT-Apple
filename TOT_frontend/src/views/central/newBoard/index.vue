@@ -16,7 +16,12 @@
     type CreateDashboardInsightBody,
   } from '@/api/dashboard';
   import { marked } from 'marked';
-  import { createDashboardChatSession, streamDashboardChatMessage } from '@/api/chat';
+  import {
+    createDashboardChatSession,
+    streamDashboardChatMessage,
+    formatReplyContentText,
+  } from '@/api/chat';
+  import { runExecStyleSseChat } from '@/utils/execStreamReply';
   import { useMessage } from 'naive-ui';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
@@ -233,6 +238,7 @@
             action_type: sev === 'red' ? 'escalate' : 'remind',
             action_status: 'pending',
             generated_at: agentRes.generatedAt || new Date().toISOString(),
+            focus_module: t.focusModule,
           };
         });
 
@@ -1140,6 +1146,21 @@
       if (diagnosis.related_task_id) {
         triggerLoading(() => (currentTaskId.value = diagnosis.related_task_id));
       }
+      
+      if (diagnosis.focus_module) {
+        setTimeout(() => {
+          const el = document.getElementById(`module-${diagnosis.focus_module}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // 采用更柔和的 Apple 风格光晕动效
+            el.classList.add('transition-all', 'duration-1000', 'shadow-[0_0_60px_rgba(0,113,227,0.18)]', 'ring-1', 'ring-[#0071E3]/10', 'z-20');
+            setTimeout(() => {
+              el.classList.remove('shadow-[0_0_60px_rgba(0,113,227,0.18)]', 'ring-1', 'ring-[#0071E3]/10', 'z-20');
+            }, 3000);
+          }
+        }, 300); // 预留一定时间等待组件可能的数据切换加载渲染
+      }
     }
   };
 
@@ -1174,8 +1195,7 @@
     () => (diagnosisData.value || []).filter((d) => d.severity === 'yellow').length
   );
   const greenCount = computed(() => {
-    const alertTasksCount = redCount.value + yellowCount.value;
-    return Math.max(0, (allTasks.value || []).length - alertTasksCount);
+    return currentTasks.value.filter((t) => t.status === 'dispatched' && t.severity === 'green').length;
   });
 
   // ... Metrics
@@ -1983,6 +2003,12 @@
       let hasThinking = false;
 
       if (msg.role === 'ai') {
+        // 与 Executive Chat 一致：LangGraph 流式已将思考过程写入 msg.thinking
+        if (typeof msg.thinking === 'string' && msg.thinking.trim()) {
+          thinkingText = msg.thinking.trim();
+          hasThinking = true;
+        }
+
         const suggRegex = /\`\`\`suggestions\s*([\s\S]*?)\s*\`\`\`/;
         const suggMatch = text.match(suggRegex);
         if (suggMatch) {
@@ -2011,34 +2037,35 @@
         }
         text = text.replace(chartRegex, '');
 
-        // 提取 <think> 标签内容 (针对标准 DeepSeek Reasoning 格式)
-        const thinkRegex = /<think>([\s\S]*?)<\/think>/;
-        const thinkMatch = text.match(thinkRegex);
-        if (thinkMatch) {
-          thinkingText = thinkMatch[1].trim();
-          text = text.replace(thinkRegex, '').trim();
-          hasThinking = true;
-        } else {
-          // 软启发式截断规则：寻找 Markdown 结构化语法的起点
-          let splitIndex = -1;
-          const headingMatch = text.match(/\n(#|---|\|\s|- \*\*)/);
-          if (headingMatch && headingMatch.index > 0) {
-            splitIndex = headingMatch.index;
+        // 已有来自流式拆分的 thinking 时，不再从正文里猜「思考过程」，避免重复截断
+        if (!hasThinking) {
+          // 提取 <think> 标签内容 (针对标准 DeepSeek Reasoning 格式)
+          const thinkRegex = /<think>([\s\S]*?)<\/think>/;
+          const thinkMatch = text.match(thinkRegex);
+          if (thinkMatch) {
+            thinkingText = thinkMatch[1].trim();
+            text = text.replace(thinkRegex, '').trim();
+            hasThinking = true;
           } else {
-            const doubleNewlineMatch = text.match(/\n\n/);
-            if (doubleNewlineMatch && doubleNewlineMatch.index > 0) {
-              splitIndex = doubleNewlineMatch.index;
+            // 软启发式截断规则：寻找 Markdown 结构化语法的起点
+            let splitIndex = -1;
+            const headingMatch = text.match(/\n(#|---|\|\s|- \*\*)/);
+            if (headingMatch && headingMatch.index > 0) {
+              splitIndex = headingMatch.index;
+            } else {
+              const doubleNewlineMatch = text.match(/\n\n/);
+              if (doubleNewlineMatch && doubleNewlineMatch.index > 0) {
+                splitIndex = doubleNewlineMatch.index;
+              }
             }
-          }
 
-          if (splitIndex > 0) {
-            const preamble = text.substring(0, splitIndex).trim();
-            // 如果前面的"非结构化"段落超过20个字符且不包含代码块，我们认为它是啰嗦的思考过程
-            // 而且如果 preamble 以 "好的"、"首先"、"让我" 等开头，那就是典型的 AI 思考语言
-            if (preamble.length > 20 && !preamble.includes('```')) {
-              thinkingText = preamble;
-              text = text.substring(splitIndex).trim();
-              hasThinking = true;
+            if (splitIndex > 0) {
+              const preamble = text.substring(0, splitIndex).trim();
+              if (preamble.length > 20 && !preamble.includes('```')) {
+                thinkingText = preamble;
+                text = text.substring(splitIndex).trim();
+                hasThinking = true;
+              }
             }
           }
         }
@@ -2164,36 +2191,70 @@
     aiScrollChatToBottom();
 
     const replyIndex = aiMessages.value.length;
-    aiMessages.value.push({ role: 'ai', content: '' });
+    aiMessages.value.push({
+      role: 'ai',
+      content: '',
+      thinking: undefined as string | undefined,
+      replyContent: null,
+      done: false,
+    });
 
     currentChatAbortController = new AbortController();
 
     try {
-      await streamDashboardChatMessage(
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamDashboardChatMessage,
         aiSessionId.value,
         text,
-        (chunk) => {
-          if (chunk && chunk.text) {
-            aiMessages.value[replyIndex].content += chunk.text;
-            aiScrollChatToBottom();
-          }
-        },
-        (data) => {
-          aiIsTyping.value = false;
-          currentChatAbortController = null;
+        (p) => {
+          aiMessages.value[replyIndex] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+            activeToolName: p.activeToolName,
+            done: false,
+            replyContent: null,
+          };
           aiScrollChatToBottom();
         },
-        (err) => {
-          aiMessages.value[replyIndex].content +=
-            '<br><span style="color:red">请求异常终止或超时</span>';
-          aiIsTyping.value = false;
-          currentChatAbortController = null;
-          aiScrollChatToBottom();
+        async (clarify) => {
+          const prompt =
+            (clarify as { prompt?: string; message?: string })?.prompt ||
+            (clarify as { message?: string })?.message ||
+            '需要您补充一些信息后才能继续。';
+          message.warning(prompt);
         },
         { signal: currentChatAbortController.signal }
       );
+
+      const last = aiMessages.value[replyIndex];
+      if (last) {
+        last.done = true;
+        last.activeToolName = undefined;
+        // 与 Executive Chat 一致：FC/LangGraph 以 markdownContent 为最终正文
+        const merged =
+          result.markdownContent ||
+          formatReplyContentText(result.replyContent ?? null);
+        last.content = merged || last.content || '';
+        last.thinking = thinkingSnapshot?.trim()
+          ? thinkingSnapshot.trim()
+          : last.thinking || undefined;
+        last.replyContent = result.replyContent ?? null;
+      }
     } catch (e) {
-      //
+      const last = aiMessages.value[replyIndex];
+      if (last) {
+        last.content =
+          (last.content || '') +
+          '<br><span style="color:red">请求异常终止或超时，请重试。</span>';
+        last.done = true;
+      }
+    } finally {
+      aiIsTyping.value = false;
+      currentChatAbortController = null;
+      aiScrollChatToBottom();
     }
   };
 
@@ -3042,9 +3103,10 @@
                 :key="task.task_id"
                 @click="handleTaskSelect(task.task_id)"
                 class="px-6 py-4 hover:bg-gray-50 cursor-pointer transition-colors duration-200 flex items-center gap-4 border-b border-gray-100 last:border-b-0"
+                :class="{ 'opacity-60 grayscale': taskCategory === 'overdue' }"
               >
                 <div
-                  v-if="task.status === 'dispatched'"
+                  v-if="taskCategory !== 'overdue' && task.status === 'dispatched'"
                   class="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
                   :class="{
                     'animate-alert-pulse-red': task.severity === 'red',
@@ -3175,7 +3237,7 @@
             </n-tabs>
           </div>
           <!-- Layer 2: Core Metrics + Funnel -->
-          <div class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
+          <div id="module-north_star" class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
             <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10 group/card relative">
               <!-- Metric Cards Component Inlined -->
               <div class="glass-card flex flex-col h-full w-full border-none flex-1 relative">
@@ -3588,7 +3650,7 @@
                 </div>
               </div>
             </div>
-            <div class="flex flex-col lg:flex-row gap-5 items-stretch">
+            <div id="module-warning_details" class="flex flex-col lg:flex-row gap-5 items-stretch">
               <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10">
                 <!-- Alert Summary Component Inlined -->
                 <div
@@ -4003,7 +4065,7 @@
           </div>
 
           <!-- Layer 4: Trend Chart + Region Ranking -->
-          <div class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
+          <div id="module-rtm_timezone" class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
             <div
               class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card"
             >

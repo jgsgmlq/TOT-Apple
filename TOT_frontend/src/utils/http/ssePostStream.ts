@@ -1,3 +1,7 @@
+import { storage } from '@/utils/Storage';
+import { ACCESS_TOKEN } from '@/store/mutation-types';
+import { getAppEnvConfig } from '@/utils/env';
+
 /**
  * POST JSON 后读取 **标准 SSE**（与智能洞察、Executive Chat 后端一致）：
  * `event: delta` | `done` | `error`，`data` 为单行 JSON。
@@ -26,10 +30,9 @@ export async function streamSsePostJson(options: {
     signal,
   } = options;
 
-  const { useUserStore } = await import('@/store/modules/user');
-  const token = useUserStore().getToken;
-  const { useGlobSetting } = await import('@/hooks/setting');
-  const { apiUrl, urlPrefix } = useGlobSetting();
+  // 使用 storage + getAppEnvConfig，避免动态 import（WebKit 下若 chunk URL 异常会报 image/svg+xml MIME 错误）
+  const token = storage.get(ACCESS_TOKEN) || '';
+  const { VITE_GLOB_API_URL: apiUrl, VITE_GLOB_API_URL_PREFIX: urlPrefix } = getAppEnvConfig();
 
   let url = path.startsWith('/') ? path : `/${path}`;
   if (urlPrefix) url = `${urlPrefix}${url}`;
