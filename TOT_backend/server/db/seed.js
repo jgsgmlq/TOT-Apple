@@ -411,7 +411,7 @@ function generateNotifications(assignments) {
         events.push({
           id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
           event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
-          initiator_id: 1, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
+          initiator_id: null, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
         });
         a.nudge_count += 1;
       }
@@ -425,7 +425,7 @@ function generateNotifications(assignments) {
         events.push({
           id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
           event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
-          initiator_id: 1, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
+          initiator_id: null, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
         });
         a.nudge_count += 1;
       }
@@ -435,7 +435,7 @@ function generateNotifications(assignments) {
         events.push({
           id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
           event_type: 'nudge_orange', severity: 'orange', dedupe_key: `autonudge:deadlineCrisisP1:${a.id}`, content: '历史P1催办',
-          initiator_id: 1, created_at: toDbStr(ddlMs - 48 * 3600000)
+          initiator_id: null, created_at: toDbStr(ddlMs - 48 * 3600000)
         });
         a.nudge_count += 1;
       }
