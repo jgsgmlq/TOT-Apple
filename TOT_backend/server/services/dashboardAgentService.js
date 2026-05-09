@@ -4,150 +4,148 @@ const { db } = require('../db/index');
 const mainAgent = require('../agent/index');
 const { nanoid } = require('nanoid');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
-const { parseAutoNudgeRules, classifyDeadlineCrisisBand } = require('../services/autoNudgeRules');
+const { runRegionAnalyzers } = require('./dashboardSubAgents/runRegionAnalyzers');
 
+const COARSE_FOCUS_KEYS = new Set([
+  'north_star',
+  'warning_details',
+  'rtm_timezone',
+  'crisis_p0',
+  'funnel_read_rate',
+  'nudge_conversion',
+  'metrics_overdue',
+]);
+
+const SEVERITY_RANK = { red: 3, orange: 2, green: 1 };
+
+function pickFineGrainedFocusFromInsights(taskData) {
+  if (!taskData || !taskData.regionInsights) return null;
+  const items = Object.values(taskData.regionInsights).filter(Boolean);
+  if (!items.length) return null;
+  const maxRank = Math.max(...items.map((r) => SEVERITY_RANK[r.severity] || 0));
+  const sameWorst = items.filter((r) => (SEVERITY_RANK[r.severity] || 0) === maxRank);
+  for (const r of sameWorst) {
+    const hint = r.focusHint;
+    if (hint && hint !== 'none' && !COARSE_FOCUS_KEYS.has(hint)) return hint;
+  }
+  return null;
+}
+
+function normalizeFocusModule(focusModule, taskData) {
+  if (!focusModule) return 'none';
+  if (focusModule === 'none') return 'none';
+  if (!COARSE_FOCUS_KEYS.has(focusModule)) return focusModule;
+  // 规则：主 Agent 给了粗粒度时，优先回填为同任务最严重区域的细粒度 focusHint。
+  const fine = pickFineGrainedFocusFromInsights(taskData);
+  return fine || focusModule;
+}
+
+/**
+ * 完整生成一次看板诊断：
+ *  1. 列出所有 dispatched 的活跃任务。
+ *  2. 并行（全局并发上限 6）跑 4 个区域子 Agent 拿到 regionInsights。
+ *  3. 把瘦身后的 tasks（仅 taskId/title/ddl_at + regionInsights）喂给主 Agent，
+ *     由主 Agent 输出最终 topTasks / focusModule / overallSummary。
+ *  4. 写入 dashboard_insights(global_agent) 作为主 Agent 自身的缓存。
+ */
 async function generateDashboardAgentInsight(userId) {
-  const nowMs = Date.now();
-  const nowIso = formatNowSqliteLocal();
-
-  // 获取所有 dispatched 的任务
-  const activeTasks = db.all("SELECT * FROM tasks WHERE status = 'dispatched'");
+  // 跳过已过期任务（ddl_at < 当前本地时间）：避免对收尾或终结的任务再做 LLM 诊断，
+  // 也省掉 4 个区域子 Agent 的 LLM 调用成本。时区口径与 dashboardQueryCore 中的
+  // `datetime('now', 'localtime') > t.ddl_at` 严格一致。保留 ddl_at IS NULL 的任务
+  // （视为不可判定过期，仍参与诊断）。
+  const activeTasks = db.all(
+    `SELECT * FROM tasks
+       WHERE status = 'dispatched'
+         AND (ddl_at IS NULL OR ddl_at >= datetime('now', 'localtime'))
+       ORDER BY ddl_at ASC`
+  );
+  const skippedRow = db.get(
+    `SELECT COUNT(*) AS cnt FROM tasks
+       WHERE status = 'dispatched'
+         AND ddl_at IS NOT NULL
+         AND ddl_at < datetime('now', 'localtime')`
+  );
+  const skippedExpiredCount = (skippedRow && skippedRow.cnt) || 0;
+  console.log(
+    `[Dashboard Agent] activeTasks=${(activeTasks || []).length} skippedExpired=${skippedExpiredCount}`
+  );
 
   if (!activeTasks || activeTasks.length === 0) {
+    const overallSummary =
+      skippedExpiredCount > 0
+        ? `已自动跳过 ${skippedExpiredCount} 个过期任务，当前没有进行中的活跃任务。`
+        : '当前没有下发的活跃任务，大家都在休息中。';
     return {
       redCount: 0,
       orangeCount: 0,
       greenCount: 0,
       topTasks: [],
-      overallSummary: "当前没有下发的活跃任务，大家都在休息中。",
-      allTasks: []
+      overallSummary,
+      allTasks: [],
+      skippedExpiredCount,
     };
   }
 
-  const tasksDataForAi = [];
+  const taskMeta = activeTasks.map((t) => ({
+    taskId: t.id,
+    title: t.title,
+    ddl_at: t.ddl_at,
+    raw: t,
+  }));
 
-  for (const t of activeTasks) {
-    const taskId = t.id;
-    
-    // 聚合基础指标
-    const base = db.get(
-      `SELECT
-         COUNT(*) AS total,
-         SUM(CASE WHEN ta.status = 'completed'  THEN 1 ELSE 0 END) AS completed_count,
-         SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
-         SUM(CASE WHEN ta.status = 'pending'     THEN 1 ELSE 0 END) AS pending_count,
-         SUM(CASE WHEN ta.status = 'completed' AND ta.completed_at <= ? THEN 1 ELSE 0 END) AS completed_on_time_count,
-         SUM(CASE WHEN ta.status != 'completed' AND datetime('now', 'localtime') > ? THEN 1 ELSE 0 END) AS overdue_count,
-         AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND ? IS NOT NULL THEN (julianday(ta.completed_at) - julianday(?)) * 24 END) AS avg_completion_time_hours,
-         ROUND(SUM(ta.progress) * 1.0 / MAX(COUNT(ta.id), 1), 1) AS avg_progress
-       FROM task_assignments ta
-       WHERE ta.task_id = ?`,
-      [t.ddl_at, t.ddl_at, t.created_at, t.created_at, taskId]
+  // 1) 并行跑子 Agent
+  const regionInsightsByTask = await runRegionAnalyzers(
+    taskMeta.map(({ taskId, title, ddl_at }) => ({ taskId, title, ddl_at })),
+    { concurrency: 6 }
+  );
+
+  // 2) 主 Agent 输入：4 段子 Agent 文案 + 关键 KPI（不含原始 boardView）
+  const tasksDataForAi = taskMeta.map((m) => {
+    const r = regionInsightsByTask[m.taskId] || {};
+    const avgProgRow = db.get(
+      `SELECT ROUND(AVG(ta.progress), 1) AS avg_progress FROM task_assignments ta WHERE ta.task_id = ?`,
+      [m.taskId]
     );
-
-    const total = base.total || 0;
-    const completedCnt = base.completed_count || 0;
-    const inProgCnt = base.in_progress_count || 0;
-    const pendingCnt = base.pending_count || 0;
-    const overdueCnt = base.overdue_count || 0;
-    const completionRate = total > 0 ? parseFloat(((100 * completedCnt) / total).toFixed(2)) : 0;
-    const onTimeCompletionRate = total > 0 ? parseFloat(((100 * (base.completed_on_time_count || 0)) / total).toFixed(2)) : 0;
-    const avgProgress = base.avg_progress || 0;
-
-    // 预警分布统计
-    let p0 = 0, p1 = 0, p2 = 0;
-    const rules = parseAutoNudgeRules(t.auto_nudge_rules);
-    const ddlAtMs = new Date(t.ddl_at).getTime();
-    const createdAtMs = new Date(t.created_at).getTime();
-    const hoursLeft = (ddlAtMs - nowMs) / (1000 * 60 * 60);
-    const passedPct = ddlAtMs - createdAtMs > 0 ? ((nowMs - createdAtMs) / (ddlAtMs - createdAtMs)) * 100 : 100;
-
-    const assignRows = db.all("SELECT * FROM task_assignments WHERE task_id = ?", [taskId]);
-    for (const row of assignRows) {
-      if (row.status === 'completed') continue;
-      const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
-      if (band === 'p0') p0++;
-      else if (band === 'p1') p1++;
-      else if (band === 'p2') p2++;
-    }
-
-    const warningRates = {
-      crisisP0Rate: total > 0 ? parseFloat(((100 * p0) / total).toFixed(2)) : 0,
-      crisisP1Rate: total > 0 ? parseFloat(((100 * p1) / total).toFixed(2)) : 0,
-      crisisP2Rate: total > 0 ? parseFloat(((100 * p2) / total).toFixed(2)) : 0,
+    const avgProgress =
+      avgProgRow && avgProgRow.avg_progress != null ? Number(avgProgRow.avg_progress) : 0;
+    return {
+      taskId: m.taskId,
+      title: m.title,
+      ddl_at: m.ddl_at,
+      avgProgressPercent: avgProgress,
+      regionInsights: {
+        funnel: r.funnel || null,
+        warning: r.warning || null,
+        trend: r.trend || null,
+        rtm: r.rtm || null,
+      },
     };
+  });
 
-    // 漏斗相关：触达人数(pushUserCount) 与 阅读人数(totalReadCount)
-    const pushRow = db.get("SELECT COUNT(DISTINCT target_user_id) AS cnt FROM notification_events WHERE task_id = ? AND event_type = 'task_assigned'", [taskId]);
-    const pushUserCount = pushRow ? pushRow.cnt : 0;
-
-    const readRow = db.get("SELECT COUNT(DISTINCT rr.user_id) AS cnt FROM read_receipts rr JOIN notification_events ne ON ne.id = rr.event_id WHERE ne.task_id = ? AND rr.source = 'task_detail_open'", [taskId]);
-    const totalReadCount = readRow ? readRow.cnt : 0;
-
-    // 催办转化率
-    const nudgeRow = db.get(`
-      SELECT
-        COUNT(DISTINCT ne.target_user_id) AS total_nudged,
-        COUNT(DISTINCT CASE 
-          WHEN ta.status = 'completed' AND ta.completed_at > ne.created_at THEN ne.target_user_id 
-          ELSE NULL 
-        END) AS converted_nudged
-      FROM notification_events ne
-      LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
-      WHERE ne.event_type IN ('nudge_red', 'nudge_orange', 'nudge_yellow') AND ne.task_id = ?
-    `, [taskId]);
-    const totalNudged = nudgeRow ? nudgeRow.total_nudged : 0;
-    const convertedNudged = nudgeRow ? nudgeRow.converted_nudged : 0;
-    const nudgeConversionRate = totalNudged > 0 ? parseFloat(((100 * convertedNudged) / totalNudged).toFixed(2)) : 0;
-
-    tasksDataForAi.push({
-      taskId,
-      title: t.title,
-      ddl_at: t.ddl_at,
-      metrics: {
-        total_assignments: total,
-        completed: completedCnt,
-        in_progress: inProgCnt,
-        pending: pendingCnt,
-        overdue: overdueCnt,
-        completion_rate: completionRate,
-        on_time_completion_rate: onTimeCompletionRate,
-        avg_progress: avgProgress,
-      },
-      warningRates,
-      funnel: {
-        push_users: pushUserCount,
-        read_users: totalReadCount,
-        read_rate: pushUserCount > 0 ? parseFloat(((100 * totalReadCount) / pushUserCount).toFixed(2)) : 0
-      },
-      nudgeConversion: {
-        total_nudged: totalNudged,
-        converted: convertedNudged,
-        rate: nudgeConversionRate
-      }
-    });
-  }
-
-  // 调用 Agent 框架执行诊断 Skill
+  // 3) 主 Agent
   const parsed = await mainAgent.execute('dashboard_diagnose', { tasks: tasksDataForAi });
 
-  // 校验并补充基础信息
-  const taskMap = new Map(tasksDataForAi.map(t => [t.taskId, t]));
-  let redCount = 0, orangeCount = 0, greenCount = 0;
-  
-  const allTasks = (parsed.topTasks || []).map(t => {
+  // 4) 整形 + 落库
+  const taskMap = new Map(tasksDataForAi.map((t) => [t.taskId, t]));
+  let redCount = 0;
+  let orangeCount = 0;
+  let greenCount = 0;
+
+  const allTasks = (parsed.topTasks || []).map((t) => {
     if (t.severity === 'red') redCount++;
     else if (t.severity === 'orange') orangeCount++;
     else greenCount++;
 
     const aiTaskData = taskMap.get(t.taskId);
+    const focusModule = normalizeFocusModule(t.focusModule, aiTaskData);
     return {
       taskId: t.taskId,
       title: aiTaskData ? aiTaskData.title : '未知任务',
       severity: t.severity || 'green',
       insight: t.insight || '',
-      focusModule: t.focusModule || 'north_star',
-      progress: aiTaskData ? aiTaskData.metrics.avg_progress : 0
+      focusModule,
+      focusReason: t.focusReason || '',
+      progress: aiTaskData ? aiTaskData.avgProgressPercent || 0 : 0,
     };
   });
 
@@ -157,22 +155,20 @@ async function generateDashboardAgentInsight(userId) {
     greenCount,
     topTasks: allTasks.slice(0, 3),
     overallSummary: parsed.overallSummary || '所有任务都在稳步推进中。',
-    allTasks: allTasks
+    allTasks,
+    skippedExpiredCount,
   };
 
   const id = nanoid();
   const now = formatNowSqliteLocal();
-  db.run(`
+  db.run(
+    `
     INSERT INTO dashboard_insights 
       (id, module_type, content, context_json, created_by, created_at)
     VALUES (?, 'global_agent', ?, ?, ?, ?)
-  `, [
-    id,
-    'agent response',
-    JSON.stringify(resultData),
-    userId || 1, // 如果为定时的 null，写一个默认的 system ID
-    now
-  ]);
+  `,
+    [id, 'agent response', JSON.stringify(resultData), userId || 1, now]
+  );
 
   return { ...resultData, generatedAt: now };
 }
@@ -192,11 +188,10 @@ async function getDashboardAgentInsight(userId, refresh = false) {
       return data;
     }
   }
-
   return await generateDashboardAgentInsight(userId);
 }
 
 module.exports = {
   getDashboardAgentInsight,
-  generateDashboardAgentInsight
+  generateDashboardAgentInsight,
 };

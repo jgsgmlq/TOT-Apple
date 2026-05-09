@@ -39,7 +39,7 @@ Agent 可使用的能力封装在 `server/agent/tools/` 目录下（如 `dashboa
 
 ### 3.1 现有工具清单（Dashboard Agent）
 
-- **`query_active_tasks`**：无参。返回当前活跃任务的进度、逾期率等系统实时大盘数据。
+- **`query_active_tasks`**：无参。返回任务数组；每项仅 **`taskId` / `title` / `ddl_at` / `avgProgressPercent` / `regionInsights`**。**`regionInsights`** 是 4 个区域子 Agent 已经分别独立分析后的结构化结果（`funnel` / `warning` / `trend` / `rtm`，每个含 `severity` / `summary` / `keyFindings` / `focusHint`，降级时会带 `degraded=true`）。主 Agent 不再处理原始看板大数据，仅基于 4 段子 Agent 文案与 KPI 综合给出 `topTasks` 与 `focusModule`。详见 §7。
 - **`read_agent_guidelines`**：无参。读取 `agent_guidelines` 表中对应 `agent_type` 的全部经验条目并返回为拼接文本。
 - **`upsert_agent_guidelines`**：参数 `{ "merged_markdown_content": "string" }`。Agent 在分析过程中如果发现新规律或纠错经验，会要求它将新知识与旧知识进行合并、去重、压缩（限制在 1000 字以内），然后调用此接口进行全量覆盖写入（UPSERT 逻辑）。这防止了记忆库的无限膨胀和内容冲突。
 
@@ -81,7 +81,68 @@ LangGraph 图包含了以下关键流转节点：
 
 ---
 
+## 7. 多 Agent 协作模型（看板诊断）
+
+为了让 `Dashboard Agent` 在更细粒度上专业化、且单次 Prompt 不再被原始看板数据塞爆，看板诊断从 v1.5.7 起切换为「主 Agent + 4 个区域子 Agent」协作架构：
+
+```
+generateDashboardAgentInsight(userId)
+├── (1) 列出所有 dispatched 任务（**已过期任务自动跳过**：`ddl_at < datetime('now','localtime')` 在数据源处直接过滤；`ddl_at IS NULL` 的视为不可判定过期，仍参与诊断）
+├── (2) 对每个任务 × 4 个区域 → 并行调度 dashboardSubAgents/runRegionAnalyzers
+│       ├── funnelAnalyzer    转化漏斗（reach → read → completion → nudge）
+│       ├── warningAnalyzer   预警风险漏斗（P2/P1/P0 + 红橙黄催办覆盖与转化）
+│       ├── trendAnalyzer     完成趋势（按日新增 / 累计 / 距 ddl 风险）
+│       └── rtmAnalyzer       RTM/门店进度排行（区域分化 + 拖后腿门店）
+├── (3) 汇总 regionInsights 注入主 Agent (skills/dashboardDiagnose)
+│       └── 主 Agent 通过 query_active_tasks 看到 regionInsights
+│           → 综合各区域 severity/focusHint，给出 topTasks/focusModule
+└── (4) 写入 dashboard_insights(global_agent) 作为主 Agent 缓存
+```
+
+### 7.1 子 Agent 契约（promptTemplates.js）
+
+每个子 Agent 接收 **该任务自己区域的瘦身切片**（来自 `dashboardQueryCore` 的同源数据），调用 `simpleChat (deepseek-chat)`，强制返回如下 JSON：
+
+```json
+{
+  "severity": "red|orange|green",
+  "summary":   "≤80 字业务白话总结",
+  "keyFindings": { "<指标中文名>": <数值或字符串>, ... 2~6 项 },
+  "focusHint": "north_star|warning_details|rtm_timezone|crisis_p0|funnel_read_rate|nudge_conversion|metrics_overdue"
+}
+```
+
+JSON 解析失败或 LLM 异常时，每个 analyzer 内置**模板化降级**：基于硬数据（如 P0Rate、taskReadRate、hoursLeft）输出确定性的 severity/summary/focusHint，并打 `degraded=true`，不阻塞主 Agent。
+
+### 7.2 并发与限流
+
+`runRegionAnalyzers` 提供轻量级 limiter，默认 `concurrency = 6`：4 region × N tasks 的所有 LLM 调用并发上限固定为 6，避免 DeepSeek API rate-limit；总 elapsed 在 console 中打点。
+
+### 7.3 缓存策略
+
+- **不缓存**子 Agent 单次输出：每次主 Agent 触发刷新都会重跑一遍 4 段子 Agent，确保实时。
+- **保留**主 Agent 已有的缓存（`dashboard_insights.module_type='global_agent'`）；当 `getDashboardAgentInsight(userId, refresh=false)` 时直接吐最近一条 `context_json`。
+
+### 7.4 共享记忆
+
+子 Agent 与主 Agent **共享** `agent_guidelines` 表的 `agent_type='dashboard'` 命名空间。当前阶段子 Agent **只读不写**——只有主 Agent 会调用 `upsert_agent_guidelines` 维护那条全量经验。
+
+### 7.5 过期任务跳过规则
+
+`generateDashboardAgentInsight` 在数据源处即过滤掉 **已过期任务**（`tasks.status = 'dispatched'` 且 `ddl_at < datetime('now','localtime')`）：
+
+- 时区口径与 `dashboardQueryCore.getOverviewBoardData` 中判断 overdue 的 `datetime('now','localtime') > t.ddl_at` 严格一致，避免 8 小时偏差。
+- `ddl_at IS NULL` 的任务**保留**进入诊断（不可判定过期）。
+- 过滤动作发生在子 Agent 之前，**4 个区域子 Agent 与主 Agent 都不会**为已过期任务消耗 LLM token。
+- 返回结构新增字段 `skippedExpiredCount`（向后兼容，未参与跳过时为 0），同时落入 `dashboard_insights.context_json`。
+- 当过滤后 `activeTasks.length === 0` 且存在跳过项时，`overallSummary` 改为「已自动跳过 N 个过期任务，当前没有进行中的活跃任务。」；其余分支保持原文案。
+
+---
+
 ## 6. 更新日志与版本记录
 
+- **v1.5.8 (2026-05-09)**: 看板诊断 `generateDashboardAgentInsight` 在数据源处自动跳过已过期任务（`ddl_at < now('localtime')`），子 Agent 与主 Agent 都不再为过期任务消耗 LLM token；返回结构新增 `skippedExpiredCount`；空任务分支文案带上跳过计数。
+- **v1.5.7 (2026-05-09)**: 看板诊断切换到「主 Agent + 4 个区域子 Agent」协作架构。`query_active_tasks` 不再返回原始 `boardView`，改为返回每个任务的 4 段 `regionInsights`（funnel/warning/trend/rtm）。新增 `server/services/dashboardSubAgents/` 目录与 `runRegionAnalyzers`（默认并发 6、各 analyzer 自带模板降级）；`dashboardQueryCore` 增加 `getWarningsBoardData` / `getNudgeConversionBoardData`，`/dashboard/warnings` 与 `/dashboard/nudge-conversion` 路由薄壳化。
+- **v1.5.6 (2026-05-08)**: 看板诊断 `query_active_tasks` 载荷以 **`boardView` 为主**（overview + heatmap_rtm + heatmap_store + trend_daily，与 dashboard HTTP 同源）；`dashboardQueryCore` 增加 **`getTrendBoardData`**；`/dashboard/trend` 路由改为调用 core。
 - **v4.0.0 (2026-04-27)**: Executive Chat LangGraph 迁移方案与原型落地（目标态文档与原型代码已建立，主链待切换）。
 - **v1.5.3 (2026-04-23)**: 首次引入全局 `agent_guidelines` 记忆表与 `agentTools` 工具链。将原有的静态 Prompt 接口 `/api/v1/dashboard/agent/diagnose` 升级为具备多轮思考能力的自主 Agent，实现动态经验加载与自动进化。
