@@ -204,6 +204,64 @@
     }
   };
 
+  const FOCUS_ALIAS_MAP: Record<string, string> = {
+    // coarse legacy
+    north_star: 'module-north_star',
+    warning_details: 'module-warning_details',
+    rtm_timezone: 'module-rtm_timezone',
+    crisis_p0: 'module-crisis_p0',
+    funnel_read_rate: 'module-funnel_read_rate',
+    nudge_conversion: 'module-nudge_conversion',
+    metrics_overdue: 'module-metrics_overdue',
+    // fine-grained drill targets
+    on_time_completion_rate: 'module-metrics_overdue',
+    avg_completion_time: 'module-metrics_overdue',
+    task_reach_rate: 'module-funnel_read_rate',
+    task_read_rate: 'module-funnel_read_rate',
+    warning_count_total: 'module-warning_details',
+    warning_p2_rate: 'module-warning_p2_rate',
+    warning_p1_rate: 'module-warning_p1_rate',
+    warning_p0_rate: 'module-crisis_p0',
+    warning_p2_stores: 'module-warning_details',
+    warning_p1_stores: 'module-warning_details',
+    warning_p0_stores: 'module-crisis_p0',
+    nudge_red_conversion: 'module-nudge_conversion',
+    nudge_orange_conversion: 'module-nudge_conversion',
+    nudge_yellow_conversion: 'module-nudge_conversion',
+    nudge_total_conversion: 'module-nudge_conversion',
+    overdue_count: 'module-metrics_overdue',
+    deadline_risk: 'module-trend_chart',
+    trend_daily_drop: 'module-trend_chart',
+    trend_silent_days: 'module-trend_chart',
+    rtm_completion_gap: 'module-rtm_rank',
+    rtm_worst_bucket: 'module-rtm_rank',
+    store_worst_bucket: 'module-rtm_rank',
+  };
+
+  const resolveFocusModuleDomId = (focusModule?: string | null): string | null => {
+    if (!focusModule || focusModule === 'none') return null;
+    if (focusModule.startsWith('module-')) return focusModule;
+    return FOCUS_ALIAS_MAP[focusModule] || `module-${focusModule}`;
+  };
+
+  const getActionTextByFocus = (focusModule?: string, severity?: string) => {
+    if (!focusModule || focusModule === 'none') return '查看明细';
+    const fm = focusModule;
+    if (['warning_p0_rate', 'warning_p0_stores', 'crisis_p0'].includes(fm))
+      return severity === 'red' ? '紧急处理P0事故' : '防范重大风险';
+    if (['nudge_total_conversion', 'nudge_red_conversion', 'nudge_orange_conversion', 'nudge_yellow_conversion', 'nudge_conversion'].includes(fm))
+      return severity === 'red' ? '优化Nudge转化' : '分析Nudge效果';
+    if (['task_read_rate', 'task_reach_rate', 'funnel_read_rate'].includes(fm))
+      return severity === 'red' ? '拉升阅读率' : '分析阅读瓶颈';
+    if (['overdue_count', 'deadline_risk', 'metrics_overdue'].includes(fm))
+      return severity === 'red' ? '催办过期指标' : '跟进延期数据';
+    if (['rtm_completion_gap', 'rtm_worst_bucket', 'store_worst_bucket', 'rtm_timezone'].includes(fm))
+      return '查看区域差异';
+    if (['on_time_completion_rate', 'avg_completion_time', 'north_star'].includes(fm))
+      return '洞察核心瓶颈';
+    return severity === 'red' ? '立即介入风险' : '洞察数据异动';
+  };
+
   const loadAgentInsights = async (forceRefresh = false) => {
     isAgentLoading.value = true;
     try {
@@ -214,16 +272,7 @@
           if (t.severity === 'red') sev = 'red';
           if (t.severity === 'orange') sev = 'yellow';
 
-          let actionText = '查看明细';
-          if (sev === 'red') {
-            if (t.focusModule === 'funnel_alerts') actionText = '紧急干预流失';
-            else if (t.focusModule === 'completion_daily') actionText = '追赶执行进度';
-            else actionText = '立即介入风险';
-          } else if (sev === 'yellow') {
-            if (t.focusModule === 'funnel_alerts') actionText = '分析流失卡点';
-            else if (t.focusModule === 'north_star') actionText = '洞察核心瓶颈';
-            else actionText = '洞察数据异动';
-          }
+          const actionText = getActionTextByFocus(t.focusModule, sev);
 
           return {
             diagnosis_id: `diag-auto-${t.taskId}`,
@@ -239,6 +288,7 @@
             action_status: 'pending',
             generated_at: agentRes.generatedAt || new Date().toISOString(),
             focus_module: t.focusModule,
+            focus_reason: t.focusReason || '',
           };
         });
 
@@ -1138,6 +1188,43 @@
     return task ? task.task_title : '';
   });
 
+  let focusSpotlightTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearFocusSpotlight = (el?: HTMLElement | null, host?: HTMLElement | null) => {
+    if (focusSpotlightTimer) {
+      clearTimeout(focusSpotlightTimer);
+      focusSpotlightTimer = null;
+    }
+    if (el) {
+      el.classList.remove('focus-spotlight');
+    }
+    if (host) {
+      host.classList.remove('focus-spotlight-host');
+    }
+  };
+
+  const applyFocusSpotlight = (el: HTMLElement) => {
+    const host = el.closest('.glass-card') as HTMLElement | null;
+    if (host) host.classList.add('focus-spotlight-host');
+
+    // restart animation if user clicks repeatedly
+    el.classList.remove('focus-spotlight');
+    // Force reflow to restart css animation
+    void el.offsetWidth;
+    el.classList.add('focus-spotlight');
+    clearFocusSpotlight(undefined, undefined);
+    focusSpotlightTimer = setTimeout(() => {
+      el.classList.remove('focus-spotlight');
+      if (host) host.classList.remove('focus-spotlight-host');
+      focusSpotlightTimer = null;
+    }, 3200);
+  };
+
+  const showFocusReasonToast = (reason?: string) => {
+    if (!reason || !String(reason).trim()) return;
+    // 这里明确只展示 topTasks.focusReason，不再做截断，避免与 insight 文案混淆。
+    message.info(`聚焦原因：${String(reason).trim()}`, { duration: 3200 });
+  };
+
   const handleDiagnosisClick = (diagnosis: any) => {
     if (diagnosis.action_type === 'none') {
       expandedTasks.value = !expandedTasks.value;
@@ -1149,15 +1236,13 @@
       
       if (diagnosis.focus_module) {
         setTimeout(() => {
-          const el = document.getElementById(`module-${diagnosis.focus_module}`);
+          const domId = resolveFocusModuleDomId(diagnosis.focus_module);
+          if (!domId) return;
+          const el = document.getElementById(domId);
           if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            
-            // 采用更柔和的 Apple 风格光晕动效
-            el.classList.add('transition-all', 'duration-1000', 'shadow-[0_0_60px_rgba(0,113,227,0.18)]', 'ring-1', 'ring-[#0071E3]/10', 'z-20');
-            setTimeout(() => {
-              el.classList.remove('shadow-[0_0_60px_rgba(0,113,227,0.18)]', 'ring-1', 'ring-[#0071E3]/10', 'z-20');
-            }, 3000);
+            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            applyFocusSpotlight(el as HTMLElement);
+            showFocusReasonToast(diagnosis.focus_reason);
           }
         }, 300); // 预留一定时间等待组件可能的数据切换加载渲染
       }
@@ -3258,7 +3343,7 @@
                   @feedback="handleAiFeedback('northStar', $event)"
                   @copy="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"
                 />
-                <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
+                <div id="module-metrics_overdue" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
                     class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
@@ -3378,7 +3463,7 @@
                   </div>
                 </div>
                 <div class="h-px bg-gray-100 mx-6"></div>
-                <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
+                <div id="module-funnel_read_rate" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
                     class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
@@ -3659,6 +3744,7 @@
                 >
                   <!-- P2 Card -->
                   <div
+                    id="module-warning_p2_rate"
                     @click="handleSelectAlertFilter('P2')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3725,6 +3811,7 @@
 
                   <!-- P1 Card -->
                   <div
+                    id="module-warning_p1_rate"
                     @click="handleSelectAlertFilter('P1')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3791,6 +3878,7 @@
 
                   <!-- P0 Card -->
                   <div
+                    id="module-crisis_p0"
                     @click="handleSelectAlertFilter('P0')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3854,7 +3942,7 @@
                   </div>
                 </div>
               </div>
-              <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
+              <div id="module-nudge_conversion" class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
                 <AiAnalyzePopover
                   class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
                   :loading="boardInsightCard.warning.loading"
@@ -4043,8 +4131,8 @@
                         <div
                           class="absolute bottom-full mb-2 left-0 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                         >
-                          总预警转化率 = (最初进入 P2 风险的人数 - 当前最深已触发预警层级的人数) /
-                          最初进入 P2 风险人数。根据时间动态衡量从起点到当前的挽回效率。
+                          总催办转化率 = (最初进入 P2 风险的人数 - 当前最深已触发预警层级的人数) /
+                          最初进入 P2 风险人数。根据时间动态衡量催办挽回效率。
                         </div>
                       </div>
                       <div class="flex items-baseline gap-1">
@@ -4067,6 +4155,7 @@
           <!-- Layer 4: Trend Chart + Region Ranking -->
           <div id="module-rtm_timezone" class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
             <div
+              id="module-trend_chart"
               class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card"
             >
               <!-- Trend Chart Container -->
@@ -4168,7 +4257,7 @@
                 </div>
               </div>
             </div>
-            <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
+            <div id="module-rtm_rank" class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
               <!-- Region Ranking Component Inlined -->
               <div
                 v-if="true"
@@ -5800,6 +5889,81 @@
 </template>
 <style scoped>
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+  @keyframes focusSpotPulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0 rgba(0, 113, 227, 0);
+      transform: translateZ(0) scale(1);
+      filter: saturate(1);
+    }
+    12% {
+      box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.45), 0 0 34px rgba(0, 113, 227, 0.3);
+      transform: translateZ(0) scale(1.012);
+      filter: saturate(1.05);
+    }
+    38% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.3), 0 0 20px rgba(0, 113, 227, 0.18);
+      transform: translateZ(0) scale(1.004);
+      filter: saturate(1.02);
+    }
+    56% {
+      box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.36), 0 0 26px rgba(0, 113, 227, 0.22);
+      transform: translateZ(0) scale(1.008);
+      filter: saturate(1.03);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0 rgba(0, 113, 227, 0);
+      transform: translateZ(0) scale(1);
+      filter: saturate(1);
+    }
+  }
+
+  @keyframes focusSpotOutlineFade {
+    0% {
+      opacity: 0;
+      transform: scale(0.995);
+    }
+    14% {
+      opacity: 0.95;
+      transform: scale(1);
+    }
+    58% {
+      opacity: 0.55;
+      transform: scale(1.004);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.01);
+    }
+  }
+
+  .focus-spotlight {
+    position: relative;
+    border-radius: 14px;
+    animation: focusSpotPulse 2.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    transition: box-shadow 0.4s ease;
+    z-index: 15;
+    isolation: isolate;
+    will-change: transform, box-shadow;
+  }
+
+  .focus-spotlight::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 18px;
+    border: 1px solid rgba(0, 113, 227, 0.34);
+    pointer-events: none;
+    animation: focusSpotOutlineFade 2.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    will-change: opacity, transform;
+  }
+
+  /* 某些卡片容器本身有 overflow-hidden，会把聚焦光晕裁切掉；临时放开以保证视觉完整 */
+  .focus-spotlight-host {
+    overflow: visible !important;
+    position: relative;
+    z-index: 14;
+  }
 
   .new-board-app {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',

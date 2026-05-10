@@ -397,23 +397,61 @@ function generateNotifications(assignments) {
   // 为了让预警漏斗符合绝对的物理时间逻辑，我们根据任务真实的 ddl_at 倒推他们经历过的预警。
   // 坚决杜绝“明明距离截止还有3天，却收到了48小时临期预警”的穿越 Bug。
   const now = Date.now();
+  const minuteMs = 60 * 1000;
 
   for (const a of assignments) {
     const t = TASKS.find(t => t.id === a.task_id);
     const ddlMs = new Date(t.ddl_at).getTime();
     const createdMs = new Date(t.created_at).getTime();
+    const receivedMs = a.received_at ? new Date(a.received_at).getTime() : null;
+    const completedMs = a.completed_at ? new Date(a.completed_at).getTime() : null;
     const hoursLeft = (ddlMs - now) / 3600000;
     const passedPct = (now - createdMs) / (ddlMs - createdMs) * 100;
+    const p2BaseMs = createdMs + (ddlMs - createdMs) * 0.5;
+    const p1BaseMs = ddlMs - 48 * 3600000;
+
+    const pushHistoricalNudge = (eventType, severity, dedupeRule, content, rawAtMs) => {
+      if (!Number.isFinite(rawAtMs)) return null;
+      let nudgeAtMs = rawAtMs;
+
+      // 不能早于用户真正收到任务；否则会出现“未触达先预警”的伪数据。
+      if (Number.isFinite(receivedMs)) {
+        nudgeAtMs = Math.max(nudgeAtMs, receivedMs + minuteMs);
+      }
+      // 历史事件不能发生在未来。
+      nudgeAtMs = Math.min(nudgeAtMs, now - minuteMs);
+      // 已完成用户必须满足“先催后完”。
+      if (Number.isFinite(completedMs)) {
+        nudgeAtMs = Math.min(nudgeAtMs, completedMs - minuteMs);
+      }
+
+      // 最终仍无法满足时间顺序则放弃造这条事件。
+      if (!Number.isFinite(nudgeAtMs)) return null;
+      if (Number.isFinite(receivedMs) && nudgeAtMs <= receivedMs) return null;
+      if (Number.isFinite(completedMs) && nudgeAtMs >= completedMs) return null;
+      if (nudgeAtMs <= createdMs) return null;
+
+      events.push({
+        id: nanoid(),
+        task_id: a.task_id,
+        assignment_id: a.id,
+        target_user_id: a.user_id,
+        store_id: a.store_id,
+        event_type: eventType,
+        severity,
+        dedupe_key: `autonudge:${dedupeRule}:${a.id}`,
+        content,
+        initiator_id: null,
+        created_at: toDbStr(nudgeAtMs),
+      });
+      a.nudge_count += 1;
+      return nudgeAtMs;
+    };
 
     if (a.status === 'completed') {
-      // 已经完成的人，如果当时进度过半了，有 30% 的概率收到过 P2
+      // 已完成的人仅补“可证明发生在完成之前”的历史 P2，避免先完成后催办。
       if (passedPct >= 50 && Math.random() < 0.3) {
-        events.push({
-          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
-          event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
-          initiator_id: null, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
-        });
-        a.nudge_count += 1;
+        pushHistoricalNudge('nudge_yellow', 'yellow', 'deadlineCrisisP2', '历史P2催办', p2BaseMs);
       }
     } else {
       // 未完成的人，必定处于现阶段的某个状态。
@@ -421,23 +459,16 @@ function generateNotifications(assignments) {
       // 当前的最高状态，我们留给后面的 autoNudge 引擎去真实触发，不在这里预写。
 
       // 如果现在距离截止不足 48 小时（意味着目前处于 P1 或 P0），那他历史必然触发过 P2（时间过半）。
+      let p2CreatedAtMs = null;
       if (hoursLeft <= 48) {
-        events.push({
-          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
-          event_type: 'nudge_yellow', severity: 'yellow', dedupe_key: `autonudge:deadlineCrisisP2:${a.id}`, content: '历史P2催办',
-          initiator_id: null, created_at: toDbStr(createdMs + (ddlMs - createdMs) * 0.5)
-        });
-        a.nudge_count += 1;
+        p2CreatedAtMs = pushHistoricalNudge('nudge_yellow', 'yellow', 'deadlineCrisisP2', '历史P2催办', p2BaseMs);
       }
 
       // 如果现在距离截止不足 24 小时（意味着目前处于 P0），那他历史必然触发过 P1（48小时预警）。
       if (hoursLeft <= 24) {
-        events.push({
-          id: nanoid(), task_id: a.task_id, assignment_id: a.id, target_user_id: a.user_id, store_id: a.store_id,
-          event_type: 'nudge_orange', severity: 'orange', dedupe_key: `autonudge:deadlineCrisisP1:${a.id}`, content: '历史P1催办',
-          initiator_id: null, created_at: toDbStr(ddlMs - 48 * 3600000)
-        });
-        a.nudge_count += 1;
+        // P1 时间不得早于已生成的 P2，保证预警等级时序单调递进。
+        const p1AtMs = Number.isFinite(p2CreatedAtMs) ? Math.max(p1BaseMs, p2CreatedAtMs + minuteMs) : p1BaseMs;
+        pushHistoricalNudge('nudge_orange', 'orange', 'deadlineCrisisP1', '历史P1催办', p1AtMs);
       }
     }
   }

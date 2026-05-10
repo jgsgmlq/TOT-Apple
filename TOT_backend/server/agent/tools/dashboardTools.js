@@ -1,13 +1,14 @@
 'use strict';
+const util = require('util');
 const { db } = require('../../db/index');
-const { nanoid } = require('nanoid');
 
 const dashboardToolsSchema = [
   {
     type: 'function',
     function: {
       name: 'query_active_tasks',
-      description: '获取当前看板上所有下发中的活跃任务及其执行进度指标数据。这些数据是由你的用户提供给你的业务基石。',
+      description:
+        '获取当前下发中活跃任务列表。每项仅含 taskId / title / ddl_at / avgProgressPercent / regionInsights，其中 regionInsights 由 4 个区域子 Agent (funnel/warning/trend/rtm) 已经分别分析得到的结构化结果（severity/summary/keyFindings/focusHint/degraded?）。主 Agent 依据这些 regionInsights 综合得出 topTasks 与 focusModule，不再处理原始看板大数据。',
       parameters: {
         type: 'object',
         properties: {},
@@ -26,20 +27,6 @@ const dashboardToolsSchema = [
         required: []
       }
     }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'upsert_agent_guidelines',
-      description: '更新你的经验记忆库。如果你在本次分析中获得了新知识或教训，必须将新旧知识融合成一篇不超过1000字的完整 Markdown 文档，然后调用此工具进行【全量覆写】。这是你在维护一份状态维基，而不是写日记。',
-      parameters: {
-        type: 'object',
-        properties: {
-          merged_markdown_content: { type: 'string', description: '融合了新旧知识的、精炼后的全量经验 Markdown 文本' }
-        },
-        required: ['merged_markdown_content']
-      }
-    }
   }
 ];
 
@@ -48,8 +35,40 @@ async function executeDashboardTool(name, args, context) {
   const agentType = context.agentType || 'dashboard';
 
   if (name === 'query_active_tasks') {
-    console.log('context.tasks', context.tasks);
-    return context.tasks || [];
+    const tasks = context.tasks || [];
+    const callCount = (context._toolCallCounts ||= {});
+    callCount.query_active_tasks = (callCount.query_active_tasks || 0) + 1;
+
+    if (callCount.query_active_tasks > 1) {
+      console.warn(
+        `[Dashboard Agent] query_active_tasks called ${callCount.query_active_tasks} times; returning short-circuit notice instead of full payload.`
+      );
+      return {
+        notice:
+          '你已经调用过 query_active_tasks 一次，并且返回结果是稳定不变的。请不要再调用任何工具，立即基于已有的 regionInsights 直接输出最终 JSON 报告。',
+        taskCount: tasks.length,
+      };
+    }
+
+    const sample = tasks[0];
+    console.log(
+      '[Dashboard Agent] query_active_tasks:',
+      sample && {
+        taskCount: tasks.length,
+        sampleTaskId: sample.taskId,
+        regionKeys: sample.regionInsights && Object.keys(sample.regionInsights),
+        regionSeverities:
+          sample.regionInsights &&
+          Object.fromEntries(
+            Object.entries(sample.regionInsights).map(([k, v]) => [k, v ? v.severity : null])
+          ),
+        jsonBytes: JSON.stringify(tasks).length,
+      }
+    );
+    if (process.env.DEBUG_DASHBOARD_AGENT === '1') {
+      console.log(util.inspect(tasks, { depth: 6, maxArrayLength: 4, breakLength: 100 }));
+    }
+    return tasks;
   }
   
   if (name === 'read_agent_guidelines') {
@@ -59,26 +78,6 @@ async function executeDashboardTool(name, args, context) {
     );
     if (!rows || rows.length === 0) return '暂无经验准则，请自由发挥。';
     return rows.map((r, i) => `${i + 1}. ${r.rule_text}`).join('\n');
-  }
-
-  if (name === 'upsert_agent_guidelines') {
-    const { merged_markdown_content } = args;
-    if (!merged_markdown_content) return { error: 'merged_markdown_content 不能为空' };
-    
-    try {
-      db.transaction(() => {
-        // 先清理该 agentType 下的所有旧记忆
-        db.run('DELETE FROM agent_guidelines WHERE agent_type = ?', [agentType]);
-        // 插入全量融合成的一条最新记录
-        db.run(
-          'INSERT INTO agent_guidelines (id, agent_type, rule_text) VALUES (?, ?, ?)',
-          [nanoid(), agentType, merged_markdown_content]
-        );
-      });
-      return { status: 'success', message: '记忆库维基已成功覆写' };
-    } catch (e) {
-      return { error: '覆写记忆库失败: ' + e.message };
-    }
   }
 
   throw new Error(`Unknown tool ${name}`);
