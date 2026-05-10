@@ -12,6 +12,9 @@ server/services/
   dispatchService.js      ← 任务下发（⚠️ 与 Spec 仍有差距）
   taskService.js          ← 任务 CRUD（⚠️ 需持续对齐）
   taskSummaryService.js   ← 看板聚合（⚠️ 响应 shape 需持续校准）
+  dashboardQueryCore.js   ← §5.1 overview + §5.2 heatmap + §5.x trend + §5.5 warnings + §5.9 nudge-conversion 数据拼装（HTTP 路由与看板 Agent / 子 Agent 共用）
+  dashboardAgentService.js ← 看板诊断主流程：调度 4 个区域子 Agent → 注入 regionInsights → 主 Agent 综合（已过期任务 ddl_at < now 在数据源处自动跳过；详见 specs/12-AGENT-ARCHITECTURE.md §7.5）
+  dashboardSubAgents/     ← 4 个区域子 Agent（funnel / warning / trend / rtm）+ runRegionAnalyzers（默认并发 6）+ promptTemplates + shared(JSON 解析与降级)
   stateSync.js            ← WebSocket 广播（✅ 已接入角色裁剪）
   nudgeService.js         ← 催办服务（✅ 已创建）
   notificationService.js  ← 通知服务（✅ 已创建）

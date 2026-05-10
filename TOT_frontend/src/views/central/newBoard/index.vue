@@ -4,6 +4,7 @@
   import { getTaskList, updateTask, revokeTask, triggerTaskAutoNudge } from '@/api/task';
   import { useDialog } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
+  import { useVoiceInput } from '@/hooks/useVoiceInput';
   import {
     getDashboardOverview,
     getDashboardWarnings,
@@ -16,8 +17,13 @@
     type CreateDashboardInsightBody,
   } from '@/api/dashboard';
   import { marked } from 'marked';
-  import { createDashboardChatSession, streamDashboardChatMessage } from '@/api/chat';
-  import { useMessage } from 'naive-ui';
+  import {
+    createDashboardChatSession,
+    streamDashboardChatMessage,
+    formatReplyContentText,
+  } from '@/api/chat';
+  import { runExecStyleSseChat } from '@/utils/execStreamReply';
+  import { useMessage, useNotification } from 'naive-ui';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
   import { renderInsightMarkdown } from '@/utils/markdownRender';
@@ -26,6 +32,7 @@
   import { useRouter } from 'vue-router';
 
   const message = useMessage();
+  const notification = useNotification();
   const dialog = useDialog();
   const router = useRouter();
 
@@ -129,12 +136,32 @@
 
       if (currentTasks.value.length > 0 && !currentTaskId.value) {
         // Pick the very first actionable diagnosis task from the agent's flow
-        const firstActionableDiag = diagnosisData.value?.find(
+        // 优先挑选红灯（最严重），其次黄灯，最后随便挑一个有效的
+        let firstActionableDiag = diagnosisData.value?.find(
           (d) =>
-            d.action_type !== 'none' &&
+            d.severity === 'red' &&
             d.related_task_id &&
             currentTasks.value.some((t) => t.task_id === d.related_task_id)
         );
+
+        if (!firstActionableDiag) {
+          firstActionableDiag = diagnosisData.value?.find(
+            (d) =>
+              d.severity === 'yellow' &&
+              d.related_task_id &&
+              currentTasks.value.some((t) => t.task_id === d.related_task_id)
+          );
+        }
+
+        if (!firstActionableDiag) {
+          firstActionableDiag = diagnosisData.value?.find(
+            (d) =>
+              d.action_type !== 'none' &&
+              d.related_task_id &&
+              currentTasks.value.some((t) => t.task_id === d.related_task_id)
+          );
+        }
+
         if (firstActionableDiag) {
           currentTaskId.value = firstActionableDiag.related_task_id;
           isAutoCollapsed.value = true;
@@ -199,6 +226,64 @@
     }
   };
 
+  const FOCUS_ALIAS_MAP: Record<string, string> = {
+    // coarse legacy
+    north_star: 'module-north_star',
+    warning_details: 'module-warning_details',
+    rtm_timezone: 'module-rtm_timezone',
+    crisis_p0: 'module-crisis_p0',
+    funnel_read_rate: 'module-funnel_read_rate',
+    nudge_conversion: 'module-nudge_conversion',
+    metrics_overdue: 'module-metrics_overdue',
+    // fine-grained drill targets
+    on_time_completion_rate: 'module-metrics_overdue',
+    avg_completion_time: 'module-metrics_overdue',
+    task_reach_rate: 'module-funnel_read_rate',
+    task_read_rate: 'module-funnel_read_rate',
+    warning_count_total: 'module-warning_details',
+    warning_p2_rate: 'module-warning_p2_rate',
+    warning_p1_rate: 'module-warning_p1_rate',
+    warning_p0_rate: 'module-crisis_p0',
+    warning_p2_stores: 'module-warning_details',
+    warning_p1_stores: 'module-warning_details',
+    warning_p0_stores: 'module-crisis_p0',
+    nudge_red_conversion: 'module-nudge_conversion',
+    nudge_orange_conversion: 'module-nudge_conversion',
+    nudge_yellow_conversion: 'module-nudge_conversion',
+    nudge_total_conversion: 'module-nudge_conversion',
+    overdue_count: 'module-metrics_overdue',
+    deadline_risk: 'module-trend_chart',
+    trend_daily_drop: 'module-trend_chart',
+    trend_silent_days: 'module-trend_chart',
+    rtm_completion_gap: 'module-rtm_rank',
+    rtm_worst_bucket: 'module-rtm_rank',
+    store_worst_bucket: 'module-rtm_rank',
+  };
+
+  const resolveFocusModuleDomId = (focusModule?: string | null): string | null => {
+    if (!focusModule || focusModule === 'none') return null;
+    if (focusModule.startsWith('module-')) return focusModule;
+    return FOCUS_ALIAS_MAP[focusModule] || `module-${focusModule}`;
+  };
+
+  const getActionTextByFocus = (focusModule?: string, severity?: string) => {
+    if (!focusModule || focusModule === 'none') return '查看明细';
+    const fm = focusModule;
+    if (['warning_p0_rate', 'warning_p0_stores', 'crisis_p0'].includes(fm))
+      return severity === 'red' ? '紧急处理P0事故' : '防范重大风险';
+    if (['nudge_total_conversion', 'nudge_red_conversion', 'nudge_orange_conversion', 'nudge_yellow_conversion', 'nudge_conversion'].includes(fm))
+      return severity === 'red' ? '优化Nudge转化' : '分析Nudge效果';
+    if (['task_read_rate', 'task_reach_rate', 'funnel_read_rate'].includes(fm))
+      return severity === 'red' ? '拉升阅读率' : '分析阅读瓶颈';
+    if (['overdue_count', 'deadline_risk', 'metrics_overdue'].includes(fm))
+      return severity === 'red' ? '催办过期指标' : '跟进延期数据';
+    if (['rtm_completion_gap', 'rtm_worst_bucket', 'store_worst_bucket', 'rtm_timezone'].includes(fm))
+      return '查看区域差异';
+    if (['on_time_completion_rate', 'avg_completion_time', 'north_star'].includes(fm))
+      return '洞察核心瓶颈';
+    return severity === 'red' ? '立即介入风险' : '洞察数据异动';
+  };
+
   const loadAgentInsights = async (forceRefresh = false) => {
     isAgentLoading.value = true;
     try {
@@ -209,16 +294,7 @@
           if (t.severity === 'red') sev = 'red';
           if (t.severity === 'orange') sev = 'yellow';
 
-          let actionText = '查看明细';
-          if (sev === 'red') {
-            if (t.focusModule === 'funnel_alerts') actionText = '紧急干预流失';
-            else if (t.focusModule === 'completion_daily') actionText = '追赶执行进度';
-            else actionText = '立即介入风险';
-          } else if (sev === 'yellow') {
-            if (t.focusModule === 'funnel_alerts') actionText = '分析流失卡点';
-            else if (t.focusModule === 'north_star') actionText = '洞察核心瓶颈';
-            else actionText = '洞察数据异动';
-          }
+          const actionText = getActionTextByFocus(t.focusModule, sev);
 
           return {
             diagnosis_id: `diag-auto-${t.taskId}`,
@@ -233,6 +309,8 @@
             action_type: sev === 'red' ? 'escalate' : 'remind',
             action_status: 'pending',
             generated_at: agentRes.generatedAt || new Date().toISOString(),
+            focus_module: t.focusModule,
+            focus_reason: t.focusReason || '',
           };
         });
 
@@ -1029,7 +1107,13 @@
   };
 
   const handleRefresh = async () => {
-    isContentLoading.value = true;
+    // Only set isContentLoading if there's no data at all. Otherwise, we do a silent background refresh
+    // and rely on specific module loading states (like isAgentLoading) or a small spinner.
+    const isFirstLoad = !allTasks.value.length;
+    if (isFirstLoad) {
+      isContentLoading.value = true;
+    }
+    
     lastUpdated.value = new Date();
     try {
       // 强制刷新 Agent 诊断数据和基础任务列表
@@ -1048,7 +1132,9 @@
     } catch (error) {
       message.error('刷新失败，请稍后重试');
     } finally {
-      isContentLoading.value = false;
+      if (isFirstLoad) {
+        isContentLoading.value = false;
+      }
     }
   };
 
@@ -1132,6 +1218,88 @@
     return task ? task.task_title : '';
   });
 
+  let focusSpotlightTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearFocusSpotlight = (el?: HTMLElement | null, host?: HTMLElement | null) => {
+    if (focusSpotlightTimer) {
+      clearTimeout(focusSpotlightTimer);
+      focusSpotlightTimer = null;
+    }
+    if (el) {
+      el.classList.remove('focus-spotlight');
+    }
+    if (host) {
+      host.classList.remove('focus-spotlight-host');
+    }
+  };
+
+  const applyFocusSpotlight = (el: HTMLElement) => {
+    const host = el.closest('.glass-card') as HTMLElement | null;
+    if (host) host.classList.add('focus-spotlight-host');
+
+    // restart animation if user clicks repeatedly
+    el.classList.remove('focus-spotlight');
+    // Force reflow to restart css animation
+    void el.offsetWidth;
+    el.classList.add('focus-spotlight');
+    clearFocusSpotlight(undefined, undefined);
+    focusSpotlightTimer = setTimeout(() => {
+      el.classList.remove('focus-spotlight');
+      if (host) host.classList.remove('focus-spotlight-host');
+      focusSpotlightTimer = null;
+    }, 3200);
+  };
+
+  const showFocusReasonToast = (diagnosis: any) => {
+    const reason = diagnosis.focus_reason;
+    if (!reason || !String(reason).trim()) return;
+    
+    // 使用高级通知替代普通的 toast 提示，停留时间延长
+    notification.create({
+      title: 'AI 智能导航定位',
+      class: 'ai-nav-notification',
+      content: String(reason).trim(),
+      meta: `根据您的点击，已自动聚焦至【${diagnosis.task_title || '当前任务'}】的关键指标`,
+      duration: 5000,
+      keepAliveOnHover: true,
+      closable: true,
+      avatar: () =>
+        h(
+          'div',
+          {
+            class: 'flex items-center justify-center w-9 h-9 text-blue-500',
+          },
+          [
+            h(
+              'svg',
+              {
+                xmlns: 'http://www.w3.org/2000/svg',
+                width: '22',
+                height: '22',
+                viewBox: '0 0 24 24',
+                fill: 'none',
+                stroke: 'currentColor',
+                'stroke-width': '2',
+                'stroke-linecap': 'round',
+                'stroke-linejoin': 'round',
+              },
+              [
+                h('circle', { cx: '12', cy: '12', r: '7' }),
+                h('path', { d: 'M12 2v2' }),
+                h('path', { d: 'M12 20v2' }),
+                h('path', { d: 'm4.93 4.93 1.41 1.41' }),
+                h('path', { d: 'm17.66 17.66 1.41 1.41' }),
+                h('path', { d: 'M2 12h2' }),
+                h('path', { d: 'M20 12h2' }),
+                h('path', { d: 'm6.34 17.66-1.41 1.41' }),
+                h('path', { d: 'm19.07 4.93-1.41 1.41' }),
+                h('circle', { cx: '12', cy: '12', r: '2' }),
+              ]
+            ),
+          ]
+        ),
+    });
+  };
+
   const handleDiagnosisClick = (diagnosis: any) => {
     if (diagnosis.action_type === 'none') {
       expandedTasks.value = !expandedTasks.value;
@@ -1139,6 +1307,19 @@
       isAutoCollapsed.value = true;
       if (diagnosis.related_task_id) {
         triggerLoading(() => (currentTaskId.value = diagnosis.related_task_id));
+      }
+      
+      if (diagnosis.focus_module) {
+        setTimeout(() => {
+          const domId = resolveFocusModuleDomId(diagnosis.focus_module);
+          if (!domId) return;
+          const el = document.getElementById(domId);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            applyFocusSpotlight(el as HTMLElement);
+            showFocusReasonToast(diagnosis);
+          }
+        }, 300); // 预留一定时间等待组件可能的数据切换加载渲染
       }
     }
   };
@@ -1174,8 +1355,7 @@
     () => (diagnosisData.value || []).filter((d) => d.severity === 'yellow').length
   );
   const greenCount = computed(() => {
-    const alertTasksCount = redCount.value + yellowCount.value;
-    return Math.max(0, (allTasks.value || []).length - alertTasksCount);
+    return currentTasks.value.filter((t) => t.status === 'dispatched' && t.severity === 'green').length;
   });
 
   // ... Metrics
@@ -1827,6 +2007,18 @@
   ]);
   const aiInputText = ref('');
   const aiIsTyping = ref(false);
+
+  let dashboardVoiceInitialText = '';
+  const { isRecording: aiIsRecording, isTranscribing: aiIsTranscribing, toggleRecording: aiToggleRecording } = useVoiceInput((text, isFinal) => {
+    if (!dashboardVoiceInitialText && aiInputText.value) {
+      dashboardVoiceInitialText = aiInputText.value + ' ';
+    }
+    aiInputText.value = dashboardVoiceInitialText + text;
+    if (isFinal) {
+      dashboardVoiceInitialText = '';
+    }
+  });
+
   let currentChatAbortController: AbortController | null = null;
 
   const AiChart = defineComponent({
@@ -1983,6 +2175,12 @@
       let hasThinking = false;
 
       if (msg.role === 'ai') {
+        // 与 Executive Chat 一致：LangGraph 流式已将思考过程写入 msg.thinking
+        if (typeof msg.thinking === 'string' && msg.thinking.trim()) {
+          thinkingText = msg.thinking.trim();
+          hasThinking = true;
+        }
+
         const suggRegex = /\`\`\`suggestions\s*([\s\S]*?)\s*\`\`\`/;
         const suggMatch = text.match(suggRegex);
         if (suggMatch) {
@@ -2011,34 +2209,35 @@
         }
         text = text.replace(chartRegex, '');
 
-        // 提取 <think> 标签内容 (针对标准 DeepSeek Reasoning 格式)
-        const thinkRegex = /<think>([\s\S]*?)<\/think>/;
-        const thinkMatch = text.match(thinkRegex);
-        if (thinkMatch) {
-          thinkingText = thinkMatch[1].trim();
-          text = text.replace(thinkRegex, '').trim();
-          hasThinking = true;
-        } else {
-          // 软启发式截断规则：寻找 Markdown 结构化语法的起点
-          let splitIndex = -1;
-          const headingMatch = text.match(/\n(#|---|\|\s|- \*\*)/);
-          if (headingMatch && headingMatch.index > 0) {
-            splitIndex = headingMatch.index;
+        // 已有来自流式拆分的 thinking 时，不再从正文里猜「思考过程」，避免重复截断
+        if (!hasThinking) {
+          // 提取 <think> 标签内容 (针对标准 DeepSeek Reasoning 格式)
+          const thinkRegex = /<think>([\s\S]*?)<\/think>/;
+          const thinkMatch = text.match(thinkRegex);
+          if (thinkMatch) {
+            thinkingText = thinkMatch[1].trim();
+            text = text.replace(thinkRegex, '').trim();
+            hasThinking = true;
           } else {
-            const doubleNewlineMatch = text.match(/\n\n/);
-            if (doubleNewlineMatch && doubleNewlineMatch.index > 0) {
-              splitIndex = doubleNewlineMatch.index;
+            // 软启发式截断规则：寻找 Markdown 结构化语法的起点
+            let splitIndex = -1;
+            const headingMatch = text.match(/\n(#|---|\|\s|- \*\*)/);
+            if (headingMatch && headingMatch.index > 0) {
+              splitIndex = headingMatch.index;
+            } else {
+              const doubleNewlineMatch = text.match(/\n\n/);
+              if (doubleNewlineMatch && doubleNewlineMatch.index > 0) {
+                splitIndex = doubleNewlineMatch.index;
+              }
             }
-          }
 
-          if (splitIndex > 0) {
-            const preamble = text.substring(0, splitIndex).trim();
-            // 如果前面的"非结构化"段落超过20个字符且不包含代码块，我们认为它是啰嗦的思考过程
-            // 而且如果 preamble 以 "好的"、"首先"、"让我" 等开头，那就是典型的 AI 思考语言
-            if (preamble.length > 20 && !preamble.includes('```')) {
-              thinkingText = preamble;
-              text = text.substring(splitIndex).trim();
-              hasThinking = true;
+            if (splitIndex > 0) {
+              const preamble = text.substring(0, splitIndex).trim();
+              if (preamble.length > 20 && !preamble.includes('```')) {
+                thinkingText = preamble;
+                text = text.substring(splitIndex).trim();
+                hasThinking = true;
+              }
             }
           }
         }
@@ -2164,36 +2363,70 @@
     aiScrollChatToBottom();
 
     const replyIndex = aiMessages.value.length;
-    aiMessages.value.push({ role: 'ai', content: '' });
+    aiMessages.value.push({
+      role: 'ai',
+      content: '',
+      thinking: undefined as string | undefined,
+      replyContent: null,
+      done: false,
+    });
 
     currentChatAbortController = new AbortController();
 
     try {
-      await streamDashboardChatMessage(
+      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        streamDashboardChatMessage,
         aiSessionId.value,
         text,
-        (chunk) => {
-          if (chunk && chunk.text) {
-            aiMessages.value[replyIndex].content += chunk.text;
-            aiScrollChatToBottom();
-          }
-        },
-        (data) => {
-          aiIsTyping.value = false;
-          currentChatAbortController = null;
+        (p) => {
+          aiMessages.value[replyIndex] = {
+            role: 'ai',
+            content: p.content,
+            thinking: p.thinking,
+            jsonStream: p.jsonStream,
+            partialReply: p.partialReply ?? undefined,
+            activeToolName: p.activeToolName,
+            done: false,
+            replyContent: null,
+          };
           aiScrollChatToBottom();
         },
-        (err) => {
-          aiMessages.value[replyIndex].content +=
-            '<br><span style="color:red">请求异常终止或超时</span>';
-          aiIsTyping.value = false;
-          currentChatAbortController = null;
-          aiScrollChatToBottom();
+        async (clarify) => {
+          const prompt =
+            (clarify as { prompt?: string; message?: string })?.prompt ||
+            (clarify as { message?: string })?.message ||
+            '需要您补充一些信息后才能继续。';
+          message.warning(prompt);
         },
         { signal: currentChatAbortController.signal }
       );
+
+      const last = aiMessages.value[replyIndex];
+      if (last) {
+        last.done = true;
+        last.activeToolName = undefined;
+        // 与 Executive Chat 一致：FC/LangGraph 以 markdownContent 为最终正文
+        const merged =
+          result.markdownContent ||
+          formatReplyContentText(result.replyContent ?? null);
+        last.content = merged || last.content || '';
+        last.thinking = thinkingSnapshot?.trim()
+          ? thinkingSnapshot.trim()
+          : last.thinking || undefined;
+        last.replyContent = result.replyContent ?? null;
+      }
     } catch (e) {
-      //
+      const last = aiMessages.value[replyIndex];
+      if (last) {
+        last.content =
+          (last.content || '') +
+          '<br><span style="color:red">请求异常终止或超时，请重试。</span>';
+        last.done = true;
+      }
+    } finally {
+      aiIsTyping.value = false;
+      currentChatAbortController = null;
+      aiScrollChatToBottom();
     }
   };
 
@@ -2691,10 +2924,12 @@
             >
             <button
               @click="handleRefresh"
-              class="text-[#86868B] hover:text-[#0071E3] transition-colors duration-200 flex items-center justify-center p-1 rounded-md hover:bg-gray-100/50"
+              class="text-[#86868B] hover:text-[#0071E3] transition-colors duration-200 flex items-center justify-center p-1 rounded-md hover:bg-gray-100/50 disabled:opacity-50"
               title="手动刷新"
+              :disabled="isAgentLoading"
             >
               <svg
+                :class="{ 'animate-spin': isAgentLoading }"
                 xmlns="http://www.w3.org/2000/svg"
                 width="14"
                 height="14"
@@ -3042,9 +3277,10 @@
                 :key="task.task_id"
                 @click="handleTaskSelect(task.task_id)"
                 class="px-6 py-4 hover:bg-gray-50 cursor-pointer transition-colors duration-200 flex items-center gap-4 border-b border-gray-100 last:border-b-0"
+                :class="{ 'opacity-60 grayscale': taskCategory === 'overdue' }"
               >
                 <div
-                  v-if="task.status === 'dispatched'"
+                  v-if="taskCategory !== 'overdue' && task.status === 'dispatched'"
                   class="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
                   :class="{
                     'animate-alert-pulse-red': task.severity === 'red',
@@ -3175,7 +3411,7 @@
             </n-tabs>
           </div>
           <!-- Layer 2: Core Metrics + Funnel -->
-          <div class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
+          <div id="module-north_star" class="mt-8 flex flex-col lg:flex-row gap-5 items-stretch">
             <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10 group/card relative">
               <!-- Metric Cards Component Inlined -->
               <div class="glass-card flex flex-col h-full w-full border-none flex-1 relative">
@@ -3196,7 +3432,7 @@
                   @feedback="handleAiFeedback('northStar', $event)"
                   @copy="handleCopyAiInsight(boardInsightCard.northStar.content, 'northStar')"
                 />
-                <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
+                <div id="module-metrics_overdue" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
                     class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
@@ -3316,7 +3552,7 @@
                   </div>
                 </div>
                 <div class="h-px bg-gray-100 mx-6"></div>
-                <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
+                <div id="module-funnel_read_rate" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
                     class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
@@ -3588,7 +3824,7 @@
                 </div>
               </div>
             </div>
-            <div class="flex flex-col lg:flex-row gap-5 items-stretch">
+            <div id="module-warning_details" class="flex flex-col lg:flex-row gap-5 items-stretch">
               <div class="lg:w-[320px] flex-shrink-0 flex flex-col z-10">
                 <!-- Alert Summary Component Inlined -->
                 <div
@@ -3597,6 +3833,7 @@
                 >
                   <!-- P2 Card -->
                   <div
+                    id="module-warning_p2_rate"
                     @click="handleSelectAlertFilter('P2')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3663,6 +3900,7 @@
 
                   <!-- P1 Card -->
                   <div
+                    id="module-warning_p1_rate"
                     @click="handleSelectAlertFilter('P1')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3729,6 +3967,7 @@
 
                   <!-- P0 Card -->
                   <div
+                    id="module-crisis_p0"
                     @click="handleSelectAlertFilter('P0')"
                     class="flex-1 p-5 relative cursor-pointer hover:bg-gray-50/50 transition-colors duration-200 flex flex-col justify-center"
                     :style="{
@@ -3792,7 +4031,7 @@
                   </div>
                 </div>
               </div>
-              <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
+              <div id="module-nudge_conversion" class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
                 <AiAnalyzePopover
                   class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
                   :loading="boardInsightCard.warning.loading"
@@ -3981,8 +4220,8 @@
                         <div
                           class="absolute bottom-full mb-2 left-0 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
                         >
-                          总预警转化率 = (最初进入 P2 风险的人数 - 当前最深已触发预警层级的人数) /
-                          最初进入 P2 风险人数。根据时间动态衡量从起点到当前的挽回效率。
+                          总催办转化率 = (最初进入 P2 风险的人数 - 当前最深已触发预警层级的人数) /
+                          最初进入 P2 风险人数。根据时间动态衡量催办挽回效率。
                         </div>
                       </div>
                       <div class="flex items-baseline gap-1">
@@ -4003,8 +4242,9 @@
           </div>
 
           <!-- Layer 4: Trend Chart + Region Ranking -->
-          <div class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
+          <div id="module-rtm_timezone" class="mt-16 mb-16 flex flex-col lg:flex-row gap-5 items-stretch">
             <div
+              id="module-trend_chart"
               class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 z-10 relative group/card"
             >
               <!-- Trend Chart Container -->
@@ -4106,7 +4346,7 @@
                 </div>
               </div>
             </div>
-            <div class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
+            <div id="module-rtm_rank" class="flex-1 min-w-0 flex flex-col glass-card p-6 md:p-8 relative group/card">
               <!-- Region Ranking Component Inlined -->
               <div
                 v-if="true"
@@ -5703,6 +5943,23 @@
               class="flex-1 max-h-24 bg-transparent border-none outline-none resize-none text-[14px] text-[#111827] py-2 px-3 placeholder:text-[#86868B]"
             ></textarea>
             <button
+              @click="aiToggleRecording"
+              :class="[
+                'p-2 rounded-lg flex-shrink-0 transition-colors duration-200 mb-0.5 mr-0.5',
+                aiIsRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-gray-400 hover:bg-gray-100 shadow-sm border border-gray-200',
+              ]"
+              :disabled="aiIsTranscribing"
+            >
+              <svg v-if="!aiIsTranscribing" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" x2="12" y1="19" y2="22"/>
+              </svg>
+              <svg v-else class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+            </button>
+            <button
               @click="aiSendMessage"
               :disabled="!aiInputText.trim() || aiIsTyping"
               :class="[
@@ -5738,6 +5995,104 @@
 </template>
 <style scoped>
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+  /* ====== AI 导航通知卡片 终极修正 ====== */
+  /* 让 Wrapper 恢复自然状态，不要在它身上加背景、阴影和边框 */
+  :global(.ai-nav-notification) {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  
+  /* 将所有发光、圆角、背景样式全部击穿打在真正的内部卡片 DOM（.n-notification）上 */
+  :global(.ai-nav-notification.n-notification),
+  :global(.ai-nav-notification .n-notification) {
+    border-radius: 28px !important;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.8) !important;
+    backdrop-filter: blur(28px) saturate(200%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(200%) !important;
+    background-color: rgba(255, 255, 255, 0.72) !important;
+    
+    /* 强制重写原生宽度和外边距，解决出框问题 */
+    width: 360px !important;
+    max-width: 90vw !important;
+    margin-right: 24px !important; 
+
+    /* 覆盖原生内边距变量，确保头像对齐 */
+    --n-padding-top: 18px !important;
+    --n-padding-bottom: 18px !important;
+    --n-padding-left: 20px !important;
+    --n-padding-right: 20px !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification__avatar),
+  :global(.ai-nav-notification.n-notification .n-notification__avatar) {
+    top: 18px !important;
+    left: 20px !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification-main),
+  :global(.ai-nav-notification.n-notification .n-notification-main) {
+    margin-left: 44px !important;
+    width: calc(100% - 44px) !important;
+  }
+
+  :global(.ai-nav-notification .n-notification-main__header),
+  :global(.ai-nav-notification.n-notification .n-notification-main__header) {
+    font-weight: 700 !important;
+    color: #1d1d1f !important;
+    font-size: 15px !important;
+  }
+
+  :global(.ai-nav-notification .n-notification-main__content),
+  :global(.ai-nav-notification.n-notification .n-notification-main__content) {
+    margin-top: 6px !important;
+    color: #424245 !important;
+    line-height: 1.5 !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification-main-footer__meta) {
+    margin-top: 4px !important;
+  }
+
+  @keyframes focusSpotPulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0px rgba(0, 113, 227, 0);
+      background-color: transparent;
+    }
+    15% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.25), 0 16px 56px -8px rgba(0, 113, 227, 0.65);
+      background-color: rgba(0, 113, 227, 0.03);
+    }
+    50% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.1), 0 8px 32px -4px rgba(0, 113, 227, 0.25);
+      background-color: transparent;
+    }
+    85% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.25), 0 16px 56px -8px rgba(0, 113, 227, 0.65);
+      background-color: rgba(0, 113, 227, 0.03);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0px rgba(0, 113, 227, 0);
+      background-color: transparent;
+    }
+  }
+
+  .focus-spotlight {
+    position: relative;
+    border-radius: 14px;
+    animation: focusSpotPulse 3s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+    z-index: 15;
+    isolation: isolate;
+  }
+
+  /* 某些卡片容器本身有 overflow-hidden，会把聚焦光晕裁切掉；临时放开以保证视觉完整 */
+  .focus-spotlight-host {
+    overflow: visible !important;
+    position: relative;
+    z-index: 14;
+  }
 
   .new-board-app {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC',

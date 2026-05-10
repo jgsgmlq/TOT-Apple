@@ -288,5 +288,9 @@ export interface DashboardAgentInsightResult {
 export const getDashboardAgentInsight = (params?: { refresh?: boolean }) => {
   return Alova.Get<DashboardAgentInsightResult>('/dashboard/agent/diagnose', {
     params,
+    meta: {
+      skipAuthRedirect: true,
+      skipGlobalErrorMessage: true,
+    },
   });
 };

@@ -1,5 +1,14 @@
 # ToT API 接口定义文档
 
+### v1.5.7（2026-05-09）
+
+- **看板诊断 → 多 Agent 协作架构**：`GET /dashboard/agent/diagnose` 由「主 Agent + 4 个区域子 Agent」协作生成。后端 `server/services/dashboardSubAgents/` 在主 Agent 触发前对每个 dispatched 任务并行运行 4 个子 Agent —— **`funnelAnalyzer`**（转化漏斗）、**`warningAnalyzer`**（预警风险漏斗）、**`trendAnalyzer`**（完成趋势）、**`rtmAnalyzer`**（RTM/门店进度排行），全局并发上限 6（`runRegionAnalyzers`）。每个子 Agent 都基于 **`dashboardQueryCore`** 的同源数据切片调用 `simpleChat (deepseek-chat)`，强制返回 `{ severity, summary, keyFindings, focusHint }`，LLM 异常时 analyzer 内置模板化降级（带 `degraded=true`）。主 Agent 通过 **`query_active_tasks`** 看到的每个任务对象 **不再**包含 `boardView`，而是仅含 **`taskId` / `title` / `ddl_at` / `avgProgressPercent` / `regionInsights`**（4 段子 Agent 文案）。子 Agent 单次输出**不缓存**，主 Agent 自身 `dashboard_insights(global_agent)` 缓存策略保持不变。
+- **`/dashboard/warnings` 与 `/dashboard/nudge-conversion` 路由薄壳化**：原内嵌的 SQL/聚合逻辑迁移至 **`dashboardQueryCore.js`** 的 **`getWarningsBoardData`** / **`getNudgeConversionBoardData`**，HTTP 路由与 `warningAnalyzer` 共用同一函数，根除"口径漂移"。同时修正了原 `/warnings` 的 `triggerDesc` 模板字符串误转义 bug（前端 description 现在显示真实小时数与人数）。
+
+### v1.5.6（2026-05-08）
+
+- **看板 Agent 输入与看板 KPI 同源**：生成 `GET /dashboard/agent/diagnose` 时，每个活跃任务的 **`query_active_tasks`** 载荷仅含 **`taskId` / `title` / `ddl_at` / `boardView`**。其中 **`boardView.overview`** 与 **`GET /dashboard/overview?taskId=`** 的 **`data`** 同函数拼装，并附加 **`avgProgressPercent`**；**`heatmap_rtm`** / **`heatmap_store`** 与 **`GET /dashboard/heatmap`**（`rtmLevel=rtm` / `store`，过长时截取低完成率桶）；**`trend_daily`** 与 **`GET /dashboard/trend?type=daily`** 同源（过长时保留最近若干日）。**不再**下发旧的 `metrics` / `funnel` / `warningRates` 平行摘要。终端 `console.log` 对深层对象常显示为 `[Object]`，不代表发给大模型的 tool 结果被截断。**注：v1.5.7 起 `boardView` 被 `regionInsights` 取代。**
+
 ### v1.5.5（2026-04-30）
 
 - **任务合集按平台颗粒度统计**：看板 **`GET /dashboard/overview`、`/heatmap`、`/store-rank`、`/warnings`、`/trend`、`/nudge-conversion`** 支持可选查询参数 **`platform`**（与 `PUT /assignments/:id/status` 的 `complete_platform` 使用同一套平台别名解析，实现见 **`server/utils/platforms.js`**）。传入后：完成/未完成人数、完成率、趋势与催办转化等以对应 **`task_assignments.*_completed`** 列为「完成」判定；**进行中 / 待开始** 与 **`employeeReadCount`** 与 **`read_receipts.source = task_detail_open:{平台标签}`** 精确匹配（如 `task_detail_open:MyPAL`）。**未传 `platform`** 时：**`employeeReadCount`** 仍为 **`source = 'task_detail_open'`**（精确，**不含**带 `:平台` 后缀的回执——与旧版「整单已读」写入一致）。**`taskReachRate`**：未传 `platform` 时为登录 / `received_at` 条件；传 `platform` 时为「存在该 **`source`** 的平台详情已读回执」的 **EXISTS** 子查询。非法 `platform` → **400 `DASH_006`**。成功响应 **`data.platform`** 回显规范化标签（`MyPAL` / `SmartSales` / `AiDemo` / `LiveBroadcast`）或 **`null`**（未传参时与旧版一致）。
@@ -2018,9 +2027,12 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   - 后端设有定时任务（每小时执行一次）自动在后台请求 AI 获取结果并存入数据库，并通过 WebSocket 广播 `dashboard_agent_updated` 给前端，提醒前端可以重新拉取。
   - 本诊断接口底层已升级为 **ReAct** (Reasoning and Acting) 框架，Agent 执行时会自动进行多轮思考（Chain of Thought）。
   - Agent 具备 **Tool Calling** (函数调用) 能力，能够自主调用工具获取当前任务列表。
-  - Agent 具备 **长期记忆与自我进化** 能力：每次分析前它会自主调用 `read_agent_guidelines` 读取属于自己领域的经验；在分析遇到新情况时，会主动调用 `upsert_agent_guidelines` 将新旧知识融合成不超过 1000 字的精华维基文档，覆盖写入数据库表 `agent_guidelines`。
+  - **多 Agent 协作**（v1.5.7+）：在主 Agent 执行前，**`server/services/dashboardSubAgents/runRegionAnalyzers`** 会对每个 dispatched 任务并行运行 4 个区域子 Agent（`funnelAnalyzer` / `warningAnalyzer` / `trendAnalyzer` / `rtmAnalyzer`，全局并发上限 6）。每个子 Agent 基于 **`dashboardQueryCore`** 的同源切片调用 `simpleChat (deepseek-chat)`，强制返回 `{ severity, summary, keyFindings, focusHint }`，LLM 异常时分析器内置模板降级（`degraded=true`）。子 Agent 单次输出**不缓存**。
+  - 主 Agent 通过 **`query_active_tasks`** 看到的每个任务对象 **不再**包含原始看板大数据（不再有 `boardView`），而是仅含 **`taskId` / `title` / `ddl_at` / `avgProgressPercent` / `regionInsights`**（4 段子 Agent 文案：`funnel` / `warning` / `trend` / `rtm`）。主 Agent 综合 4 个 region 的 `severity` 与 `focusHint` 给出最终 `topTasks` 与 `focusModule`，引用数字必须来自 `keyFindings`。
+  - Agent 具备 **长期记忆与自我进化** 能力：每次分析前它会自主调用 `read_agent_guidelines` 读取属于自己领域的经验；在分析遇到新情况时，会主动调用 `upsert_agent_guidelines` 将新旧知识融合成不超过 1000 字的精华维基文档，覆盖写入数据库表 `agent_guidelines`。**子 Agent 与主 Agent 共享 `agent_type='dashboard'` 命名空间，但子 Agent 当前仅读不写。**
   - Agent 根据读取到的数据和经验，评判各任务的紧急程度：`red`（最多1个）、`orange`、`green`。
-  - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块)。
+  - 为每个任务提供一行建议（`insight`），并指定需要下钻聚焦的模块（`focusModule`），可取值：`north_star` (北极星_漏斗模块), `warning_details` (预警详情模块), `rtm_timezone` (分RTM完成率下钻和分时区完成人数模块), `crisis_p0`, `funnel_read_rate`, `nudge_conversion`, `metrics_overdue`。
+  - 提供 `focusReason` 字段，作为对 `focusModule` 推荐的智能业务解释，包含具体的业务数据支撑。
   - 对总体其余任务情况提供一句业务总结 `overallSummary`。
 - **响应体（成功）**：
   ```json
@@ -2038,6 +2050,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
           "severity": "red",
           "insight": "任务即将到期且进度严重滞后，需重点催办",
           "focusModule": "warning_details",
+          "focusReason": "催办转化率仅为15%，远低于均值，面临极高P0逾期风险，需立刻进入预警详情模块止损",
           "progress": 25.4
         }
       ],

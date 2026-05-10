@@ -428,6 +428,14 @@ async function chatWithTools(options) {
       body.response_format = options.response_format;
     }
 
+    // DeepSeek v4 系列默认开启思考模式；显式关闭以减少延迟与上下文消耗。
+    // 等价于 OpenAI Python SDK 的 extra_body={"thinking": {"type": "disabled"}}。
+    if (options.disableThinking) {
+      body.thinking = { type: 'disabled' };
+    } else if (options.thinking) {
+      body.thinking = options.thinking;
+    }
+
     const isDebugEnabled = String(process.env.DEBUG_AI_LOG).toLowerCase() === 'true';
     const startTime = isDebugEnabled ? Date.now() : 0;
 
@@ -726,6 +734,9 @@ async function simpleChat(messages, options = {}) {
     model: options.model || 'deepseek-chat',
     temperature: options.temperature ?? 0.1,
     maxTokens: options.maxTokens ?? 512,
+    disableThinking: options.disableThinking,
+    thinking: options.thinking,
+    response_format: options.response_format,
   });
   if (options.returnUsage) {
     return {

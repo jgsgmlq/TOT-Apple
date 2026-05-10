@@ -115,8 +115,8 @@ function deriveIntentType(calledToolNames, fallbackIntent) {
   if (calledToolNames.has('getWarningsData')) return 'warning_query';
   if (calledToolNames.has('getRegionDetailData')) return 'drill_down';
   if (calledToolNames.has('getStoreDetailData')) return 'drill_down';
-  if (calledToolNames.has('getTaskListData')) return 'project_status';
   if (calledToolNames.has('getOverviewData')) return 'progress_query';
+  if (calledToolNames.has('getTaskListData')) return 'project_status';
   return fallbackIntent || 'unknown';
 }
 
@@ -462,11 +462,17 @@ async function runIntentRouting(userMessage, history, regionScope, options = {})
 // ─── Function Calling mode (Main) ─────────────────────────────────────────────
 // FC System Prompt 静态模板：内嵌 ${memorySection} 占位，promptHash 对「空记忆版」求值一次即可稳定聚合。
 function buildFcSystemPrompt(memorySection = '') {
+  const nowString = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
   return `【角色定义】
   你是苹果零售培训系统的高管数据分析助手。服务对象是 VP 和区域总监。
   你的能力范围：培训完成率查询、矩阵式多维分析（对比、排行、多指标并列）、项目状态、预警门店、区域/门店下钻（支持大区、渠道RTM、业态Format等过滤）、统计分析（分位数/分布/相关性/预测）。
   你没有能力：发送邮件、催办、修改数据。
   ${memorySection}
+  
+  【当前系统时间（重要基准）】
+  现在的真实系统时间是：${nowString}
+  请你以此作为时间基准，去判断各个任务数据中的截止时间或相对时间。
+
   【工具使用指导】
   1. 优先使用 queryExecutiveMetrics：当你需要查询【完成率、预警率（P0/P1）、耗时、起步异常率】等核心指标，且涉及【大区对比、业态对比、门店排行、渠道对比】或【多度量组合】时，必须优先调用 queryExecutiveMetrics 工具。该工具支持通过 filters 参数按 rtm (如 Carrier, Monobrand) 或 format 进行过滤。
   2. 实体继承：若用户问题中缺少区域/门店/任务信息，但历史对话中有，必须自动继承。

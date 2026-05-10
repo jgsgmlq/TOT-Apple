@@ -42,7 +42,8 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(requestId);
 
 // ─── 根路径与健康检查（无页面：前端默认 Vite :8001）──────────────────────────────

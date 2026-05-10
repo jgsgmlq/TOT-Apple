@@ -39,7 +39,7 @@ const chatAgentRunner = require('../services/chatAgentRunner');
 async function main() {
   const regionScope = { type: 'national', regions: null, rtm: null };
   const reply = await chatAgentRunner.run(
-    'Q1 培训完成率大概是多少？',
+    '整体培训完成率大概是多少？',
     [],
     regionScope,
     { sessionId: `fc-e2e-${Date.now()}` }
@@ -47,8 +47,8 @@ async function main() {
 
   const ok =
     reply &&
-    typeof reply.overview === 'string' &&
-    reply.overview.length > 0;
+    typeof reply.markdownContent === 'string' &&
+    reply.markdownContent.length > 0;
 
   console.log(JSON.stringify({
     event: 'fc_e2e_done',
@@ -57,7 +57,7 @@ async function main() {
     intentType: reply._intentType,
     intentResolvedBy: reply._intentResolvedBy,
     toolMeta: reply._toolMeta,
-    overviewPreview: reply.overview ? reply.overview.slice(0, 160) : null,
+    overviewPreview: reply.markdownContent ? reply.markdownContent.slice(0, 160) : null,
   }));
 
   if (!ok) {
