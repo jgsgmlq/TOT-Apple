@@ -7,7 +7,7 @@
 | 读者 | 外部 AI / Agent 工程师（架构评审与设计评估） |
 | 范围 | 编排架构、状态模型、意图与工具映射、请求工作流、SSE / HITL 契约、风险与落地缺口 |
 | 实现真值 | 以 `TOT_backend/server` 下代码为准；与本文冲突时以可复现代码行为为准 |
-| 校对日期 | 2026-05-11 (v4.1) |
+| 校对日期 | 2026-05-11 (v4.2) |
 | 校对范围 | `routes/chat.js`、`services/chatService.js`、`agent/graph/{graph,nodes,state,intents}.js` |
 
 > **版本提示**　仓库内部分历史规格文档仍写「LangGraph 未接主链 / 默认 `chatAgentRunner`」，与**当前默认流式路由**不符。以本文 §2 为权威叙述。
@@ -447,6 +447,13 @@ fc_ExecuteTool        →  消费并清空；产出落入 toolResults / calledTo
 | Memory Worker | 已实现 | `bullMqWorker` / `publishMemoryIngestion` |
 | `decideChart`（v4.1） | 已实现 | 纯函数图表决策；ChartData 注入 FC LLM prompt，LLM 自主决定使用/修改/追问 |
 | HITL 选项增强（v4.1） | 已实现 | 缺参时从 schema enum + 对话历史提取候选项；始终提供"其他"输入 |
+| HITL DB 查询候选项（v4.2） | 已实现 | 低置信/缺参时直接从 stores/tasks 表查询候选 |
+| Langfuse 全节点覆盖（v4.2） | 已实现 | 13 节点全部接入 span/generation；`meta_trace_id` 由 Router 写入 state 传播 |
+| 闲聊捷径（v4.2） | 已实现 | <5 字 chat_only 直达 FinalResponseStep |
+| 多意图检测（v4.2） | 已实现 | 连接词/多问号/长分句→全工具+平坦 prior |
+| Prompt 独立文件（v4.2） | 已实现 | `prompts/` 目录 + registry 版本管理（router/fc_agent/chat_reply） |
+| `searchEntities`（v4.2） | 已实现 | 名称→ID 消歧（task/store/region/channel_l3/channel_l4） |
+| `decisionRules`（v4.2） | 已实现 | 集中业务规则（correctMode/selectTier/getLowConfidenceEntities/hasUrgentSignal） |
 
 > 消歧请以 `event: clarify`（§4）为准，不要用 `delta.phase = 'clarify'` 脑补。
 
@@ -582,6 +589,13 @@ Graph 在 `ContextAnalyzerRouter` 之后调用 `normalizeIntent`（`agent/graph/
 - Heavy tier 过早收口（v4.1：`recursionLimit: 60` + 消息截断已缓解部分）。
 - 大规模并发下 SqliteSaver 竞争（P1 迁移至 Postgres Checkpointer）。
 
+### 已缓解（v4.2）
+
+- ~~工具错误信息透传 SYSTEM_ERROR~~ → `sanitizeUserFacingMarkdown` 拦截，翻译为三种场景话术。
+- ~~HITL 候选项质量差~~ → 改为直接从 stores/tasks 表查询，不再用正则匹配 Markdown 碎片。
+- ~~Langfuse 节点覆盖不全~~ → 13 个节点全部接入 span/generation，`meta_trace_id` 由 Router 写入 state 向下传播。
+- ~~Prompt 散落内联、无版本控制~~ → `prompts/` 目录 + registry 版本管理。
+
 ### 已缓解（v4.1）
 
 - ~~`fc_*` 循环缺硬顶~~ → `recursionLimit: 60` 防整图递归超限；`max_super_steps` 按 tier 限制 LLM 调用步数。
@@ -661,11 +675,17 @@ server/agent/graph/graph.js
 server/agent/graph/nodes.js
 server/agent/graph/state.js
 server/agent/graph/routingPolicy.js
+server/agent/graph/decisionRules.js
+server/agent/graph/decideChart.js
+server/agent/graph/toolCallUtils.js
+server/agent/graph/renderers.js
+server/agent/graph/intents.js
 server/services/chatToolsService.js
 server/chat_tools/
 server/agent/queue/
-server/agent/graph/decideChart.js
+server/prompts/
 server/utils/sseResponse.js
+server/utils/tracer.js
 server/scripts/evaluate_langgraph.js
 ```
 
@@ -675,8 +695,9 @@ server/scripts/evaluate_langgraph.js
 
 | 字段 | 内容 |
 |---|---|
-| 校对日期 | 2026-05-11 (v4.1) |
-| 核对范围 | `routes/chat.js`、`chatService`（`sendMessageStreamLangGraph` / `resume*`）、`agent/graph/`（`graph.js` / `nodes.js` / `state.js` / `intents.js` / `decideChart.js` / `routingPolicy.js` / `renderers.js`） |
-| v4.1 关键变更 | ① `chat_only` 不再直达 `FinalResponseStep`，统一走 FC 循环（LLM 据历史自判）；② `ToolRetrieve` BM25 注入对话上下文 + seedSet 过滤 + chat_only 平坦 prior；③ `decideChart` 纯函数图表决策，ChartData 注入 FC LLM prompt 供其自由选择；④ Router 注入对话历史以理解"可以""需要"等确认语；⑤ HITL 缺参选项支持 schema enum + 对话历史提取；⑥ `recursionLimit: 60`；⑦ SSE keepalive 15s；⑧ FC 消息上下文截断（`FC_HISTORY_MAX_MESSAGES`） |
+| 校对日期 | 2026-05-11 (v4.2) |
+| 核对范围 | `routes/chat.js`、`chatService`、`agent/graph/`（`graph.js` / `nodes.js` / `state.js` / `intents.js` / `decideChart.js` / `routingPolicy.js` / `renderers.js` / `decisionRules.js` / `toolCallUtils.js`）、`prompts/`（`registry.js` / `router.js` / `fc_agent.js` / `chat_reply.js`）、`chat_tools/`（全部 10 个工具） |
+| v4.2 关键变更（本日） | ① Prompt 独立文件 + registry 版本管理；② `decisionRules.js` 集中业务规则（correctMode/selectTier/getLowConfidenceEntities/hasUrgentSignal）；③ `searchEntities` 工具（名称→ID 消歧）；④ 闲聊捷径：<5 字直达 FinalResponseStep；⑤ 工具错误友好化（SYSTEM_ERROR→自然语言）；⑥ FC prompt "Summarize first"；⑦ 工具描述 LLM 友好（加【标签】+何时使用）；⑧ 多意图检测：连接词/多问号/长分句→全工具+平坦 prior；⑨ HITL 候选项从正则→数据库查询；⑩ 13 节点全接入 Langfuse span（meta_trace_id 传播链）；⑪ FC_HISTORY_MAX_MESSAGES 截断；⑫ 低置信 HITL 无候选时走闲聊 |
+| v4.1 关键变更 | ① `chat_only` 不再直达 `FinalResponseStep`，统一走 FC 循环；② `ToolRetrieve` BM25 注入对话上下文 + seedSet 过滤 + chat_only 平坦 prior；③ `decideChart` 纯函数图表决策；④ Router 注入对话历史；⑤ HITL 缺参选项；⑥ `recursionLimit: 60`；⑦ SSE keepalive；⑧ 消息上下文截断 |
 | SSE 真源参考 | `utils/sseResponse.js` |
 
