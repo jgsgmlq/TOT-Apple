@@ -33,6 +33,7 @@ export interface ClarifyPayload {
   data?: {
     toolCallId?: string;
     resumeToken?: string;
+    threadId?: string;
     prompt?: string;
     options?: Array<{ id: string; label: string; value?: unknown }>;
     toolCallIdList?: string[];
@@ -43,6 +44,7 @@ export interface ClarifyPayload {
   prompt?: string;
   options?: Array<{ id: string; label: string; value?: unknown }>;
   resume_token?: string;
+  threadId?: string;
   toolCallId?: string;
   agent_id?: string;
   requestId?: string;
@@ -224,6 +226,7 @@ export const streamRegenerateChatMessage = async (
 export const streamResumeExecutiveChatMessage = async (
   sessionId: string,
   resumePayload: Record<string, unknown>,
+  threadId: string,
   onMessage: (chunk: { text: string; phase?: string }) => void,
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
@@ -232,7 +235,7 @@ export const streamResumeExecutiveChatMessage = async (
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/resume`,
-    body: { resumePayload, stream: true },
+    body: { resumePayload, stream: true, threadId },
     onDelta: (p) => onMessage(p as { text: string; phase?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),

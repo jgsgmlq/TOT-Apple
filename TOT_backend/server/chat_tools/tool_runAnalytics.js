@@ -35,7 +35,7 @@ module.exports = {
   meta: {
     enabled: true,
     requiredRole: ['executive'],
-    scopePolicy: 'any',
+    scopePolicy: 'regional_scoped',
     timeoutMs: 8000,
   },
   handler: async (args, regionScope) => {

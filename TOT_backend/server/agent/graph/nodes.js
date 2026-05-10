@@ -5,10 +5,7 @@ const { db } = require('../../db');
 const { formatNowSqliteLocal } = require('../../utils/ddlAt');
 const chatToolsService = require('../../services/chatToolsService');
 const { memoryQueueProducer } = require("../queue/bullMqProducer");
-const { getClient, endSpan, argsHash, keyedFields, maskPII, preview } = require("../../utils/tracer");
-// Langfuse 的链路追踪已由 `server/utils/tracer.js` 统一接管。
-// 这里保留函数但不再注入 `langfuse-langchain` CallbackHandler，避免版本不兼容导致模型调用直接崩溃。
-const getLangfuseCallback = () => null;
+const { getClient, endGeneration, endSpan, argsHash, keyedFields, maskPII, preview, promptHash, NOOP_TRACE } = require("../../utils/tracer");
 
 // === 真实的 LLM 配置 (复用项目的 DeepSeek API Key) ===
 // 考虑到意图路由这种一次性、低延迟的操作，推荐配置较小或响应更快的模型。
@@ -173,10 +170,10 @@ const RoutingPolicy = require('./routingPolicy');
 
 const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
-  
+
   // 如果是补槽恢复(slot_fill)，并且之前已经有了明确的意图和实体，可以考虑跳过重查
   // 但对于意图变更(intent_shift)，必须强制重查。这里简化为每次 Router 都重查，以覆盖 intent_shift 的强制安全检查要求
-  
+
   const memoryBlock = renderMemoryBlock(state.memory_snippets);
   const schemaDefinition = `
 You are a highly efficient JSON routing bot for "Executive Chat".
@@ -196,17 +193,32 @@ SAFETY RULES:
 2. If the user asks "who are you", "what can you do", or says "hello", set "mode": "chat_only" and "intent": "chat_only". Do NOT swallow "remember my preference" as chat_only; memory updates are "tool_action" or normal queries.
 3. OUTPUT RAW JSON ONLY. NEVER wrap your response in markdown code blocks.
 
-INTENT CLASSIFICATION RULES:
-- "warning_query": MUST be used when the user asks about "重点关注" (needing attention), "预警" (warnings), "最差" (worst), "落后" (falling behind), or "0%". Example: "有哪些门店需要重点关注？" -> "warning_query"
-- "query_metrics": General data/numbers (e.g., "Q1 completion rate").
-- "drill_down": Asking for a breakdown or details of a specific region/store.
-- "project_status": Asking about overall tasks or project list.
+INTENT CLASSIFICATION RULES (first matching rule wins):
+- "warning_query": The user is asking about problems, risks, or things that need attention. Keywords: "重点关注", "预警", "最差", "落后", "有风险", "有问题", "拖后腿", "0%", "需要关注", "异常". The user wants to know WHO/WHERE is underperforming, not just see numbers. Example: "有哪些门店需要重点关注？" -> "warning_query", "哪家完成率最低？" -> "warning_query", "有没有什么异常？" -> "warning_query"
+- "query_metrics": General data/numbers queries WITHOUT problem-seeking language. (e.g., "Q1 completion rate", "iPhone 17 培训进度"). If the user asks for specific numbers but doesn't mention problems/warnings/attention, use this.
+- "drill_down": Asking for detailed breakdown of a specific region/store. (e.g., "华东区各门店详情")
+- "project_status": Asking about the list of ongoing tasks or project overview.
 
 ${memoryBlock}
 `;
 
+  const traceId = config?.configurable?.traceId;
+  const client = getClient();
+  const gen = client && traceId
+    ? client.generation({ traceId, name: 'Router_Intent_Classification', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { promptHash: promptHash(schemaDefinition) } })
+    : NOOP_TRACE.generation({ name: 'Router_Intent_Classification' });
+
+  // 注入最近对话历史，让 Router 理解"可以""好的"等简短确认语的上下文
+  const recentHistory = (state.messages || []).filter(m => {
+    const t = m._getType ? m._getType() : (m.role || '');
+    return t === 'human' || t === 'ai';
+  }).slice(-4);
+  const historyCtx = recentHistory.length > 1
+    ? `\n\nRECENT CONVERSATION (for context, the user's latest message may be a response to the assistant's last question):\n${recentHistory.map(m => `${m._getType() === 'human' ? 'User' : 'Assistant'}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : ''}`).join('\n')}`
+    : '';
+
   const messages = [
-    new SystemMessage(schemaDefinition),
+    new SystemMessage(schemaDefinition + historyCtx),
     new HumanMessage(state.userMessage)
   ];
 
@@ -216,16 +228,23 @@ ${memoryBlock}
 
     const res = await getRouterModel().invoke(messages, invokeConfig);
     rawJson = res.content.trim();
-    
+
     if (rawJson.startsWith('```json')) {
       rawJson = rawJson.replace(/^```json/, '').replace(/```$/, '').trim();
     } else if (rawJson.startsWith('```')) {
       rawJson = rawJson.replace(/^```/, '').replace(/```$/, '').trim();
     }
-    
+
     const parsed = JSON.parse(rawJson);
     console.log(`[Router] 解析结果:`, parsed);
-    
+
+    endGeneration(gen, {
+      output: maskPII(preview(rawJson)),
+      usage: res.usage_metadata || res.usage || null,
+      model: 'deepseek-chat',
+      metadata: { mode: parsed.mode, intent: parsed.intent },
+    });
+
     // 如果存在风险，强制禁止提升权限档位
     const risk = parsed.risk_flags === true;
     let tier = "L3_fc_guarded";
@@ -261,6 +280,12 @@ ${memoryBlock}
     };
   } catch (err) {
     console.error(`[Router] 意图解析失败，降级为默认安全流转. Raw: ${rawJson}`, err);
+    endGeneration(gen, {
+      output: maskPII(preview(rawJson || '')),
+      level: 'ERROR',
+      statusMessage: err.message,
+      model: 'deepseek-chat',
+    });
     return {
       mode: "tool_action",
       intent: "tool_action",
@@ -284,21 +309,37 @@ const toolRetrieve = async (state) => {
   // ── Prior：intent map 给出的候选（按列表顺序赋递减分数） ────────────
   const intentSeed = INTENT_TOOL_MAP[intent];
   if (!intentSeed) {
-    console.warn(`[ToolRetrieve] 意图 '${intent}' 未在 INTENT_TOOL_MAP 中注册，使用 FALLBACK_TOOL_NAMES`);
+    console.warn(`[ToolRetrieve] 意图 '${intent}' 未在 INTENT_TOOL_MAP 中注册`);
   }
-  const seedList = intentSeed || FALLBACK_TOOL_NAMES;
-  const PRIOR_BASE = 5;     // 比 BM25 典型分数 (0~3) 大一档，确保 intent 命中的工具不会被淘汰出 topK
-  const PRIOR_DECAY = 0.5;  // 顺序惩罚
+  const seedList = intentSeed || chatToolsService.getRegisteredToolNames();
+  const PRIOR_BASE = 5;
+  const PRIOR_DECAY = 0.5;
+
+  // chat_only / 兜底时 prior 平坦 —— 工具排名完全由 BM25 + 上下文决定，不预设偏好
+  const isFlatPrior = intent === 'chat_only' || !intentSeed;
 
   const scoreById = new Map();
   seedList.forEach((id, i) => {
-    scoreById.set(id, (scoreById.get(id) || 0) + PRIOR_BASE - i * PRIOR_DECAY);
+    const prior = isFlatPrior ? PRIOR_BASE : (PRIOR_BASE - i * PRIOR_DECAY);
+    scoreById.set(id, (scoreById.get(id) || 0) + prior);
   });
 
-  // ── Likelihood：BM25(userMessage) ─────────────────────────────────
-  const bm25Ranked = TOOL_INDEX.score(state.userMessage || '');
+  // ── Likelihood：BM25(用户消息 + 最近对话上下文) ──────────────────
+  // 当用户消息极短（如"可以""需要"）时，BM25 需要对话历史中的关键词来评分
+  // 限制 BM25 只对 seedList 内的工具评分，防止非意图工具通过高分挤入 Top-K
+  const seedSet = new Set(seedList);
+  const recentAssistantText = (state.messages || [])
+    .filter(m => m._getType && m._getType() === 'ai')
+    .slice(-2)
+    .map(m => typeof m.content === 'string' ? m.content.slice(0, 500) : '')
+    .join(' ');
+  const bm25Query = recentAssistantText
+    ? `${state.userMessage || ''} ${recentAssistantText}`
+    : (state.userMessage || '');
+  const bm25Ranked = TOOL_INDEX.score(bm25Query);
   for (const { id, score } of bm25Ranked) {
     if (score <= 0) continue;
+    if (!seedSet.has(id)) continue;
     scoreById.set(id, (scoreById.get(id) || 0) + score);
   }
 
@@ -329,6 +370,11 @@ const fc_LlmToolCallStep = async (state, config) => {
   const emitter = config?.configurable?.sseEmitter;
   const traceId = config?.configurable?.traceId;
 
+  const client = getClient();
+  const fcGen = client && traceId
+    ? client.generation({ traceId, name: 'FC_LLM_Tool_Decision', model: 'deepseek-chat', input: maskPII(preview(state.userMessage)), metadata: { step: state.fc_super_step_count, tier: state.selected_tier } })
+    : NOOP_TRACE.generation({ name: 'FC_LLM_Tool_Decision' });
+
   // 1. 步数控制
   const currentStep = state.fc_super_step_count;
   const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
@@ -355,12 +401,49 @@ const fc_LlmToolCallStep = async (state, config) => {
     }
   }
 
+  // 上下文截断：防止长会话 tokens 超限。保留最近 N 条消息，N 由环境变量
+  // FC_HISTORY_MAX_MESSAGES 控制（默认 30，覆盖典型 5-6 轮对话含工具调用）。
+  // 截断时保留消息顺序（System → Human → [AI → Tool]*），确保末尾仍是 Human/Tool。
+  const FC_HISTORY_MAX = Number(process.env.FC_HISTORY_MAX_MESSAGES || 30);
+  if (safeHistory.length > FC_HISTORY_MAX) {
+    const trimmed = safeHistory.slice(-FC_HISTORY_MAX);
+    console.log(`[fc_LlmToolCallStep] 上下文截断: ${safeHistory.length} → ${trimmed.length} 条消息 (FC_HISTORY_MAX_MESSAGES=${FC_HISTORY_MAX})`);
+    safeHistory.length = 0;
+    safeHistory.push(...trimmed);
+  }
+
+  // 为 LLM 生成可用的图表数据（纯函数，零幻觉）
+  const suggestedChart = decideChart(state.toolResults || {}, state.intent);
+  const chartContext = suggestedChart
+    ? `\n\nAVAILABLE CHART DATA (you may include this in your response by writing an \`\`\`echarts code block — you can modify it freely):\n\`\`\`echarts\n${JSON.stringify(suggestedChart, null, 2)}\n\`\`\`\n`
+    : '';
+
   const systemPrompt = `You are a professional Executive Chat data analyst. Your namespace is ${state.tool_namespace}.
 Current tier: ${state.selected_tier}.
 Budget steps: ${maxSteps}. Current super-step: ${currentStep}.
+${chartContext}
+CRITICAL — CHART RULES:
+- When data queries return comparison/ranking/distribution results, use the AVAILABLE CHART DATA above by copying the \`\`\`echarts block into your response. You can modify the title, axis labels, or colors as you see fit.
+- If the user explicitly asks for a specific chart type (e.g. "画个饼图", "做个折线图"), adjust the chart type and data accordingly.
+- If the user asks for a chart but their request is vague (e.g. "画个图" without specifying what), ask them ONE clarifying question: what data or dimension to chart, and what chart type they prefer (bar/pie/line).
+- If the user did NOT ask for a chart and the data is simple enough to describe in text, do NOT include a chart. Let the numbers speak for themselves.
+
+CRITICAL — UNDERSTAND SHORT REPLIES IN CONTEXT:
+If the user's latest message is very short (e.g. "可以", "好的", "需要", "行", "对", "是的", "嗯") and the conversation history shows you previously asked a question or offered to look up data, the user is CONFIRMING your suggestion. Do NOT just reply with text — call the appropriate tool based on what you offered in the previous turn. For example, if you previously asked "需要查看S008的门店详情吗?" and the user says "需要", you should call getStoreDetailData(storeId: "S008").
+
+CRITICAL — PARAMETER EXTRACTION:
+1. The user's message often contains a task name (e.g. "iPhone 17 新品培训"), a region name (e.g. "华东"), or a store name. Extract these directly from the message and pass them as tool parameters (taskName, productName, region, storeId). Do NOT call a generic list tool first — go straight to the specific tool with the extracted parameters.
+2. If the user asks about a specific task/region/store, call the most specific tool (getRegionDetailData, getStoreDetailData, queryExecutiveMetrics with taskName) directly. Skip getTaskListData and getOverviewData unless the user asks "what tasks exist" or "overall summary".
+
+TOOL SELECTION BY QUESTION TYPE:
+- "重点关注" / "预警" / "最差" / "落后" / "异常" / "有问题" → use getWarningsData
+- "完成率是多少" / "进度怎么样" (specific task, no problem language) → use queryExecutiveMetrics
+- "华东区各门店详情" / store-specific breakdown → use getRegionDetailData or getStoreDetailData
+- "有哪些任务" / "任务列表" → use getTaskListData
+- "整体概况" / "总完成率" → use getOverviewData
 
 GUIDELINES:
-1. If you have enough data from tool results, provide a concise Markdown summary.
+1. If you have enough data from tool results, provide a concise Markdown summary. Do NOT call the same tool again with the same parameters.
 2. If tools failed or steps are exceeded, explain what happened and suggest alternatives.
 3. Use tables or lists for data presentation.
 4. When calling tools, use ONLY the tools provided in your tool belt.
@@ -522,52 +605,55 @@ ${renderMemoryBlock(state.memory_snippets)}`;
 
     // 如果没有 tool_calls，标记为最终回复
     const hasTools = aiMessage.tool_calls.length > 0;
-    if (traceId && hasTools) {
-      try {
-        const lf = getClient();
-        if (lf) {
-          const callNames = aiMessage.tool_calls.map((call) => call?.name).filter(Boolean);
-          lf.trace({ id: traceId }).span({
-            name: "LLM_Decide_Tools",
-            input: {
-              candidateTools: state.candidateTools || [],
-              selectedTier: state.selected_tier,
-            },
-            output: {
-              toolCallNames: callNames,
-              toolCallCount: callNames.length,
-            },
-            metadata: {
-              step: currentStep,
-              maxSteps,
-            },
-          }).end();
-        }
-      } catch (traceErr) {
-        console.warn("[fc_LlmToolCallStep] trace span write failed:", traceErr.message);
-      }
-    }
+    const callNames = hasTools ? aiMessage.tool_calls.map((call) => call?.name).filter(Boolean) : [];
+    endGeneration(fcGen, {
+      output: maskPII(preview(aiMessage.content)),
+      usage: aiMessage.usage_metadata || aiMessage.usage || null,
+      model: 'deepseek-chat',
+      metadata: {
+        step: currentStep,
+        maxSteps,
+        toolCallCount: callNames.length,
+        toolCallNames: callNames,
+        isOverCap,
+      },
+    });
+
     const finalUpdates = { messages: [aiMessage] };
-    
+
     if (!hasTools) {
       finalUpdates.reply_markdown = aiMessage.content;
       finalUpdates.finalResponse = aiMessage.content;
     }
-    
+
     return finalUpdates;
   } catch (err) {
     if (err.name === 'AbortError' || err.message?.includes('abort')) {
       console.log("[fc_LlmToolCallStep] 客户端中止了流式生成");
+      endGeneration(fcGen, {
+        output: maskPII('[aborted]'),
+        level: 'WARNING',
+        statusMessage: 'client abort',
+        model: 'deepseek-chat',
+        metadata: { step: currentStep, maxSteps },
+      });
       const abortMsg = "\n[已中止生成]";
-      return { 
+      return {
         messages: [new AIMessage({ content: abortMsg })],
         reply_markdown: abortMsg,
         finalResponse: abortMsg
       };
     }
     console.error("[fc_LlmToolCallStep] 大模型调用失败:", err);
+    endGeneration(fcGen, {
+      output: maskPII(preview(err.message)),
+      level: 'ERROR',
+      statusMessage: err.message,
+      model: 'deepseek-chat',
+      metadata: { step: currentStep, maxSteps },
+    });
     const errMsg = `系统异常: 大模型响应失败 ${err.message}`;
-    return { 
+    return {
       messages: [new AIMessage({ content: errMsg })],
       reply_markdown: errMsg,
       finalResponse: errMsg
@@ -608,7 +694,8 @@ const fc_CheckDuplicate = async (state) => {
 
   for (const toolCall of toolCalls) {
     const toolName = toolCall.name;
-    const signature = buildToolSignature(toolName, toolCall.args, scopeFp);
+    const freshnessBucketMs = chatToolsService.getToolFreshnessBucketMs(toolName);
+    const signature = buildToolSignature(toolName, toolCall.args, scopeFp, { bucketMs: freshnessBucketMs });
 
     // 1) 同 batch 重复
     const dupId = sigToToolCallId.get(signature);
@@ -816,14 +903,72 @@ const fc_ValidateParams = async (state) => {
       if (onlyMissingRepairable) {
         const fields = Array.from(new Set(missingParams.map(v => v.field)));
         const firstViolation = missingParams[0];
+        const hitlToolName = resolvedToolCalls[0]?.name || '';
+        const toolMeta = chatToolsService.getToolMeta(hitlToolName);
+
+        // 为每个缺失字段收集候选项：
+        //   1. schema 中的 enum 值（如 dimensions: ['channel_l3', 'channel_l4', ...]）
+        //   2. 对话历史中提到的候选值（门店名、任务名、区域名等）
+        const fieldOptions = {};
+        for (const field of fields) {
+          const opts = [];
+          // 1) schema enum 值
+          const fieldSchema = toolMeta?.schema?.properties?.[field];
+          if (fieldSchema?.items?.enum) {
+            for (const ev of fieldSchema.items.enum) {
+              opts.push({ id: `enum_${field}_${ev}`, label: ev, value: ev, meta: { field } });
+            }
+          } else if (fieldSchema?.enum) {
+            for (const ev of fieldSchema.enum) {
+              opts.push({ id: `enum_${field}_${ev}`, label: ev, value: ev, meta: { field } });
+            }
+          }
+          // 2) 对话历史中最近提到的名称（门店、任务、区域等）
+          if (opts.length === 0) {
+            const historyText = (state.messages || [])
+              .filter(m => m._getType && m._getType() === 'ai')
+              .slice(-3)
+              .map(m => typeof m.content === 'string' ? m.content : '')
+              .join('\n');
+            // 提取模式：S开头+数字（门店ID）、中文名+店/区、任务名（书名号内）
+            const seen = new Set();
+            const patterns = [
+              /\b(S\d+)\b/g,                          // S008, S010
+              /([^\s，。]{2,10}(?:店|区|体验店))/g,    // 观音桥体验店, 华东区
+              /《([^》]{2,30})》/g,                     // 《iPhone 17 新品培训》
+              /"([^"]{2,30})"/g,                       // "iPhone 17 新品培训"
+            ];
+            for (const re of patterns) {
+              let m;
+              while ((m = re.exec(historyText)) !== null) {
+                const val = m[1] || m[0];
+                if (!seen.has(val)) {
+                  seen.add(val);
+                  opts.push({ id: `hist_${field}_${opts.length}`, label: val, value: val, meta: { field } });
+                }
+              }
+            }
+            // 最多 6 个候选
+            if (opts.length > 6) opts.length = 6;
+          }
+          // 3) "其他" 选项始终在最后
+          opts.push({ id: `other_${field}`, label: '都不是，我重新描述', value: null, meta: { field, intent_shift: true } });
+          fieldOptions[field] = opts;
+        }
+
+        const allOptions = Object.values(fieldOptions).flat();
+        const hasOptions = allOptions.some(o => !o.meta?.intent_shift); // 除了"其他"之外还有选项
+
         const payload = {
-          type: 'input',
-          prompt: `还需要您补充：${fields.join('、')}。请直接告诉我具体值。`,
-          options: [],
+          type: hasOptions ? 'select' : 'input',
+          prompt: hasOptions
+            ? `请选择或补充 ${fields.join('、')}：`
+            : `还需要您补充：${fields.join('、')}。请直接告诉我具体值。`,
+          options: hasOptions ? allOptions : [],
           agent_id: 'executive_chat',
           reason: 'missing_required_param',
           resume_token: firstViolation.tool_call_id || resolvedToolCalls[0]?.id || `mp_${fields[0]}`,
-          context: { missingFields: fields, violations: missingParams }
+          context: { missingFields: fields, fieldOptions }
         };
         return {
           ...hitlReset,
@@ -1154,7 +1299,8 @@ const fc_MergeToolResults = async (state) => {
     // 之前的实现用 includes('NO_TOOL_RESULT') 漏掉了 EXECUTION_ERROR / PERMISSION_DENIED / SKIPPED_AFTER_DENY，
     // 会把失败结果当成正常缓存，下次相同 signature 直接命中错误数据。
     if (resultObj && !resultObj.signature && !isError) {
-      const signature = computeToolCallSignature(toolCall.name, toolCall.args, scopeFp);
+      const freshnessBucketMs = chatToolsService.getToolFreshnessBucketMs(toolCall.name);
+      const signature = computeToolCallSignature(toolCall.name, toolCall.args, scopeFp, { bucketMs: freshnessBucketMs });
       chatSessionStateService.addRecord(state.sessionId, { signature, data: resultData }, state.regionScope);
     }
   }
@@ -1250,6 +1396,7 @@ const humanInTheLoopGate = async (state) => {
 // renderToolResultsMarkdown 已抽到 ./renderers.js（含 5 个 intent 专属 renderer）。
 // finalResponseStep 兜底链路依赖它生成给用户看的 markdown，不要再回到 nodes.js 里实现。
 const { renderToolResultsMarkdown } = require('./renderers');
+const { decideChart } = require('./decideChart');
 
 const sanitizeUserFacingMarkdown = (content) => {
   const text = typeof content === 'string' ? content : '';
@@ -1271,9 +1418,24 @@ const finalResponseStep = async (state, config) => {
       console.log(`[FinalResponseStep] 检测到纯聊天意图，调用大模型进行回复...`);
       const emitter = config?.configurable?.sseEmitter;
       const llm = getFcModel(); // 使用不带工具的基础模型
+
+	      const traceId = config?.configurable?.traceId;
+	      const client = getClient();
+	      const chatGen = client && traceId
+	        ? client.generation({ traceId, name: 'FinalResponse_ChatReply', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { intent: 'chat_only' } })
+	        : NOOP_TRACE.generation({ name: 'FinalResponse_ChatReply' });
       
-      const chatPrompt = `You are a professional and polite Executive Assistant AI for Apple Retail training management.
-The user is having a casual conversation with you.
+      // 提取最近对话上下文（不含最后一条，即当前用户消息），让闲聊 LLM 理解"可以""好的"等确认语
+      const chatContext = (state.messages || []).filter(m => {
+        const t = m._getType ? m._getType() : '';
+        return t === 'human' || t === 'ai';
+      }).slice(-7, -1); // 最近 3 轮，不含当前消息
+      const contextBlock = chatContext.length > 0
+        ? `\n\nRecent conversation context:\n${chatContext.map(m => `${m._getType() === 'human' ? 'User' : 'Assistant'}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : ''}`).join('\n')}`
+        : '';
+
+      const chatPrompt = `You are a professional and polite Executive Assistant AI for Apple Retail training management.${contextBlock}
+The user's latest message may be a short confirmation ("可以", "好的", "是的") responding to your previous question. If so, acknowledge their confirmation and continue the conversation naturally.
 Respond politely and concisely in Chinese (1-3 sentences).
 If they ask what you can do, explain that you can query training progress, store warnings, and project metrics.
 Do NOT output any markdown code blocks for JSON or tool calls. Just natural text.`;
@@ -1294,8 +1456,20 @@ Do NOT output any markdown code blocks for JSON or tool calls. Just natural text
             }
           }
         }
+        endGeneration(chatGen, {
+          output: maskPII(preview(response)),
+          model: 'deepseek-chat',
+          metadata: { intent: 'chat_only' },
+        });
       } catch (err) {
         console.error('[FinalResponseStep] 闲聊回复生成失败:', err);
+        endGeneration(chatGen, {
+          output: maskPII(preview(err.message)),
+          level: 'ERROR',
+          statusMessage: err.message,
+          model: 'deepseek-chat',
+          metadata: { intent: 'chat_only' },
+        });
         response = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。";
       }
     } else {
@@ -1338,23 +1512,20 @@ const persistAndEmit = async (state, config) => {
   // 3. T5 阶段二: 更新 Langfuse Trace 元数据
   if (config?.configurable?.traceId) {
     try {
-      const { Langfuse } = require('langfuse');
-      const lf = new Langfuse({
-        publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-        secretKey: process.env.LANGFUSE_SECRET_KEY,
-        baseUrl: process.env.LANGFUSE_BASEURL || process.env.LANGFUSE_HOST
-      });
-      lf.trace({ id: config.configurable.traceId }).update({
-        output: replyContent,
-        metadata: {
-          selected_tier: state.selected_tier,
-          fc_steps_used: state.fc_super_step_count,
-          repair_attempts: state.fc_repair_attempts,
-          intent: state.intent,
-          error_code: (replyContent && replyContent.includes("SYSTEM_ERROR")) ? "TOOL_PARAM_ERROR" : undefined
-        }
-      });
-      lf.flushAsync().catch(() => {});
+      const lf = getClient();
+      if (lf) {
+        lf.trace({ id: config.configurable.traceId }).update({
+          output: replyContent,
+          metadata: {
+            selected_tier: state.selected_tier,
+            fc_steps_used: state.fc_super_step_count,
+            repair_attempts: state.fc_repair_attempts,
+            intent: state.intent,
+            error_code: (replyContent && replyContent.includes("SYSTEM_ERROR")) ? "TOOL_PARAM_ERROR" : undefined
+          }
+        });
+        lf.flushAsync().catch(() => {});
+      }
     } catch (err) {
       console.warn('[Langfuse] final trace update skipped:', err.message);
     }

@@ -148,15 +148,28 @@ function renderMetrics(items) {
     return null;
   }
   const preview = rows.slice(0, MAX_ROWS_PREVIEW);
-  // 自动选 1-3 列展示：metric/dimension/value/rate 这类常见字段
+  // 自动选 1-3 列展示：同时匹配 camelCase 和 snake_case
   const sample = preview[0];
-  const candidateCols = ['metric', 'dimension', 'region', 'rtm', 'storeName', 'date', 'value', 'completionRate', 'count'];
+  const candidateCols = [
+    'metric', 'dimension', 'region', 'rtm', 'storeName', 'store_name',
+    'date', 'value', 'completionRate', 'completion_rate',
+    'completedCount', 'completed_count', 'totalCount', 'total_count',
+    'count', 'avg_completion_time_hours', 'crisis_p0_rate', 'crisis_p1_rate'
+  ];
   const cols = candidateCols.filter(c => sample && sample[c] !== undefined).slice(0, 4);
   if (cols.length === 0) {
-    // 退回 KV 列表
+    // 退回 KV 列表 — 不输出 raw JSON
     const lines = ['### 查询结果', ''];
     for (const r of preview) {
-      lines.push(`- ${JSON.stringify(r)}`);
+      if (r && typeof r === 'object') {
+        for (const [k, v] of Object.entries(r).slice(0, 8)) {
+          const display = typeof v === 'number'
+            ? (String(k).includes('rate') ? _fmtPercent(v) : _fmtNumber(v))
+            : (typeof v === 'object' ? JSON.stringify(v) : String(v ?? '—'));
+          lines.push(`- **${k}**：${display}`);
+        }
+        lines.push('');
+      }
     }
     return lines.join('\n');
   }

@@ -65,14 +65,18 @@ async function handlePostMessage(req, res, next) {
 async function handleResume(req, res, next) {
   try {
     const { sessionId } = req.params;
-    const { resumePayload, stream } = req.body;
+    const { resumePayload, stream, threadId } = req.body;
 
     if (!resumePayload) {
       throw createError(400, 'resumePayload 不能为空', 'CHAT_006');
     }
 
+    if (!threadId) {
+      throw createError(400, 'threadId 不能为空（HITL 续接必需）', 'CHAT_010');
+    }
+
     if (stream === true || stream === 'langgraph') {
-      await chatService.resumeMessageStreamLangGraph(sessionId, resumePayload, req.user.id, req, res);
+      await chatService.resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, req.user.id, req, res);
       return;
     }
 

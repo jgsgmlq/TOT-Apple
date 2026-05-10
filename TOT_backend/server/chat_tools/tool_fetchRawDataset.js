@@ -31,7 +31,7 @@ const schema = {
 const meta = {
   enabled: true,
   requiredRole: ['executive', 'central', 'admin'],
-  scopePolicy: 'any',
+  scopePolicy: 'regional_scoped',
   timeoutMs: 5000
 };
 

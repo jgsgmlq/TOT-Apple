@@ -52,17 +52,23 @@ function safeParseJson(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
+const DEDUP_BUCKET_MS = Number(process.env.CHAT_DEDUP_BUCKET_MS || 60_000);
+
 /**
- * 同语义 args + scope 算唯一 signature（md5），用作 cache / 去重 key。
+ * 同语义 args + scope + 时间桶 算唯一 signature（md5），用作 cache / 去重 key。
  * 接受 args 为对象或 JSON 字符串两种形式。
+ * nowMs 参数可选，方便单测注入；默认用 Date.now()。
  */
-function buildToolSignature(toolName, args, scopeFingerprint) {
+function buildToolSignature(toolName, args, scopeFingerprint, opts = {}) {
+  const { nowMs = Date.now(), bucketMs } = opts;
   const parsed = typeof args === 'string' ? (safeParseJson(args) ?? args) : args;
   const canonical = canonicalizeArgs(parsed);
   const argsStr = typeof canonical === 'object' ? JSON.stringify(canonical) : String(canonical);
+  const effectiveBucket = bucketMs || DEDUP_BUCKET_MS;
+  const bucket = effectiveBucket > 0 ? Math.floor(nowMs / effectiveBucket) : nowMs;
   return crypto
     .createHash('md5')
-    .update(`${toolName}|${argsStr}|${scopeFingerprint || ''}`)
+    .update(`${toolName}|${argsStr}|${scopeFingerprint || ''}|${bucket}`)
     .digest('hex');
 }
 

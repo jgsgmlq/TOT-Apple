@@ -180,8 +180,8 @@
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <n-spin :show="isLoadingHistory" style="min-height: 120px">
             <div v-if="pendingClarification" class="clarify-panel">
-              <div class="clarify-title">{{ pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
-              <div class="clarify-options" v-if="pendingClarification.data?.options?.length || pendingClarification.options?.length">
+              <div class="clarify-title">{{ pendingClarification.data?.prompt || pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
+              <div class="clarify-options" v-if="(pendingClarification.data?.options || pendingClarification.options || []).length">
                 <n-button
                   v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
                   :key="opt.id"
@@ -189,7 +189,7 @@
                   round
                   type="primary"
                   ghost
-                  @click="sendClarificationResponse(pendingClarification, { action: 'select_option', option: opt })"
+                  @click="sendClarificationResponse(pendingClarification!, { action: 'select_option', option: opt })"
                 >
                   {{ opt.label }}
                 </n-button>
@@ -411,15 +411,15 @@
         <div class="chat-footer">
           <div v-if="pendingClarification" class="clarify-panel">
             <div class="clarify-title">需要进一步确认</div>
-            <div class="clarify-text">{{ pendingClarification.message || pendingClarification.data?.prompt || '请选择一个选项继续' }}</div>
-            <div class="clarify-options">
+            <div class="clarify-text">{{ pendingClarification.data?.prompt || pendingClarification.message || pendingClarification.prompt || '请选择一个选项继续' }}</div>
+            <div class="clarify-options" v-if="(pendingClarification.data?.options || pendingClarification.options || []).length">
               <n-button
-                v-for="opt in (pendingClarification.data?.options || [])"
+                v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
                 :key="opt.id"
                 type="primary"
                 secondary
                 round
-                @click="sendClarificationResponse(pendingClarification, { action: 'select_option', option: opt })"
+                @click="sendClarificationResponse(pendingClarification!, { action: 'select_option', option: opt })"
               >
                 {{ opt.label }}
               </n-button>
@@ -745,8 +745,35 @@
     }
 
     try {
+      const threadId = (payload.data?.threadId || payload.threadId) as string;
+      if (!threadId) {
+        message.error('缺少 threadId，无法恢复对话');
+        return;
+      }
+
+      // Adapter: bridge the extra threadId param into streamResumeExecutiveChatMessage
+      const streamWithThreadId = (
+        sid: string,
+        rp: unknown,
+        onDelta: (chunk: { text: string; phase?: string; toolName?: string }) => void,
+        onDone: (data: SendMessageResult) => void,
+        onClarify: (cp: ClarifyPayload) => void,
+        onError: (error: unknown) => void,
+        opts?: { signal?: AbortSignal }
+      ) =>
+        streamResumeExecutiveChatMessage(
+          sid,
+          rp as Record<string, unknown>,
+          threadId,
+          onDelta,
+          onDone,
+          onClarify,
+          onError,
+          opts
+        );
+
       const { result, thinkingSnapshot } = await runExecStyleSseChat(
-        streamResumeExecutiveChatMessage,
+        streamWithThreadId,
         sessionId.value,
         resumePayload,
         (p) => {
