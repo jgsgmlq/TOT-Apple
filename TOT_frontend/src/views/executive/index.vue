@@ -442,29 +442,45 @@
               <n-button size="small" tertiary @click="cancelClarification">取消</n-button>
             </div>
           </div>
-          <div class="input-wrapper">
+          <div class="input-wrapper flex items-end gap-2">
             <n-input
               v-model:value="inputValue"
               type="textarea"
               placeholder="输入消息，Shift + Enter 换行，Enter 发送..."
               :autosize="{ minRows: 1, maxRows: 5 }"
               @keydown.enter="onInputEnter"
+              class="flex-1"
             />
-            <n-button
-              v-if="!isSending"
-              type="primary"
-              :disabled="!inputValue.trim() || isLoadingHistory"
-              @click="handleSend"
-              class="send-btn"
-            >
-              发送
-            </n-button>
-            <n-button v-else type="default" @click="handleStop" class="send-btn send-btn--stop">
-              <template #icon>
-                <n-icon><StopOutlined /></n-icon>
-              </template>
-              停止生成
-            </n-button>
+            <div class="flex items-center gap-2 flex-shrink-0 mb-1">
+              <n-button 
+                circle 
+                strong 
+                secondary
+                :type="isRecording ? 'error' : 'default'"
+                @click="toggleRecording"
+                :loading="isTranscribing"
+                class="voice-btn"
+              >
+                <template #icon>
+                  <n-icon><AudioOutlined /></n-icon>
+                </template>
+              </n-button>
+              <n-button
+                v-if="!isSending"
+                type="primary"
+                :disabled="!inputValue.trim() || isLoadingHistory"
+                @click="handleSend"
+                class="send-btn"
+              >
+                发送
+              </n-button>
+              <n-button v-else type="default" @click="handleStop" class="send-btn send-btn--stop">
+                <template #icon>
+                  <n-icon><StopOutlined /></n-icon>
+                </template>
+                停止生成
+              </n-button>
+            </div>
           </div>
           <div class="footer-tip">AI 生成的内容仅供参考，请结合业务实际情况判断。</div>
         </div>
@@ -477,6 +493,7 @@
   import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue';
   import { useRouter } from 'vue-router';
   import { useMessage, useDialog } from 'naive-ui';
+  import { useVoiceInput } from '@/hooks/useVoiceInput';
   import { debounce } from 'lodash-es';
   import {
     PlusOutlined,
@@ -488,6 +505,8 @@
     MenuUnfoldOutlined,
     RobotOutlined,
     StopOutlined,
+    AudioOutlined,
+    LoadingOutlined,
   } from '@vicons/antd';
   import { websiteConfig } from '@/config/website.config';
   import { useUserStore } from '@/store/modules/user';
@@ -925,6 +944,20 @@
 
   const inputValue = ref('');
   const chatBodyRef = ref<HTMLElement | null>(null);
+
+  let executiveVoiceInitialText = '';
+  const { isRecording, isTranscribing, toggleRecording } = useVoiceInput((text, isFinal) => {
+    if (!executiveVoiceInitialText && inputValue.value) {
+      // 记录开始录音前，输入框里原本已经有的话
+      executiveVoiceInitialText = inputValue.value + ' ';
+    }
+    // 即时更新：原来有的话 + 当前识别出的话
+    inputValue.value = executiveVoiceInitialText + text;
+    if (isFinal) {
+      // 录音结束，重置锚点
+      executiveVoiceInitialText = '';
+    }
+  });
 
   const isMobile = ref(false);
   const showMobileSidebar = ref(false);

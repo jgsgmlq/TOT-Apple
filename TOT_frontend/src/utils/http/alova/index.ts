@@ -100,6 +100,12 @@ export const Alova = createAlova({
 
       // 需要登录
       if (code === 912 || code === 401) {
+        if (method.meta?.skipAuthRedirect) {
+          if (!method.meta?.skipGlobalErrorMessage) {
+            Message?.error(message || '认证失败');
+          }
+          throw new Error(message || '认证失败');
+        }
         Message?.warning('登录身份已失效，正在跳转登录页');
         redirectToLogin();
       } else {

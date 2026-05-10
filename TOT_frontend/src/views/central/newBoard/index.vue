@@ -4,6 +4,7 @@
   import { getTaskList, updateTask, revokeTask, triggerTaskAutoNudge } from '@/api/task';
   import { useDialog } from 'naive-ui';
   import { useUserStore } from '@/store/modules/user';
+  import { useVoiceInput } from '@/hooks/useVoiceInput';
   import {
     getDashboardOverview,
     getDashboardWarnings,
@@ -22,7 +23,7 @@
     formatReplyContentText,
   } from '@/api/chat';
   import { runExecStyleSseChat } from '@/utils/execStreamReply';
-  import { useMessage } from 'naive-ui';
+  import { useMessage, useNotification } from 'naive-ui';
   import { ColorWandOutline } from '@vicons/ionicons5';
   import { LikeOutlined, DislikeOutlined, CheckOutlined, CopyOutlined } from '@vicons/antd';
   import { renderInsightMarkdown } from '@/utils/markdownRender';
@@ -31,6 +32,7 @@
   import { useRouter } from 'vue-router';
 
   const message = useMessage();
+  const notification = useNotification();
   const dialog = useDialog();
   const router = useRouter();
 
@@ -134,12 +136,32 @@
 
       if (currentTasks.value.length > 0 && !currentTaskId.value) {
         // Pick the very first actionable diagnosis task from the agent's flow
-        const firstActionableDiag = diagnosisData.value?.find(
+        // 优先挑选红灯（最严重），其次黄灯，最后随便挑一个有效的
+        let firstActionableDiag = diagnosisData.value?.find(
           (d) =>
-            d.action_type !== 'none' &&
+            d.severity === 'red' &&
             d.related_task_id &&
             currentTasks.value.some((t) => t.task_id === d.related_task_id)
         );
+
+        if (!firstActionableDiag) {
+          firstActionableDiag = diagnosisData.value?.find(
+            (d) =>
+              d.severity === 'yellow' &&
+              d.related_task_id &&
+              currentTasks.value.some((t) => t.task_id === d.related_task_id)
+          );
+        }
+
+        if (!firstActionableDiag) {
+          firstActionableDiag = diagnosisData.value?.find(
+            (d) =>
+              d.action_type !== 'none' &&
+              d.related_task_id &&
+              currentTasks.value.some((t) => t.task_id === d.related_task_id)
+          );
+        }
+
         if (firstActionableDiag) {
           currentTaskId.value = firstActionableDiag.related_task_id;
           isAutoCollapsed.value = true;
@@ -1085,7 +1107,13 @@
   };
 
   const handleRefresh = async () => {
-    isContentLoading.value = true;
+    // Only set isContentLoading if there's no data at all. Otherwise, we do a silent background refresh
+    // and rely on specific module loading states (like isAgentLoading) or a small spinner.
+    const isFirstLoad = !allTasks.value.length;
+    if (isFirstLoad) {
+      isContentLoading.value = true;
+    }
+    
     lastUpdated.value = new Date();
     try {
       // 强制刷新 Agent 诊断数据和基础任务列表
@@ -1104,7 +1132,9 @@
     } catch (error) {
       message.error('刷新失败，请稍后重试');
     } finally {
-      isContentLoading.value = false;
+      if (isFirstLoad) {
+        isContentLoading.value = false;
+      }
     }
   };
 
@@ -1219,10 +1249,55 @@
     }, 3200);
   };
 
-  const showFocusReasonToast = (reason?: string) => {
+  const showFocusReasonToast = (diagnosis: any) => {
+    const reason = diagnosis.focus_reason;
     if (!reason || !String(reason).trim()) return;
-    // 这里明确只展示 topTasks.focusReason，不再做截断，避免与 insight 文案混淆。
-    message.info(`聚焦原因：${String(reason).trim()}`, { duration: 3200 });
+    
+    // 使用高级通知替代普通的 toast 提示，停留时间延长
+    notification.create({
+      title: 'AI 智能导航定位',
+      class: 'ai-nav-notification',
+      content: String(reason).trim(),
+      meta: `根据您的点击，已自动聚焦至【${diagnosis.task_title || '当前任务'}】的关键指标`,
+      duration: 5000,
+      keepAliveOnHover: true,
+      closable: true,
+      avatar: () =>
+        h(
+          'div',
+          {
+            class: 'flex items-center justify-center w-9 h-9 text-blue-500',
+          },
+          [
+            h(
+              'svg',
+              {
+                xmlns: 'http://www.w3.org/2000/svg',
+                width: '22',
+                height: '22',
+                viewBox: '0 0 24 24',
+                fill: 'none',
+                stroke: 'currentColor',
+                'stroke-width': '2',
+                'stroke-linecap': 'round',
+                'stroke-linejoin': 'round',
+              },
+              [
+                h('circle', { cx: '12', cy: '12', r: '7' }),
+                h('path', { d: 'M12 2v2' }),
+                h('path', { d: 'M12 20v2' }),
+                h('path', { d: 'm4.93 4.93 1.41 1.41' }),
+                h('path', { d: 'm17.66 17.66 1.41 1.41' }),
+                h('path', { d: 'M2 12h2' }),
+                h('path', { d: 'M20 12h2' }),
+                h('path', { d: 'm6.34 17.66-1.41 1.41' }),
+                h('path', { d: 'm19.07 4.93-1.41 1.41' }),
+                h('circle', { cx: '12', cy: '12', r: '2' }),
+              ]
+            ),
+          ]
+        ),
+    });
   };
 
   const handleDiagnosisClick = (diagnosis: any) => {
@@ -1242,7 +1317,7 @@
           if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
             applyFocusSpotlight(el as HTMLElement);
-            showFocusReasonToast(diagnosis.focus_reason);
+            showFocusReasonToast(diagnosis);
           }
         }, 300); // 预留一定时间等待组件可能的数据切换加载渲染
       }
@@ -1932,6 +2007,18 @@
   ]);
   const aiInputText = ref('');
   const aiIsTyping = ref(false);
+
+  let dashboardVoiceInitialText = '';
+  const { isRecording: aiIsRecording, isTranscribing: aiIsTranscribing, toggleRecording: aiToggleRecording } = useVoiceInput((text, isFinal) => {
+    if (!dashboardVoiceInitialText && aiInputText.value) {
+      dashboardVoiceInitialText = aiInputText.value + ' ';
+    }
+    aiInputText.value = dashboardVoiceInitialText + text;
+    if (isFinal) {
+      dashboardVoiceInitialText = '';
+    }
+  });
+
   let currentChatAbortController: AbortController | null = null;
 
   const AiChart = defineComponent({
@@ -2837,10 +2924,12 @@
             >
             <button
               @click="handleRefresh"
-              class="text-[#86868B] hover:text-[#0071E3] transition-colors duration-200 flex items-center justify-center p-1 rounded-md hover:bg-gray-100/50"
+              class="text-[#86868B] hover:text-[#0071E3] transition-colors duration-200 flex items-center justify-center p-1 rounded-md hover:bg-gray-100/50 disabled:opacity-50"
               title="手动刷新"
+              :disabled="isAgentLoading"
             >
               <svg
+                :class="{ 'animate-spin': isAgentLoading }"
                 xmlns="http://www.w3.org/2000/svg"
                 width="14"
                 height="14"
@@ -5854,6 +5943,23 @@
               class="flex-1 max-h-24 bg-transparent border-none outline-none resize-none text-[14px] text-[#111827] py-2 px-3 placeholder:text-[#86868B]"
             ></textarea>
             <button
+              @click="aiToggleRecording"
+              :class="[
+                'p-2 rounded-lg flex-shrink-0 transition-colors duration-200 mb-0.5 mr-0.5',
+                aiIsRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-gray-400 hover:bg-gray-100 shadow-sm border border-gray-200',
+              ]"
+              :disabled="aiIsTranscribing"
+            >
+              <svg v-if="!aiIsTranscribing" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" x2="12" y1="19" y2="22"/>
+              </svg>
+              <svg v-else class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              </svg>
+            </button>
+            <button
               @click="aiSendMessage"
               :disabled="!aiInputText.trim() || aiIsTyping"
               :class="[
@@ -5890,72 +5996,95 @@
 <style scoped>
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
-  @keyframes focusSpotPulse {
-    0% {
-      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0 rgba(0, 113, 227, 0);
-      transform: translateZ(0) scale(1);
-      filter: saturate(1);
-    }
-    12% {
-      box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.45), 0 0 34px rgba(0, 113, 227, 0.3);
-      transform: translateZ(0) scale(1.012);
-      filter: saturate(1.05);
-    }
-    38% {
-      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.3), 0 0 20px rgba(0, 113, 227, 0.18);
-      transform: translateZ(0) scale(1.004);
-      filter: saturate(1.02);
-    }
-    56% {
-      box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.36), 0 0 26px rgba(0, 113, 227, 0.22);
-      transform: translateZ(0) scale(1.008);
-      filter: saturate(1.03);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0 rgba(0, 113, 227, 0);
-      transform: translateZ(0) scale(1);
-      filter: saturate(1);
-    }
+  /* ====== AI 导航通知卡片 终极修正 ====== */
+  /* 让 Wrapper 恢复自然状态，不要在它身上加背景、阴影和边框 */
+  :global(.ai-nav-notification) {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  
+  /* 将所有发光、圆角、背景样式全部击穿打在真正的内部卡片 DOM（.n-notification）上 */
+  :global(.ai-nav-notification.n-notification),
+  :global(.ai-nav-notification .n-notification) {
+    border-radius: 28px !important;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.8) !important;
+    backdrop-filter: blur(28px) saturate(200%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(200%) !important;
+    background-color: rgba(255, 255, 255, 0.72) !important;
+    
+    /* 强制重写原生宽度和外边距，解决出框问题 */
+    width: 360px !important;
+    max-width: 90vw !important;
+    margin-right: 24px !important; 
+
+    /* 覆盖原生内边距变量，确保头像对齐 */
+    --n-padding-top: 18px !important;
+    --n-padding-bottom: 18px !important;
+    --n-padding-left: 20px !important;
+    --n-padding-right: 20px !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification__avatar),
+  :global(.ai-nav-notification.n-notification .n-notification__avatar) {
+    top: 18px !important;
+    left: 20px !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification-main),
+  :global(.ai-nav-notification.n-notification .n-notification-main) {
+    margin-left: 44px !important;
+    width: calc(100% - 44px) !important;
   }
 
-  @keyframes focusSpotOutlineFade {
+  :global(.ai-nav-notification .n-notification-main__header),
+  :global(.ai-nav-notification.n-notification .n-notification-main__header) {
+    font-weight: 700 !important;
+    color: #1d1d1f !important;
+    font-size: 15px !important;
+  }
+
+  :global(.ai-nav-notification .n-notification-main__content),
+  :global(.ai-nav-notification.n-notification .n-notification-main__content) {
+    margin-top: 6px !important;
+    color: #424245 !important;
+    line-height: 1.5 !important;
+  }
+  
+  :global(.ai-nav-notification .n-notification-main-footer__meta) {
+    margin-top: 4px !important;
+  }
+
+  @keyframes focusSpotPulse {
     0% {
-      opacity: 0;
-      transform: scale(0.995);
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0px rgba(0, 113, 227, 0);
+      background-color: transparent;
     }
-    14% {
-      opacity: 0.95;
-      transform: scale(1);
+    15% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.25), 0 16px 56px -8px rgba(0, 113, 227, 0.65);
+      background-color: rgba(0, 113, 227, 0.03);
     }
-    58% {
-      opacity: 0.55;
-      transform: scale(1.004);
+    50% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.1), 0 8px 32px -4px rgba(0, 113, 227, 0.25);
+      background-color: transparent;
+    }
+    85% {
+      box-shadow: 0 0 0 1px rgba(0, 113, 227, 0.25), 0 16px 56px -8px rgba(0, 113, 227, 0.65);
+      background-color: rgba(0, 113, 227, 0.03);
     }
     100% {
-      opacity: 0;
-      transform: scale(1.01);
+      box-shadow: 0 0 0 0 rgba(0, 113, 227, 0), 0 0 0px rgba(0, 113, 227, 0);
+      background-color: transparent;
     }
   }
 
   .focus-spotlight {
     position: relative;
     border-radius: 14px;
-    animation: focusSpotPulse 2.9s cubic-bezier(0.16, 1, 0.3, 1) both;
-    transition: box-shadow 0.4s ease;
+    animation: focusSpotPulse 3s cubic-bezier(0.25, 0.1, 0.25, 1) both;
     z-index: 15;
     isolation: isolate;
-    will-change: transform, box-shadow;
-  }
-
-  .focus-spotlight::after {
-    content: '';
-    position: absolute;
-    inset: -6px;
-    border-radius: 18px;
-    border: 1px solid rgba(0, 113, 227, 0.34);
-    pointer-events: none;
-    animation: focusSpotOutlineFade 2.9s cubic-bezier(0.16, 1, 0.3, 1) both;
-    will-change: opacity, transform;
   }
 
   /* 某些卡片容器本身有 overflow-hidden，会把聚焦光晕裁切掉；临时放开以保证视觉完整 */
