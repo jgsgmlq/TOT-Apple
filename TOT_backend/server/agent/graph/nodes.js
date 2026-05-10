@@ -264,19 +264,36 @@ const contextAnalyzerRouter = async (state, config) => {
 
 const toolRetrieve = async (state) => {
   const intent = normalizeIntent(state.intent);
-  const topK = RoutingPolicy.tiers[state.selected_tier]?.tool_top_k || 3;
+  const msg = state.userMessage || '';
+
+  // 多意图启发式（不用 LLM，零成本）：
+  //   连接词 → 几乎肯定是多个独立问题
+  //   多个问号 → 口语化多问题
+  //   长句 + 逗号/分号/换行 → 多个子句，可能包含多个问题
+  const MULTI_CONJUNCTIONS = ['另外', '还有', '以及', '同时', '此外', '再加上', '顺便'];
+  const hasConjunction = MULTI_CONJUNCTIONS.some(c => msg.includes(c));
+  const multiQuestionMarks = (msg.match(/[？?]/g) || []).length >= 2;
+  const hasClauses = (msg.includes('，') || msg.includes('；') || msg.includes('\n')) && msg.length > 50;
+  const looksMultiQuestion = hasConjunction || multiQuestionMarks || hasClauses;
+
+  const topK = looksMultiQuestion
+    ? 5  // 多意图放宽，确保覆盖所有子问题的工具
+    : (RoutingPolicy.tiers[state.selected_tier]?.tool_top_k || 3);
 
   // ── Prior：intent map 给出的候选（按列表顺序赋递减分数） ────────────
   const intentSeed = INTENT_TOOL_MAP[intent];
   if (!intentSeed) {
     console.warn(`[ToolRetrieve] 意图 '${intent}' 未在 INTENT_TOOL_MAP 中注册`);
   }
-  const seedList = intentSeed || chatToolsService.getRegisteredToolNames();
+  // 多问题时 → 全工具 + 平坦 prior，让 FC LLM 自己挑工具回答所有子问题
+  const seedList = (looksMultiQuestion || !intentSeed)
+    ? chatToolsService.getRegisteredToolNames()
+    : intentSeed;
   const PRIOR_BASE = 5;
   const PRIOR_DECAY = 0.5;
 
-  // chat_only / 兜底时 prior 平坦 —— 工具排名完全由 BM25 + 上下文决定，不预设偏好
-  const isFlatPrior = intent === 'chat_only' || !intentSeed;
+  // chat_only / 兜底 / 多问题时 prior 平坦 —— 工具排名完全由 BM25 + 上下文决定
+  const isFlatPrior = intent === 'chat_only' || !intentSeed || looksMultiQuestion;
 
   const scoreById = new Map();
   seedList.forEach((id, i) => {
