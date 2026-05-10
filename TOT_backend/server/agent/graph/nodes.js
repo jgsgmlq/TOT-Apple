@@ -8,6 +8,17 @@ const { memoryQueueProducer } = require("../queue/bullMqProducer");
 const { getClient, endGeneration, endSpan, argsHash, keyedFields, maskPII, preview, promptHash, NOOP_TRACE } = require("../../utils/tracer");
 const promptRegistry = require('../../prompts/registry');
 
+// ─── 非 LLM 节点的 Langfuse span helper ──────────────────────────
+// 从 state.meta_trace_id 创建 span，traceId 为空时静默跳过。
+const startNodeSpan = (state, name, input) => {
+  const traceId = state.meta_trace_id;
+  if (!traceId) return null;
+  try {
+    const client = getClient();
+    return client ? client.span({ traceId, name, input }) : null;
+  } catch { return null; }
+};
+
 // === 真实的 LLM 配置 (复用项目的 DeepSeek API Key) ===
 // 考虑到意图路由这种一次性、低延迟的操作，推荐配置较小或响应更快的模型。
 const getRouterModel = () => new ChatOpenAI({
@@ -148,6 +159,7 @@ const renderMemoryBlock = (snippets) => {
 };
 
 const loadContext = async (state) => {
+  const span = startNodeSpan(state, 'LoadContext', { userId: state.userId });
   // T4 阶段二：真实调用 Store API 读取 `mid_term` 等记忆
   let memorySnippets = [];
   try {
@@ -161,6 +173,7 @@ const loadContext = async (state) => {
     console.error("[LoadContext] 真实记忆注入失败，降级为空上下文:", err);
   }
 
+  endSpan(span, { output: memorySnippets.length ? `${memorySnippets.length} snippets` : 'none' });
   return {
     memory_snippets: memorySnippets,
     messages: [new HumanMessage(state.userMessage)]
@@ -236,6 +249,7 @@ const contextAnalyzerRouter = async (state, config) => {
       entities: parsed.entities || {},
       entities_confidence: parsed.entities_confidence || {},
       selected_tier: tier,
+      meta_trace_id: config?.configurable?.traceId || state.meta_trace_id || '',
       meta_fallback_count: state.meta_fallback_count
     };
   } catch (err) {
@@ -252,6 +266,7 @@ const contextAnalyzerRouter = async (state, config) => {
       selected_tier: "L3_fc_guarded",
       entities: {},
       entities_confidence: {},
+      meta_trace_id: config?.configurable?.traceId || state.meta_trace_id || '',
       meta_fallback_count: (state.meta_fallback_count || 0) + 1
     };
   }
@@ -263,6 +278,8 @@ const contextAnalyzerRouter = async (state, config) => {
 // 不要再恢复 alias 映射。
 
 const toolRetrieve = async (state) => {
+  const span = startNodeSpan(state, 'ToolRetrieve', { intent: state.intent, userMessage: (state.userMessage || '').slice(0, 200) });
+
   const intent = normalizeIntent(state.intent);
   const msg = state.userMessage || '';
 
@@ -331,13 +348,17 @@ const toolRetrieve = async (state) => {
 
   console.log(`[ToolRetrieve] 意图: ${intent}, 候选工具(混合排序): ${candidates.join(', ')}`);
 
+  endSpan(span, { output: candidates.join(', '), metadata: { intent, topK, isMultiQuestion: looksMultiQuestion, isFlatPrior } });
+
   return {
     candidateTools: candidates
   };
 };
 
 const fc_CheckSteps = async (state) => {
-  return { 
+  const span = startNodeSpan(state, 'FC_CheckSteps', { step: (state.fc_super_step_count || 0) + 1, tier: state.selected_tier });
+  endSpan(span, { output: `step ${(state.fc_super_step_count || 0) + 1}` });
+  return {
     fc_super_step_count: (state.fc_super_step_count || 0) + 1,
     fc_next_action: '',
   };
@@ -630,6 +651,7 @@ const {
 const computeToolCallSignature = buildToolSignature;
 
 const fc_CheckDuplicate = async (state) => {
+  const span = startNodeSpan(state, 'FC_CheckDuplicate', {});
   // 用 helper 找最近一条带 tool_calls 的 AIMessage，比直接取 lastMsg 更稳健
   // （中间可能被 ToolMessage / SystemMessage 穿插）。
   const { toolCalls } = getLastAiToolCalls(state);
@@ -679,9 +701,11 @@ const fc_CheckDuplicate = async (state) => {
   }
 
   if (pendingToolCalls.length === 0) {
+    endSpan(span, { output: 'all deduped → merge' });
     return { toolResults, fc_next_action: 'merge' };
   }
 
+  endSpan(span, { output: `${pendingToolCalls.length} new calls → validate` });
   return {
     toolResults,
     pending_tool_calls: pendingToolCalls,
@@ -695,6 +719,7 @@ const fc_CheckDuplicate = async (state) => {
 // 在这里为了 PoC，我们对核心工具（例如 queryExecutiveMetrics）应用明确的 Zod 约束
 
 const fc_ValidateParams = async (state) => {
+  const span = startNodeSpan(state, 'FC_ValidateParams', { toolCount: (state.pending_tool_calls || []).length, repairAttempts: state.fc_repair_attempts });
   const pendingToolCalls = state.pending_tool_calls || [];
 
   // ── HITL resume consumption ─────────────────────────────────────────
@@ -750,31 +775,62 @@ const fc_ValidateParams = async (state) => {
     const raw = entityObj.raw || '';
     const canonical = entityObj.canonical || '';
     const options = [];
+
+    // 从数据库查候选项 —— 不猜正则，直接查 stores/tasks 表
+    const seen = new Set();
+    try {
+      if (firstField === 'storeId' || firstField === 'store') {
+        const stores = db.all('SELECT id, name, region FROM stores ORDER BY name LIMIT 8');
+        for (const s of stores) {
+          const label = `${s.name} (${s.region}, ${s.id})`;
+          options.push({ id: `db_${firstField}_${s.id}`, label, value: s.id, meta: { field: firstField, value: s.id } });
+        }
+      } else if (firstField === 'taskName' || firstField === 'productName' || firstField === 'task') {
+        const tasks = db.all("SELECT id, title FROM tasks WHERE status = 'dispatched' ORDER BY created_at DESC LIMIT 8");
+        for (const t of tasks) {
+          options.push({ id: `db_${firstField}_${t.id}`, label: t.title, value: t.title, meta: { field: firstField, value: t.title } });
+        }
+      } else if (firstField === 'region') {
+        const regions = db.all('SELECT DISTINCT region FROM stores WHERE region IS NOT NULL ORDER BY region LIMIT 8');
+        for (const r of regions) {
+          options.push({ id: `db_${firstField}_${r.region}`, label: r.region, value: r.region, meta: { field: firstField, value: r.region } });
+        }
+      }
+    } catch (e) {
+      console.warn('[fc_ValidateParams] 数据库候选查询失败，降级为纯输入:', e.message);
+    }
+    if (options.length > 6) options.length = 6;
+
+    // entity 有名字面/规范值 → 优先用
     if (canonical) {
-      options.push({
-        id: `confirm_${firstField}_${canonical}`,
-        label: `就是「${canonical}」`,
-        meta: { field: firstField, value: canonical }
-      });
+      options.unshift({ id: `confirm_${firstField}_${canonical}`, label: `就是「${canonical}」`, meta: { field: firstField, value: canonical } });
     }
     if (raw && raw !== canonical) {
-      options.push({
-        id: `confirm_${firstField}_raw`,
-        label: `按字面理解「${raw}」`,
-        meta: { field: firstField, value: raw }
-      });
+      options.unshift({ id: `confirm_${firstField}_raw`, label: `按字面理解「${raw}」`, meta: { field: firstField, value: raw } });
     }
-    options.push({
-      id: `clarify_${firstField}_other`,
-      label: '都不是，我重新描述',
-      meta: { field: firstField, intent_shift: true }
-    });
+
+    // 始终提供"其他"
+    options.push({ id: `clarify_${firstField}_other`, label: '都不是，我重新描述', meta: { field: firstField, intent_shift: true } });
+
+    // 如果连对话历史里也提取不到候选项，不弹 HITL——走闲聊处理
+    const hasRealOptions = options.some(o => !o.meta?.intent_shift);
+    if (!hasRealOptions) {
+      console.log(`[fc_ValidateParams] 低置信实体无可用候选项，跳过 HITL → finalize`);
+      return {
+        ...hitlReset,
+        ...entitiesUpdate,
+        mode: 'chat_only',
+        intent: 'chat_only',
+        fc_next_action: 'finalize',
+        messages: [new AIMessage({ content: '' })]
+      };
+    }
 
     const payload = {
       type: options.length > 1 ? 'select' : 'input',
       prompt: raw
         ? `我对「${raw}」的理解还不够确定，能帮我确认下是指什么吗？`
-        : `我需要您补充一下「${firstField}」的具体范围。`,
+        : '您的消息比较简短，能帮我确认一下具体想查什么吗？以下是一些可能相关的内容：',
       options,
       agent_id: 'executive_chat',
       reason: 'low_confidence_entity',
@@ -875,32 +931,28 @@ const fc_ValidateParams = async (state) => {
               opts.push({ id: `enum_${field}_${ev}`, label: ev, value: ev, meta: { field } });
             }
           }
-          // 2) 对话历史中最近提到的名称（门店、任务、区域等）
+          // 2) 数据库查询候选项（替代正则）
           if (opts.length === 0) {
-            const historyText = (state.messages || [])
-              .filter(m => m._getType && m._getType() === 'ai')
-              .slice(-3)
-              .map(m => typeof m.content === 'string' ? m.content : '')
-              .join('\n');
-            // 提取模式：S开头+数字（门店ID）、中文名+店/区、任务名（书名号内）
-            const seen = new Set();
-            const patterns = [
-              /\b(S\d+)\b/g,                          // S008, S010
-              /([^\s，。]{2,10}(?:店|区|体验店))/g,    // 观音桥体验店, 华东区
-              /《([^》]{2,30})》/g,                     // 《iPhone 17 新品培训》
-              /"([^"]{2,30})"/g,                       // "iPhone 17 新品培训"
-            ];
-            for (const re of patterns) {
-              let m;
-              while ((m = re.exec(historyText)) !== null) {
-                const val = m[1] || m[0];
-                if (!seen.has(val)) {
-                  seen.add(val);
-                  opts.push({ id: `hist_${field}_${opts.length}`, label: val, value: val, meta: { field } });
+            try {
+              if (field === 'storeId') {
+                const stores = db.all('SELECT id, name, region FROM stores ORDER BY name LIMIT 8');
+                for (const s of stores) {
+                  opts.push({ id: `db_${field}_${s.id}`, label: `${s.name} (${s.region}, ${s.id})`, value: s.id, meta: { field } });
+                }
+              } else if (field === 'taskName' || field === 'productName') {
+                const tasks = db.all("SELECT id, title FROM tasks WHERE status = 'dispatched' ORDER BY created_at DESC LIMIT 8");
+                for (const t of tasks) {
+                  opts.push({ id: `db_${field}_${t.id}`, label: t.title, value: t.title, meta: { field } });
+                }
+              } else if (field === 'region') {
+                const regions = db.all('SELECT DISTINCT region FROM stores WHERE region IS NOT NULL ORDER BY region LIMIT 8');
+                for (const r of regions) {
+                  opts.push({ id: `db_${field}_${r.region}`, label: r.region, value: r.region, meta: { field } });
                 }
               }
+            } catch (e) {
+              console.warn('[fc_ValidateParams] missing-param DB query failed:', e.message);
             }
-            // 最多 6 个候选
             if (opts.length > 6) opts.length = 6;
           }
           // 3) "其他" 选项始终在最后
@@ -960,6 +1012,7 @@ const fc_ValidateParams = async (state) => {
     toolResults,
     fc_next_action: 'execute'
   };
+  endSpan(span, { output: `execute ${validatedToolCalls.length} tools` });
 };
 
 // 把 router 给出的 entities（{ field: { canonical, raw, confidence } }）
@@ -982,8 +1035,10 @@ const flattenEntitiesForRepair = (entities) => {
 };
 
 const fc_ParamRepair = async (state) => {
+  const span = startNodeSpan(state, 'FC_ParamRepair', { attempts: state.fc_repair_attempts, reason: (state.repair_error_reason || '').slice(0, 200) });
   const pendingToolCalls = state.pending_tool_calls || [];
   if (pendingToolCalls.length === 0) {
+    endSpan(span, { output: 'no pending calls → skip' });
     return { fc_next_action: 'validate' };
   }
 
@@ -1024,6 +1079,7 @@ const fc_ParamRepair = async (state) => {
 
   // 注：不再写入「假 ToolMessage」（之前 content 是 {repaired:true}），
   // 否则它会被后续 LLM 误读为真实工具结果，污染会话历史。
+  endSpan(span, { output: `repaired ${repaired.length} calls` });
   return {
     pending_tool_calls: repaired,
     fc_next_action: 'validate'
@@ -1183,6 +1239,7 @@ const fc_ExecuteTool = async (state, config) => {
 };
 
 const fc_MergeToolResults = async (state) => {
+  const span = startNodeSpan(state, 'FC_MergeToolResults', { toolResultKeys: Object.keys(state.toolResults || {}) });
   // 从后向前找最近一条带 tool_calls 的 AIMessage 作为 anchor，
   // 而不是脆弱地依赖 lastMsg —— 后者在「部分缓存命中」等场景下不一定是 AI 消息。
   let anchor = null;
@@ -1261,12 +1318,14 @@ const fc_MergeToolResults = async (state) => {
   if (fallbackBump > 0) {
     updates.meta_fallback_count = (state.meta_fallback_count || 0) + fallbackBump;
   }
+  endSpan(span, { output: `${newMessages.length} messages merged` });
   return updates;
 };
 
 const { interrupt } = require("@langchain/langgraph");
 
 const humanInTheLoopGate = async (state) => {
+  const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status });
   const payload = state.interrupt_payload;
   console.log(`[HITL] 图执行流挂起，等待客户端发送 resume。 payload:`, payload);
 
@@ -1284,6 +1343,7 @@ const humanInTheLoopGate = async (state) => {
     : (typeof normalized?.value === 'string' ? normalized.value.trim() : '');
 
   if (isCancel) {
+    endSpan(span, { output: 'cancel' });
     const cancelMsg = '已取消本次查询。如需继续，请告诉我新的问题。';
     return {
       hitl_status: 'resumed',
@@ -1298,6 +1358,7 @@ const humanInTheLoopGate = async (state) => {
   }
 
   if (isIntentShift) {
+    endSpan(span, { output: 'intent_shift' });
     // intent_shift：必须把用户新输入写回 userMessage，并清空旧 router 决策，
     // 否则 ContextAnalyzerRouter 会用旧消息重新分类，等于没切意图。
     const nextUserMessage = userText || state.userMessage;
@@ -1329,6 +1390,7 @@ const humanInTheLoopGate = async (state) => {
   }
 
   // slot_fill：保留 pending_tool_calls 让 fc_ValidateParams 消费 resumePayload 的补丁
+  endSpan(span, { output: resumeType });
   const messageContent = `用户确认了选项/补充了信息: ${JSON.stringify(normalized?.value ?? normalized?.selected_option_id ?? normalized)}`;
   return {
     hitl_status: 'resumed',
@@ -1353,6 +1415,19 @@ const { decideChart } = require('./decideChart');
 const sanitizeUserFacingMarkdown = (content) => {
   const text = typeof content === 'string' ? content : '';
   if (!text) return text;
+
+  // 内部错误标记 → 友好话术
+  if (text.startsWith('SYSTEM_ERROR:') || text.includes('SYSTEM_ERROR')) {
+    const reason = text.replace(/^SYSTEM_ERROR:\s*/i, '').replace(/工具参数校验失败[。.]?\s*/g, '');
+    if (reason.includes('区域范围限定') || reason.includes('regions') || reason.includes('rtm')) {
+      return '抱歉，当前无法查询该范围的数据。请检查您的访问权限范围，或尝试指定更具体的查询条件。';
+    }
+    if (reason.includes('必填') || reason.includes('MISSING') || reason.includes('storeId') || reason.includes('taskName')) {
+      return '我需要更多信息才能完成查询。请告诉我具体的任务名称、门店名称或产品名称，我会立即为您查询。';
+    }
+    return '抱歉，查询过程中遇到了问题。请尝试缩小查询范围，或换个方式重新描述您的问题。';
+  }
+
   const hasInternalMarkers =
     text.includes('执行已达到复杂度上限') ||
     text.includes('工具查询片段');
@@ -1430,6 +1505,7 @@ const finalResponseStep = async (state, config) => {
 };
 
 const persistAndEmit = async (state, config) => {
+  const span = startNodeSpan(state, 'PersistAndEmit', { sessionId: state.sessionId, intent: state.intent });
   const sessionId = state.sessionId;
   const replyContent = state.reply_markdown || state.finalResponse || "";
   const now = formatNowSqliteLocal();
@@ -1479,7 +1555,8 @@ const persistAndEmit = async (state, config) => {
     }
   }
 
-  return { 
+  endSpan(span, { output: `msgId=${assistMsgId}`, metadata: { contentBytes: replyContent.length } });
+  return {
     finalMessageId: assistMsgId,
     reply_markdown: replyContent
   };

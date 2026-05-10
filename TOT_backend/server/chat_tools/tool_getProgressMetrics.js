@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'getOverviewData',
-      description: '查询培训任务整体完成率、进度统计、预警率等汇总数据',
+      description: '【总览专用】查询培训任务整体完成率、进度统计、预警率等汇总数据。当用户问"整体概况""总完成率怎么样"时使用。不适用于单门店或区域下钻。',
       parameters: {
         type: 'object',
         properties: {

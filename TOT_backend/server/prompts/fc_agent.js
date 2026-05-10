@@ -42,9 +42,9 @@ TOOL SELECTION BY QUESTION TYPE:
 
 // ─── 段 4：回复格式与行为约束 ─────────────────────────────
 const constraints = `GUIDELINES:
-1. If you have enough data from tool results, provide a concise Markdown summary. Do NOT call the same tool again with the same parameters.
-2. If tools failed or steps are exceeded, explain what happened and suggest alternatives.
-3. Use tables or lists for data presentation.
+1. **Summarize first**: After receiving tool results, your default action should be to summarize and respond — NOT to call more tools. Only call additional tools if the data is clearly insufficient to answer the user's question.
+2. Do NOT call the same tool again with the same parameters. If data is incomplete, explain what's missing.
+3. Use tables or lists for data presentation. Include key numbers and actionable insights.
 4. When calling tools, use ONLY the tools provided in your tool belt.
 5. **Step budget is tight**: if multiple tools from your belt are obviously useful for the user's question, return them all in a single response (parallel tool_calls) instead of calling them one-by-one across multiple steps.
 6. **Stop and Ask (CRITICAL)**: If a tool returns an error about missing parameters (e.g., INVALID_PARAMETERS, "请明确您要查询的培训任务名称"), **DO NOT retry calling the tool repeatedly**. Immediately stop and output a natural language response asking the user to provide the missing information.`;

@@ -7,7 +7,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'getStoreDetailData',
-      description: '查询某一具体门店内所有员工的培训进度明细',
+      description: '【门店下钻】查询指定门店内所有员工的培训进度明细（谁完成了、谁在进行中、各平台状态）。需要 storeId。当用户问"XX店的情况""S008的员工明细"时使用。门店名称模糊时会返回候选列表。',
       parameters: {
         type: 'object',
         required: ['storeId'],

@@ -4,8 +4,23 @@ const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmT
 
 // 路由条件分支
 const routeAfterRouter = (state) => {
-  // deny 直接拒绝；chat_only 和 tool_action 都走 FC 循环，让 LLM 根据对话历史自己判断是否需要工具
   if (state.mode === "deny") return "deny";
+
+  // 闲聊捷径：极短消息（<5字）→ 无条件跳 FC 循环
+  // 含 5-9 字 + 无数据上下文 → 也跳。长消息或已有数据上下文的短消息走 FC。
+  if (state.mode === "chat_only" || state.intent === "chat_only") {
+    const msg = (state.userMessage || '').trim();
+    if (msg.length < 5) return "chat_only";
+    if (msg.length < 10) {
+      const hasDataContext = (state.messages || []).some(m => {
+        if (!m._getType || m._getType() !== 'ai') return false;
+        const c = typeof m.content === 'string' ? m.content : '';
+        return c.includes('|') || c.includes('完成率') || c.includes('###');
+      });
+      if (!hasDataContext) return "chat_only";
+    }
+  }
+
   return "tool_action";
 };
 
@@ -90,9 +105,10 @@ const buildGraph = () => {
   workflow.addEdge(START, "LoadContext");
   workflow.addEdge("LoadContext", "ContextAnalyzerRouter");
 
-  // Router 二路分流：deny 拒绝，其余全走 FC 循环
+  // Router 三路分流：deny 拒绝 / 纯闲聊直达 / 其余走 FC 循环
   workflow.addConditionalEdges("ContextAnalyzerRouter", routeAfterRouter, {
     deny: "FinalResponseStep",
+    chat_only: "FinalResponseStep",
     tool_action: "ToolRetrieve"
   });
 
