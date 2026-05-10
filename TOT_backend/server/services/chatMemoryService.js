@@ -154,7 +154,7 @@ ${conversationText}`;
     for (const item of extracted) {
       if (!item.content || !item.type) continue;
 
-      const hash = crypto.createHash('md5').update(item.content).digest('hex');
+      const hash = crypto.createHash('sha256').update(item.content).digest('hex');
       const now = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-');
 
       const changes = db.run(

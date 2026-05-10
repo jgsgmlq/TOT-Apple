@@ -4,11 +4,9 @@ const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmT
 
 // 路由条件分支
 const routeAfterRouter = (state) => {
-  // mode 是路由唯一真值源（chat_only | tool_action | deny）
+  // deny 直接拒绝；chat_only 和 tool_action 都走 FC 循环，让 LLM 根据对话历史自己判断是否需要工具
   if (state.mode === "deny") return "deny";
-  if (state.mode === "chat_only") return "chat_only";
-  if (state.mode === "tool_action") return "tool_action";
-  return "chat_only"; // default
+  return "tool_action";
 };
 
 const RoutingPolicy = require('./routingPolicy');
@@ -92,10 +90,9 @@ const buildGraph = () => {
   workflow.addEdge(START, "LoadContext");
   workflow.addEdge("LoadContext", "ContextAnalyzerRouter");
 
-  // Router 三路分流
+  // Router 二路分流：deny 拒绝，其余全走 FC 循环
   workflow.addConditionalEdges("ContextAnalyzerRouter", routeAfterRouter, {
     deny: "FinalResponseStep",
-    chat_only: "FinalResponseStep",
     tool_action: "ToolRetrieve"
   });
 

@@ -3,7 +3,7 @@
 const logger = require('../utils/logger');
 const redisAdapter = require('../utils/redisAdapter');
 
-const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours (hard cleanup; freshness controlled by per-tool signature time bucket)
 const DEFAULT_CAPACITY = 20;
 
 /**

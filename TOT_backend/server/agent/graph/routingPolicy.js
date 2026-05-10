@@ -18,7 +18,7 @@ const RoutingPolicy = {
     // max_super_steps 给 3 而不是 2：2 步等于 LLM 选 1 个工具就立刻被强制总结，
     // 中间没有补调第二个工具的空间。一旦 LLM 第一步选错工具或单工具数据不够，
     // 就只能输出"我无法访问数据"兜底。3 步给一次纠错/补调机会，代价是多 1 次 LLM 调用。
-    L2_intent_fastpath: { max_super_steps: 3, tool_top_k: 2, max_repair_attempts: 1 },
+    L2_intent_fastpath: { max_super_steps: 3, tool_top_k: 3, max_repair_attempts: 1 },
     L3_fc_guarded:      { max_super_steps: 4, tool_top_k: 3, max_repair_attempts: 2 },
     L4_heavy_fc:        { max_super_steps: 6, tool_top_k: 5, max_repair_attempts: 3 }
   }

@@ -15,6 +15,29 @@ function writeSseHeaders(res) {
 }
 
 /**
+ * SSE keepalive：每隔 intervalMs 发送 SSE 注释行，防止代理/负载均衡器因
+ * 长时间无数据而断开连接。SSE 规范以 `:` 开头的行视为注释，客户端会忽略。
+ *
+ * @param {import('express').Response} res
+ * @param {number} [intervalMs=15000]
+ * @returns {() => void} 停止 keepalive 的函数
+ */
+function startSseKeepalive(res, intervalMs = 15000) {
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      clearInterval(timer);
+      return;
+    }
+    res.write(': heartbeat\n\n');
+  }, intervalMs);
+
+  // 连接意外关闭时清理
+  res.on('close', () => clearInterval(timer));
+
+  return () => clearInterval(timer);
+}
+
+/**
  * @param {import('express').Response} res
  * @returns {(event: string, data: unknown) => void}
  */
@@ -27,5 +50,6 @@ function createSseSender(res) {
 
 module.exports = {
   writeSseHeaders,
+  startSseKeepalive,
   createSseSender,
 };

@@ -10,7 +10,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'getWarningsData',
-      description: '查询存在风险（进度最慢、完成率低或临近截止）的门店列表，即预警数据。注：本工具只能查最差的门店，不能查进度最快的门店。',
+      description: '【预警专用】查询需要重点关注的门店列表。自动筛选进度最慢、完成率最低、或有P0/P1/P2危机的门店。当用户问"重点关注""预警""最差""落后"或任何问题性查询时，优先使用此工具。可选 taskId 参数限定任务范围。',
       parameters: {
         type: 'object',
         properties: {
@@ -22,7 +22,7 @@ module.exports = {
   meta: { 
     enabled: true,
     requiredRole: ['executive'],
-    scopePolicy: 'any',
+    scopePolicy: 'regional_scoped',
     timeoutMs: 8000
   },
   handler: (args, regionScope) => {

@@ -93,7 +93,7 @@ Bot Response: "${finalResponse}"`;
         // / created_at / updated_at（DB 默认）。
         const memoryHash = crypto
           .createHash('sha256')
-          .update(`${userId}|${fact}`)
+          .update(fact)
           .digest('hex');
         db.run(
           `INSERT INTO user_memories (id, user_id, memory_hash, memory_type, content, confidence_score)

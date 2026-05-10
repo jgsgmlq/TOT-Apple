@@ -45,8 +45,19 @@ function loadTools() {
           namespaceName: `${toolNamespace}.${toolName}`,
           schema: toolModule.schema.function.parameters,
           requiredRole: meta.requiredRole || [],
-          scopePolicy: meta.scopePolicy || 'any', // 'any', 'national_only'
+          scopePolicy: (() => {
+            const VALID_SCOPE_POLICIES = ['national_only', 'regional_scoped', 'public'];
+            const p = meta.scopePolicy;
+            if (!p || !VALID_SCOPE_POLICIES.includes(p)) {
+              throw new Error(
+                `[chatToolsService] tool '${toolName}' (${file}) must declare meta.scopePolicy ` +
+                `as one of: ${VALID_SCOPE_POLICIES.join(', ')}. Got: ${JSON.stringify(p)}`
+              );
+            }
+            return p;
+          })(),
           timeoutMs: meta.timeoutMs || 5000,
+          freshness: meta.freshness || 'realtime', // 'realtime' | 'daily' | 'static'
         });
         registered += 1;
         logger.debug('tool_registered', { toolName, file });
@@ -243,6 +254,26 @@ function authorizeToolCall(toolName, meta, sessionContext) {
     }
   }
 
+  if (meta?.scopePolicy === 'regional_scoped') {
+    // national 权限可访问所有区域，直接放行
+    if (regionScope?.type === 'national') {
+      // pass
+    } else {
+      const hasRegions = Array.isArray(regionScope?.regions) && regionScope.regions.length > 0;
+      const hasRtm = typeof regionScope?.rtm === 'string' && regionScope.rtm.trim() !== '';
+      if (!hasRegions && !hasRtm) {
+        violations.push({
+          field: 'scope',
+          code: 'PERMISSION_DENIED',
+          message: `工具 ${toolName} 需要区域范围限定，但当前 session 未提供有效的 regions 或 rtm`,
+          repairable: false,
+        });
+      }
+    }
+  }
+
+  // 'public' scopePolicy: no additional check
+
   return { ok: violations.length === 0, violations };
 }
 
@@ -348,10 +379,24 @@ function getToolMeta(toolName) {
   return toolMetas.get(normalized);
 }
 
+/**
+ * 根据工具 freshness 返回签名时间桶宽度（ms）。
+ *   realtime → 60s   (同分钟去重)
+ *   daily    → 3600s (同小时去重)
+ *   static   → 86400s (同天去重)
+ */
+function getToolFreshnessBucketMs(toolName) {
+  const DEFAULT_BUCKET_MS = 60_000;
+  const BUCKETS = { realtime: 60_000, daily: 3_600_000, static: 86_400_000 };
+  const meta = getToolMeta(toolName);
+  return meta ? (BUCKETS[meta.freshness] || DEFAULT_BUCKET_MS) : DEFAULT_BUCKET_MS;
+}
+
 module.exports = {
   TOOL_SCHEMAS,
   executeByName,
   getToolMeta,
+  getToolFreshnessBucketMs,
   getRegisteredToolNames,
   getToolSchema,
   getToolSchemasByNames,

@@ -9,11 +9,12 @@ const chatAgentRunner = require('./chatAgentRunner');
 const { AGENT_MODE } = chatAgentRunner;
 const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
-const { writeSseHeaders, createSseSender } = require('../utils/sseResponse');
+const { writeSseHeaders, startSseKeepalive, createSseSender } = require('../utils/sseResponse');
 const { createAgentTrace, endSpan, maskPII, preview, NOOP_TRACE } = require('../utils/tracer');
 const { buildGraph } = require('../agent/graph/graph');
 const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
 const { Langfuse } = require('langfuse');
+const { HumanMessage, AIMessage, ToolMessage } = require("@langchain/core/messages");
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(reqUser) {
@@ -146,7 +147,7 @@ function extractToolMetaForTrace(finalState) {
   };
 }
 
-function buildClarifySsePayload(interruptPayload, requestId) {
+function buildClarifySsePayload(interruptPayload, requestId, extra = {}) {
   const payload = interruptPayload && typeof interruptPayload === 'object' ? interruptPayload : {};
   const prompt = payload.prompt || payload.message || '需要您补充一些信息后才能继续。';
   return {
@@ -156,13 +157,14 @@ function buildClarifySsePayload(interruptPayload, requestId) {
       ...payload,
       prompt,
       resumeToken: payload.resume_token || payload.resumeToken || null,
+      threadId: extra.threadId || null,
       payload,
     },
     requestId,
   };
 }
 
-function buildInterruptedDonePayload(interruptPayload, sessionId, requestId, responseTime, timestamp) {
+function buildInterruptedDonePayload(interruptPayload, sessionId, requestId, responseTime, timestamp, extra = {}) {
   const payload = interruptPayload && typeof interruptPayload === 'object' ? interruptPayload : {};
   const prompt = payload.prompt || payload.message || '需要您补充一些信息后才能继续。';
   return {
@@ -177,6 +179,7 @@ function buildInterruptedDonePayload(interruptPayload, sessionId, requestId, res
       contextId: sessionId,
       timestamp,
       interruptPayload: payload,
+      threadId: extra.threadId || null,
     },
     requestId,
   };
@@ -355,6 +358,23 @@ function loadFormattedHistory(sessionId, trace = null) {
   }
 }
 
+/** 将 loadFormattedHistory 返回的行转换为 LangChain 消息对象，用于注入图的 messages 状态 */
+function historyToLangChainMessages(rows) {
+  const msgs = [];
+  for (const r of rows) {
+    if (r.role === 'user') {
+      msgs.push(new HumanMessage(r.content));
+    } else if (r.role === 'assistant') {
+      const opts = {};
+      if (r.tool_calls) opts.tool_calls = r.tool_calls;
+      msgs.push(new AIMessage({ content: r.content, ...opts }));
+    } else if (r.role === 'tool') {
+      msgs.push(new ToolMessage({ content: r.content, tool_call_id: r.tool_call_id || '' }));
+    }
+  }
+  return msgs;
+}
+
 // ─── sendMessage (Non-stream) ──────────────────────────────────────────────────
 async function sendMessage(sessionId, userMessage, userId, req = {}) {
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
@@ -465,7 +485,11 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
 }
 
 // ─── resumeMessageStreamLangGraph (T1 Phase 2 HITL 恢复专用) ─────────────────────
-async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, req, res) {
+async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, userId, req, res) {
+  if (!threadId || !threadId.startsWith(`${sessionId}:`)) {
+    throw Object.assign(new Error('threadId 与 sessionId 不匹配'), { status: 400, code: 'CHAT_011' });
+  }
+
   const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
   if (!session) {
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
@@ -498,6 +522,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
 
   writeSseHeaders(res);
   const send = createSseSender(res);
+  startSseKeepalive(res);
   const abortController = new AbortController();
 
   const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, resumePayload } });
@@ -507,8 +532,12 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
   const wrappedSend = (event, payload) => send(event, payload);
   let sseClientAborted = false;
   req.on('close', () => {
-    sseClientAborted = true;
-    abortController.abort();
+    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
+    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
+    if (res.headersSent) {
+      sseClientAborted = true;
+      abortController.abort();
+    }
   });
 
   const sseEmitter = {
@@ -548,12 +577,13 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
        });
     }
 
-    const thread = { 
-      configurable: { 
-        thread_id: sessionId,
+    const thread = {
+      configurable: {
+        thread_id: threadId,
         sseEmitter,
         traceId: trace ? trace.id : undefined 
       },
+      recursionLimit: 60,
       signal: abortController.signal
     };
 
@@ -568,8 +598,8 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, userId, re
     if (interruptPayload) {
       const responseTime = Date.now() - startMs;
       const timestamp = formatNowSqliteLocal();
-      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId));
-      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp));
+      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
       res.end();
       return { interrupted: true, interruptPayload };
     }
@@ -680,6 +710,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
 
   writeSseHeaders(res);
   const send = createSseSender(res);
+  const stopKeepalive = startSseKeepalive(res);
   const abortController = new AbortController();
 
   const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId } });
@@ -689,8 +720,12 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
   const wrappedSend = (event, payload) => send(event, payload);
   let sseClientAborted = false;
   req.on('close', () => {
-    sseClientAborted = true;
-    abortController.abort();
+    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
+    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
+    if (res.headersSent) {
+      sseClientAborted = true;
+      abortController.abort();
+    }
   });
 
   const sseEmitter = {
@@ -727,24 +762,30 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
        });
     }
 
-    const inputState = { 
-      userMessage, 
+    const historyRows = loadFormattedHistory(sessionId, trace);
+    const historyMessages = historyToLangChainMessages(historyRows);
+
+    const inputState = {
+      userMessage,
       sessionId,
       userId: session.user_id.toString(),
-      regionScope 
+      regionScope,
+      messages: historyMessages
     };
 
+    const threadId = `${sessionId}:${nanoid()}`;
     const thread = {
       configurable: {
         // 每次请求一个独立 thread_id，避免复用上一轮 checkpoint 把 fc_super_step_count
         // 等中间状态带进来导致 fc_CheckSteps 直接判超限、跳过 fc_LlmToolCallStep。
         // 历史对话上下文已经由 loadContext/loadFormattedHistory 从 chat_messages 表重建，
-        // 不依赖 LangGraph checkpoint 续接。resume 路径仍用稳定 thread_id（在另一个函数里）。
-        thread_id: `${sessionId}:${nanoid()}`,
+        // 不依赖 LangGraph checkpoint 续接。resume 路径由前端回传 threadId 精确命中。
+        thread_id: threadId,
         sseEmitter,
         // 将外层建好的 root TraceId 注入，好让子节点（Router 和 FC模型）生成的 Span 都挂在这棵树下
         traceId: trace ? trace.id : undefined
       },
+      recursionLimit: 60,
       signal: abortController.signal
     };
 
@@ -754,8 +795,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     if (interruptPayload) {
       const responseTime = Date.now() - startMs;
       const timestamp = formatNowSqliteLocal();
-      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId));
-      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp));
+      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
       res.end();
       return { interrupted: true, interruptPayload };
     }
@@ -914,8 +955,12 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
 
   // 联动客户端断开
   req.on('close', () => {
-    sseClientAborted = true;
-    abortController.abort();
+    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
+    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
+    if (res.headersSent) {
+      sseClientAborted = true;
+      abortController.abort();
+    }
   });
 
   const wrappedSend = (event, payload) => send(event, payload);

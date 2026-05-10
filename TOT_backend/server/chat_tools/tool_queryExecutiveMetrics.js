@@ -11,7 +11,7 @@ const schema = {
   type: 'function',
   function: {
     name: 'queryExecutiveMetrics',
-    description: '执行高管度量查询。当需要查询完成率、预警率、耗时等指标，且涉及大区/业态/经销商/门店对比或排序时，优先使用此工具。支持模糊匹配任务或产品。',
+    description: '查询培训任务的完成率、进度、耗时等具体数值指标。支持按大区/业态/经销商/门店维度分组对比和排序。需要指定 taskName 或 productName 来定位任务。注意：如果要查"重点关注"或"预警"门店，请用 getWarningsData。',
     parameters: {
       type: 'object',
       properties: {
@@ -19,10 +19,10 @@ const schema = {
           type: 'array',
           items: {
             type: 'string',
-            enum: ['channel_l3', 'channel_l4', 'dealer', 'store'],
+            enum: ['channel_l3', 'channel_l4', 'dealer', 'store', 'all'],
             description: '维度。channel_l3=大区, channel_l4=业态/Format, dealer=经销商, store=门店'
           },
-          description: '聚合维度。传空或 ["all"] 表示全量汇总。'
+          description: '聚合维度。不传此字段或传空数组 [] 表示全量汇总。'
         },
         metrics: {
           type: 'array',
@@ -79,7 +79,7 @@ const schema = {
 const meta = {
   enabled: true,
   requiredRole: ['executive', 'central', 'admin'],
-  scopePolicy: 'any',
+  scopePolicy: 'regional_scoped',
   timeoutMs: 8000
 };
 
