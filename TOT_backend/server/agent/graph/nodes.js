@@ -6,6 +6,7 @@ const { formatNowSqliteLocal } = require('../../utils/ddlAt');
 const chatToolsService = require('../../services/chatToolsService');
 const { memoryQueueProducer } = require("../queue/bullMqProducer");
 const { getClient, endGeneration, endSpan, argsHash, keyedFields, maskPII, preview, promptHash, NOOP_TRACE } = require("../../utils/tracer");
+const promptRegistry = require('../../prompts/registry');
 
 // === 真实的 LLM 配置 (复用项目的 DeepSeek API Key) ===
 // 考虑到意图路由这种一次性、低延迟的操作，推荐配置较小或响应更快的模型。
@@ -68,12 +69,12 @@ const getLlmWithTools = (candidateTools = null) => {
 // 这是 ToolRetrieve 节点和 getLlmWithTools 的唯一权威来源。
 // 任何对工具集合的修改都应该改这里，并由下方启动校验保证名字真实存在。
 const INTENT_TOOL_MAP = Object.freeze({
-  query_metrics:   ["queryExecutiveMetrics", "getOverviewData", "getRegionDetailData"],
-  progress_query:  ["getOverviewData", "queryExecutiveMetrics"],
-  project_status:  ["getTaskListData", "getOverviewData", "queryExecutiveMetrics"],
-  warning_query:   ["getWarningsData", "queryExecutiveMetrics", "getStoreDetailData"],
-  drill_down:      ["getRegionDetailData", "getStoreDetailData", "queryExecutiveMetrics"],
-  analytics_query: ["runAnalytics", "queryExecutiveMetrics", "fetchRawDataset", "executeCode"],
+  query_metrics:   ["queryExecutiveMetrics", "getOverviewData", "getRegionDetailData", "searchEntities"],
+  progress_query:  ["getOverviewData", "queryExecutiveMetrics", "searchEntities"],
+  project_status:  ["getTaskListData", "getOverviewData", "queryExecutiveMetrics", "searchEntities"],
+  warning_query:   ["getWarningsData", "queryExecutiveMetrics", "getStoreDetailData", "searchEntities"],
+  drill_down:      ["getRegionDetailData", "getStoreDetailData", "queryExecutiveMetrics", "searchEntities"],
+  analytics_query: ["runAnalytics", "queryExecutiveMetrics", "fetchRawDataset", "executeCode", "searchEntities"],
 });
 
 // Router LLM 偶尔会输出 spec 文档里的别名（task_status/store_warning/...）或常见错别字，
@@ -83,7 +84,7 @@ const INTENT_TOOL_MAP = Object.freeze({
 const { INTENT_ALIAS_MAP, normalizeIntent } = require('./intents');
 
 // intent 未命中时的兜底候选；同时也是 getLlmWithTools 的最终 fallback。
-const FALLBACK_TOOL_NAMES = Object.freeze(["queryExecutiveMetrics", "getOverviewData", "getTaskListData"]);
+const FALLBACK_TOOL_NAMES = Object.freeze(["queryExecutiveMetrics", "getOverviewData", "getTaskListData", "searchEntities"]);
 
 // ─── BM25 工具索引 ──────────────────────────────────────────────────────
 // 在模块加载时为所有注册工具的 description 建立 BM25 索引；
@@ -167,6 +168,7 @@ const loadContext = async (state) => {
 };
 
 const RoutingPolicy = require('./routingPolicy');
+const decisionRules = require('./decisionRules');
 
 const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
@@ -175,37 +177,12 @@ const contextAnalyzerRouter = async (state, config) => {
   // 但对于意图变更(intent_shift)，必须强制重查。这里简化为每次 Router 都重查，以覆盖 intent_shift 的强制安全检查要求
 
   const memoryBlock = renderMemoryBlock(state.memory_snippets);
-  const schemaDefinition = `
-You are a highly efficient JSON routing bot for "Executive Chat".
-Your task is to analyze the user's message and strictly output valid JSON matching this schema:
-{
-  "mode": "chat_only" | "tool_action" | "deny",
-  "intent": string, // MUST be one of: "query_metrics", "progress_query", "drill_down", "project_status", "warning_query", "analytics_query", or "chat_only"
-  "entities": {
-    "metric": { "raw": string, "canonical": string, "confidence": number }
-  },
-  "entities_confidence": { "metric": number },
-  "complexity_score": number,
-  "risk_flags": boolean
-}
-SAFETY RULES:
-1. If the user asks to send emails, nudge people, write, update, or delete any data, set "risk_flags": true and "mode": "deny". Executive Chat is strictly read-only.
-2. If the user asks "who are you", "what can you do", or says "hello", set "mode": "chat_only" and "intent": "chat_only". Do NOT swallow "remember my preference" as chat_only; memory updates are "tool_action" or normal queries.
-3. OUTPUT RAW JSON ONLY. NEVER wrap your response in markdown code blocks.
-
-INTENT CLASSIFICATION RULES (first matching rule wins):
-- "warning_query": The user is asking about problems, risks, or things that need attention. Keywords: "重点关注", "预警", "最差", "落后", "有风险", "有问题", "拖后腿", "0%", "需要关注", "异常". The user wants to know WHO/WHERE is underperforming, not just see numbers. Example: "有哪些门店需要重点关注？" -> "warning_query", "哪家完成率最低？" -> "warning_query", "有没有什么异常？" -> "warning_query"
-- "query_metrics": General data/numbers queries WITHOUT problem-seeking language. (e.g., "Q1 completion rate", "iPhone 17 培训进度"). If the user asks for specific numbers but doesn't mention problems/warnings/attention, use this.
-- "drill_down": Asking for detailed breakdown of a specific region/store. (e.g., "华东区各门店详情")
-- "project_status": Asking about the list of ongoing tasks or project overview.
-
-${memoryBlock}
-`;
+  const schemaDefinition = promptRegistry.get('router') + `\n\n${memoryBlock}`;
 
   const traceId = config?.configurable?.traceId;
   const client = getClient();
   const gen = client && traceId
-    ? client.generation({ traceId, name: 'Router_Intent_Classification', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { promptHash: promptHash(schemaDefinition) } })
+    ? client.generation({ traceId, name: 'Router_Intent_Classification', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { promptVersion: promptRegistry.version('router'), promptHash: promptHash(schemaDefinition) } })
     : NOOP_TRACE.generation({ name: 'Router_Intent_Classification' });
 
   // 注入最近对话历史，让 Router 理解"可以""好的"等简短确认语的上下文
@@ -245,29 +222,12 @@ ${memoryBlock}
       metadata: { mode: parsed.mode, intent: parsed.intent },
     });
 
-    // 如果存在风险，强制禁止提升权限档位
     const risk = parsed.risk_flags === true;
-    let tier = "L3_fc_guarded";
-    const cScore = parsed.complexity_score || 0.5;
+    const tier = decisionRules.selectTier(parsed.complexity_score, risk);
+    const mode = decisionRules.correctMode(parsed.mode || 'tool_action', parsed.intent, risk);
 
-    if (!risk) {
-      if (cScore >= RoutingPolicy.thresholds.complexity_score_l4_min) {
-        tier = "L4_heavy_fc";
-      } else if (cScore <= RoutingPolicy.thresholds.complexity_score_l2_max) {
-        tier = "L2_intent_fastpath";
-      }
-    }
-
-    // mode 是路由唯一真值源；risk_flags 强制 deny。
-    let mode = parsed.mode || "tool_action";
-    if (risk) {
-      mode = "deny";
-    } else if (mode === "chat_only") {
-      const toolIntents = ["query_metrics", "progress_query", "drill_down", "project_status", "warning_query", "analytics_query"];
-      if (toolIntents.includes(parsed.intent)) {
-        mode = "tool_action";
-        console.log(`[Router] ⚠️ 纠正: mode 被 LLM 误标为 chat_only，但 intent 为 ${parsed.intent}，已强制覆盖为 tool_action`);
-      }
+    if (parsed.mode === 'chat_only' && mode === 'tool_action') {
+      console.log(`[Router] ⚠️ 纠正: mode 被 LLM 误标为 chat_only，但 intent 为 ${parsed.intent}，已强制覆盖为 tool_action`);
     }
 
     return {
@@ -304,19 +264,36 @@ ${memoryBlock}
 
 const toolRetrieve = async (state) => {
   const intent = normalizeIntent(state.intent);
-  const topK = RoutingPolicy.tiers[state.selected_tier]?.tool_top_k || 3;
+  const msg = state.userMessage || '';
+
+  // 多意图启发式（不用 LLM，零成本）：
+  //   连接词 → 几乎肯定是多个独立问题
+  //   多个问号 → 口语化多问题
+  //   长句 + 逗号/分号/换行 → 多个子句，可能包含多个问题
+  const MULTI_CONJUNCTIONS = ['另外', '还有', '以及', '同时', '此外', '再加上', '顺便'];
+  const hasConjunction = MULTI_CONJUNCTIONS.some(c => msg.includes(c));
+  const multiQuestionMarks = (msg.match(/[？?]/g) || []).length >= 2;
+  const hasClauses = (msg.includes('，') || msg.includes('；') || msg.includes('\n')) && msg.length > 50;
+  const looksMultiQuestion = hasConjunction || multiQuestionMarks || hasClauses;
+
+  const topK = looksMultiQuestion
+    ? 5  // 多意图放宽，确保覆盖所有子问题的工具
+    : (RoutingPolicy.tiers[state.selected_tier]?.tool_top_k || 3);
 
   // ── Prior：intent map 给出的候选（按列表顺序赋递减分数） ────────────
   const intentSeed = INTENT_TOOL_MAP[intent];
   if (!intentSeed) {
     console.warn(`[ToolRetrieve] 意图 '${intent}' 未在 INTENT_TOOL_MAP 中注册`);
   }
-  const seedList = intentSeed || chatToolsService.getRegisteredToolNames();
+  // 多问题时 → 全工具 + 平坦 prior，让 FC LLM 自己挑工具回答所有子问题
+  const seedList = (looksMultiQuestion || !intentSeed)
+    ? chatToolsService.getRegisteredToolNames()
+    : intentSeed;
   const PRIOR_BASE = 5;
   const PRIOR_DECAY = 0.5;
 
-  // chat_only / 兜底时 prior 平坦 —— 工具排名完全由 BM25 + 上下文决定，不预设偏好
-  const isFlatPrior = intent === 'chat_only' || !intentSeed;
+  // chat_only / 兜底 / 多问题时 prior 平坦 —— 工具排名完全由 BM25 + 上下文决定
+  const isFlatPrior = intent === 'chat_only' || !intentSeed || looksMultiQuestion;
 
   const scoreById = new Map();
   seedList.forEach((id, i) => {
@@ -418,39 +395,14 @@ const fc_LlmToolCallStep = async (state, config) => {
     ? `\n\nAVAILABLE CHART DATA (you may include this in your response by writing an \`\`\`echarts code block — you can modify it freely):\n\`\`\`echarts\n${JSON.stringify(suggestedChart, null, 2)}\n\`\`\`\n`
     : '';
 
-  const systemPrompt = `You are a professional Executive Chat data analyst. Your namespace is ${state.tool_namespace}.
-Current tier: ${state.selected_tier}.
-Budget steps: ${maxSteps}. Current super-step: ${currentStep}.
-${chartContext}
-CRITICAL — CHART RULES:
-- When data queries return comparison/ranking/distribution results, use the AVAILABLE CHART DATA above by copying the \`\`\`echarts block into your response. You can modify the title, axis labels, or colors as you see fit.
-- If the user explicitly asks for a specific chart type (e.g. "画个饼图", "做个折线图"), adjust the chart type and data accordingly.
-- If the user asks for a chart but their request is vague (e.g. "画个图" without specifying what), ask them ONE clarifying question: what data or dimension to chart, and what chart type they prefer (bar/pie/line).
-- If the user did NOT ask for a chart and the data is simple enough to describe in text, do NOT include a chart. Let the numbers speak for themselves.
-
-CRITICAL — UNDERSTAND SHORT REPLIES IN CONTEXT:
-If the user's latest message is very short (e.g. "可以", "好的", "需要", "行", "对", "是的", "嗯") and the conversation history shows you previously asked a question or offered to look up data, the user is CONFIRMING your suggestion. Do NOT just reply with text — call the appropriate tool based on what you offered in the previous turn. For example, if you previously asked "需要查看S008的门店详情吗?" and the user says "需要", you should call getStoreDetailData(storeId: "S008").
-
-CRITICAL — PARAMETER EXTRACTION:
-1. The user's message often contains a task name (e.g. "iPhone 17 新品培训"), a region name (e.g. "华东"), or a store name. Extract these directly from the message and pass them as tool parameters (taskName, productName, region, storeId). Do NOT call a generic list tool first — go straight to the specific tool with the extracted parameters.
-2. If the user asks about a specific task/region/store, call the most specific tool (getRegionDetailData, getStoreDetailData, queryExecutiveMetrics with taskName) directly. Skip getTaskListData and getOverviewData unless the user asks "what tasks exist" or "overall summary".
-
-TOOL SELECTION BY QUESTION TYPE:
-- "重点关注" / "预警" / "最差" / "落后" / "异常" / "有问题" → use getWarningsData
-- "完成率是多少" / "进度怎么样" (specific task, no problem language) → use queryExecutiveMetrics
-- "华东区各门店详情" / store-specific breakdown → use getRegionDetailData or getStoreDetailData
-- "有哪些任务" / "任务列表" → use getTaskListData
-- "整体概况" / "总完成率" → use getOverviewData
-
-GUIDELINES:
-1. If you have enough data from tool results, provide a concise Markdown summary. Do NOT call the same tool again with the same parameters.
-2. If tools failed or steps are exceeded, explain what happened and suggest alternatives.
-3. Use tables or lists for data presentation.
-4. When calling tools, use ONLY the tools provided in your tool belt.
-5. **Step budget is tight**: if multiple tools from your belt are obviously useful for the user's question, return them all in a single response (parallel tool_calls) instead of calling them one-by-one across multiple steps.
-6. **Stop and Ask (CRITICAL)**: If a tool returns an error about missing parameters (e.g., INVALID_PARAMETERS, "请明确您要查询的培训任务名称"), **DO NOT retry calling the tool repeatedly**. Immediately stop and output a natural language response asking the user to provide the missing information.
-
-${renderMemoryBlock(state.memory_snippets)}`;
+  const systemPrompt = promptRegistry.get('fc_agent', {
+    toolNamespace: state.tool_namespace,
+    selectedTier: state.selected_tier,
+    maxSteps,
+    currentStep,
+    chartContext,
+    memoryBlock: renderMemoryBlock(state.memory_snippets),
+  });
 
   const messagesToSend = [
     new SystemMessage(systemPrompt),
@@ -788,7 +740,7 @@ const fc_ValidateParams = async (state) => {
   const validatedToolCalls = [];
   const toolResults = { ...(state.toolResults || {}) };
   const violationsByToolCall = {};
-  const lowConfidenceEntities = Object.entries(entitiesConfidence).filter(([, v]) => v < confidenceThreshold);
+  const lowConfidenceEntities = decisionRules.getLowConfidenceEntities(entitiesConfidence);
 
   // 实体置信度过低 — 在所有 tool call 校验之前统一走澄清。
   // payload 必须基于真实的低置信实体生成，不能再用 O1/O2 占位。
@@ -1434,11 +1386,7 @@ const finalResponseStep = async (state, config) => {
         ? `\n\nRecent conversation context:\n${chatContext.map(m => `${m._getType() === 'human' ? 'User' : 'Assistant'}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : ''}`).join('\n')}`
         : '';
 
-      const chatPrompt = `You are a professional and polite Executive Assistant AI for Apple Retail training management.${contextBlock}
-The user's latest message may be a short confirmation ("可以", "好的", "是的") responding to your previous question. If so, acknowledge their confirmation and continue the conversation naturally.
-Respond politely and concisely in Chinese (1-3 sentences).
-If they ask what you can do, explain that you can query training progress, store warnings, and project metrics.
-Do NOT output any markdown code blocks for JSON or tool calls. Just natural text.`;
+      const chatPrompt = promptRegistry.get('chat_reply') + contextBlock;
 
       try {
         const stream = await llm.stream([
