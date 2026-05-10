@@ -513,13 +513,13 @@ Graph 在 `ContextAnalyzerRouter` 之后调用 `normalizeIntent`（`agent/graph/
 
 | 规范 intent | 候选 tools |
 |---|---|
-| `query_metrics` | `queryExecutiveMetrics`, `getOverviewData`, `getRegionDetailData` |
-| `progress_query` | `getOverviewData`, `queryExecutiveMetrics` |
-| `project_status` | `getTaskListData`, `getOverviewData`, `queryExecutiveMetrics` |
-| `warning_query` | `getWarningsData`, `queryExecutiveMetrics`, `getStoreDetailData` |
-| `drill_down` | `getRegionDetailData`, `getStoreDetailData`, `queryExecutiveMetrics` |
-| `analytics_query` | `runAnalytics`, `queryExecutiveMetrics`, `fetchRawDataset`, `executeCode` |
-| 兜底 Fallback | `queryExecutiveMetrics`, `getOverviewData`, `getTaskListData` |
+| `query_metrics` | `queryExecutiveMetrics`, `getOverviewData`, `getRegionDetailData`, `searchEntities` |
+| `progress_query` | `getOverviewData`, `queryExecutiveMetrics`, `searchEntities` |
+| `project_status` | `getTaskListData`, `getOverviewData`, `queryExecutiveMetrics`, `searchEntities` |
+| `warning_query` | `getWarningsData`, `queryExecutiveMetrics`, `getStoreDetailData`, `searchEntities` |
+| `drill_down` | `getRegionDetailData`, `getStoreDetailData`, `queryExecutiveMetrics`, `searchEntities` |
+| `analytics_query` | `runAnalytics`, `queryExecutiveMetrics`, `fetchRawDataset`, `executeCode`, `searchEntities` |
+| 兜底 Fallback | `queryExecutiveMetrics`, `getOverviewData`, `getTaskListData`, `searchEntities` |
 
 **运行时绑定**　`fc_LlmToolCallStep` 调 `getLlmWithTools(state.candidateTools)`，仅以 `candidateTools`（由上一步 `ToolRetrieve` 填满）收窄工具 belt。
 
@@ -540,6 +540,7 @@ Graph 在 `ContextAnalyzerRouter` 之后调用 `normalizeIntent`（`agent/graph/
 | `runAnalytics` | `chat_tools/tool_runAnalytics.js` + `services/chatAnalyticsService.js` | 统计分析（见 §13） |
 | `fetchRawDataset` | `chat_tools/tool_fetchRawDataset.js` | 拉取底层数据集（`analytics_query` 候补） |
 | `executeCode` | `chat_tools/tool_executeCode.js` | 代码解释器（需环境 Key） |
+| `searchEntities` (v4.1) | `chat_tools/tool_searchEntities.js` | 名称→ID 消歧：task/store/region/channel_l3/channel_l4 五类实体模糊匹配 |
 
 **`queryExecutiveMetrics` 参数契约（核心字段）**
 
