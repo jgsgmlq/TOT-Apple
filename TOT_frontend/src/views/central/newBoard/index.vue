@@ -386,6 +386,7 @@
   const lastUpdated = ref(new Date());
   const alertFilter = ref('P0');
   const isAiOpen = ref(false);
+  const enableAiInsightHover = ref(true);
   const isFunnelModalOpen = ref(false);
 
   const activeTask = computed(() => allTasks.value.find((t) => t.task_id === currentTaskId.value));
@@ -2946,6 +2947,13 @@
             </button>
           </div>
 
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="enableAiInsightHover" size="small" />
+            </template>
+            智能分析悬浮开关
+          </n-tooltip>
+
           <button
             @click="isAiOpen = true"
             class="p-2.5 rounded-full hover:bg-[#F5F5F7] transition-colors duration-200 relative group"
@@ -3416,6 +3424,7 @@
               <!-- Metric Cards Component Inlined -->
               <div class="glass-card flex flex-col h-full w-full border-none flex-1 relative">
                 <AiAnalyzePopover
+                  v-if="enableAiInsightHover"
                   class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
                   :loading="boardInsightCard.northStar.loading"
                   :content="boardInsightCard.northStar.content"
@@ -3660,6 +3669,7 @@
             </div>
             <div class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
               <AiAnalyzePopover
+                v-if="enableAiInsightHover"
                 class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
                 :loading="boardInsightCard.funnel.loading"
                 :content="boardInsightCard.funnel.content"
@@ -4033,6 +4043,7 @@
               </div>
               <div id="module-nudge_conversion" class="flex-1 glass-card p-5 md:p-6 flex flex-col min-w-0 relative group/card">
                 <AiAnalyzePopover
+                  v-if="enableAiInsightHover"
                   class="absolute right-4 top-4 z-50 group-hover/card:opacity-100 opacity-0 transition-opacity duration-200"
                   :loading="boardInsightCard.warning.loading"
                   :content="boardInsightCard.warning.content"
@@ -4280,6 +4291,7 @@
                       </div>
                     </div>
                     <AiAnalyzePopover
+                      v-if="enableAiInsightHover"
                       class="relative opacity-0 group-hover/card:opacity-100 transition-opacity duration-200"
                       :loading="boardInsightCard.trend.loading"
                       :content="boardInsightCard.trend.content"
@@ -4402,6 +4414,7 @@
                           </div>
                         </div>
                         <AiAnalyzePopover
+                          v-if="enableAiInsightHover"
                           class="relative opacity-0 group-hover/card:opacity-100 transition-opacity duration-200"
                           :loading="boardInsightCard.rtm.loading"
                           :content="boardInsightCard.rtm.content"
