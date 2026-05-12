@@ -227,7 +227,7 @@ function buildExampleQuestions() {
 }
 
 // ─── createSession ────────────────────────────────────────────────────────────
-function createSession(userId, reqUser) {
+function createSession(userId, reqUser, ipAddress) {
   const user = db.get('SELECT id, executive_regions, executive_rtm FROM users WHERE id = ?', [userId]);
   if (!user) throw Object.assign(new Error('User not found'), { status: 404, code: 'CHAT_002' });
 
@@ -238,9 +238,9 @@ function createSession(userId, reqUser) {
   const now = formatNowSqliteLocal();
 
   db.run(
-    `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, created_at, last_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, userId, regionScope.type, regionScope.regions ? JSON.stringify(regionScope.regions) : null, regionScope.rtm || null, now, now]
+    `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, ip_address, created_at, last_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [sessionId, userId, regionScope.type, regionScope.regions ? JSON.stringify(regionScope.regions) : null, regionScope.rtm || null, ipAddress || null, now, now]
   );
 
   return { sessionId, contextId: sessionId, exampleQuestions: buildExampleQuestions() };
@@ -434,7 +434,7 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
   const persistT0 = Date.now();
   try {
     db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [assistMsgId, sessionId, 'assistant', finalContent, result._intentType || null, toolCallsStr, now]
     );
     db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);

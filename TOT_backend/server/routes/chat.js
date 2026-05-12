@@ -27,7 +27,8 @@ function requireSessionOwnership(req, res, next) {
 
 function handleCreateSession(req, res, next) {
   try {
-    const result = chatService.createSession(req.user.id, req.user);
+    const ip = req.headers["x-real-ip"] || req.ip || (req.socket && req.socket.remoteAddress) || null;
+    const result = chatService.createSession(req.user.id, req.user, ip);
     res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);

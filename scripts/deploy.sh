@@ -53,6 +53,7 @@ sudo rsync -a --delete "$FRONTEND_DIR/dist/" /opt/homebrew/var/www/tot/
 # ── 5. 零停机重载 PM2 ─────────────────────────────────────────────
 echo ""
 echo "[ 5/6 ] pm2 reload..."
+cd "$SERVER_DIR"
 pm2 reload ecosystem.config.js --env development
 
 # ── 6. 重载 nginx ─────────────────────────────────────────────────

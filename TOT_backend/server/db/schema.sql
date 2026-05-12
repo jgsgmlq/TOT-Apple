@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   role_scope  TEXT NOT NULL CHECK (role_scope IN ('national', 'regional', 'rtm')),
   regions     TEXT,
   rtm         TEXT,
+  ip_address  TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   last_active TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -178,6 +179,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
   content     TEXT NOT NULL,
   intent_type TEXT,
+  entities_json TEXT,
   tool_calls  TEXT,
   tool_call_id TEXT,
   client_message_id TEXT UNIQUE, -- 幂等键，关联前端生成的 messageId
