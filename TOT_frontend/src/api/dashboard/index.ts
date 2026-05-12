@@ -36,6 +36,10 @@ export interface DashboardOverview {
   confirmationRate: number;
   /** 催办通知各严重级别的去重人头绝对数 */
   nudgeSeverityCounts: { p2: number; p1: number; p0: number };
+  /** 较昨日的完成率变化（百分点），已含正负号 */
+  completionRateDelta: number;
+  /** 距离截止时间的剩余秒数；负值表示已过期 */
+  remainingSeconds: number;
   updatedAt?: string;
 }
 
@@ -58,6 +62,8 @@ export interface HeatmapRow {
   completionRate: number;
   /** 区域维度人均完成耗时（小时），仅已完成样本 */
   avgCompletionTimeHours: number;
+  /** 预格式化的人均耗时展示字符串，如 "2.5h" / "< 0.1h" / "-" */
+  avgTimeFormatted: string;
   color?: string;
   assignmentCount: number;
   completedCount: number;
@@ -377,13 +383,18 @@ export const getDashboardFunnelDrillDown = (params: {
 export interface AlertFunnelStageData {
   stage: 'P2' | 'P1' | 'P0' | 'Unfinished';
   label: string;
+  /** 级联后人数（漏斗条用） */
   count: number;
-  /** 占最宽阶段百分比，0–100 */
+  /** 原始带人数（卡片展示用，级联前） */
+  rawCount: number;
+  /** 占最宽阶段百分比，0–100（级联后，漏斗条用） */
   width: number;
   /** 本阶段转化率（被拯救比例），0–100；null 表示"未触发" */
   conversionRate: number | null;
-  /** 占总人数百分比，0–100 */
+  /** 占总人数百分比，0–100（级联后） */
   percentageOfTotal: number;
+  /** 占总人数百分比，0–100（级联前，卡片展示用） */
+  rawPercentageOfTotal: number;
 }
 
 export interface AlertFunnelResponse {

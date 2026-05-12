@@ -212,9 +212,9 @@ function getOverviewBoardData(query) {
     const createdAtMs = new Date(row.task_created_at || row.created_at).getTime();
     const passedPct = ddlAt - createdAtMs > 0 ? ((nowMs - createdAtMs) / (ddlAt - createdAtMs)) * 100 : 100;
     const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
-    if (band === 'p0') warnP0++;
-    else if (band === 'p1') warnP1++;
-    else if (band === 'p2') warnP2++;
+    if (band === 'p0') warnP0 += row.uncompleted_count;
+    else if (band === 'p1') warnP1 += row.uncompleted_count;
+    else if (band === 'p2') warnP2 += row.uncompleted_count;
   }
 
   let total_nudged = 0;
@@ -291,6 +291,37 @@ function getOverviewBoardData(query) {
   const reachedCount = (reachRow && reachRow.reached_count) || 0;
   const taskReachRate = total > 0 ? parseFloat(((reachedCount / total) * 100).toFixed(2)) : 0;
 
+  // 较昨日变化：查询截至昨天 23:59:59 的累计完成数
+  let completionRateDelta = 0;
+  if (total > 0) {
+    const yesterdayEnd = new Date();
+    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1);
+    yesterdayEnd.setHours(23, 59, 59, 999);
+    const yesterdayEndStr = yesterdayEnd.toISOString().replace('T', ' ').substring(0, 19);
+    const yesterdayRow = db.get(
+      `SELECT COUNT(ta.id) AS cnt
+       FROM task_assignments ta
+       JOIN tasks t ON t.id = ta.task_id
+       ${joinStore}
+       WHERE ${taConditions.join(' AND ')} ${storeWhere}
+         AND ${completedCond}
+         AND ta.completed_at <= ?`,
+      [...platformSelectParams, ...allParams, yesterdayEndStr]
+    );
+    const yesterdayCnt = (yesterdayRow && yesterdayRow.cnt) || 0;
+    const yesterdayRate = total > 0 ? (yesterdayCnt / total) * 100 : 0;
+    completionRateDelta = parseFloat((completionRate - yesterdayRate).toFixed(2));
+  }
+
+  // 剩余秒数：查 task ddl_at
+  let remainingSeconds = 0;
+  if (taskId) {
+    const taskRow = db.get('SELECT ddl_at FROM tasks WHERE id = ?', [taskId]);
+    if (taskRow && taskRow.ddl_at) {
+      remainingSeconds = Math.floor((new Date(taskRow.ddl_at).getTime() - Date.now()) / 1000);
+    }
+  }
+
   return {
     totalAssignments: total,
     pushUserCount,
@@ -314,12 +345,17 @@ function getOverviewBoardData(query) {
     inProgressCount: inProgCnt,
     pendingCount: pendingCnt,
     overdueCount,
-    warningCount: { p2: warnP2, p1: warnP1, p0: warnP0 },
+    // 预警条数：与催办漏斗同源，使用 notification_events 各 severity 去重人头
+    warningCount: { p2: p2N, p1: p1N, p0: p0N },
 
     // 前端直绑字段（消除 rate×total 反推）
     confirmedCount: inProgCnt + completedCnt,
     confirmationRate: total > 0 ? parseFloat(((100 * (inProgCnt + completedCnt)) / total).toFixed(2)) : 0,
     nudgeSeverityCounts: { p2: p2N, p1: p1N, p0: p0N },
+
+    // 前端直绑字段（消除前端时间计算）
+    completionRateDelta,
+    remainingSeconds,
 
     platform: platform ? platform.sourceLabel : null,
     updatedAt: base.last_updated || formatNowSqliteLocal(),
@@ -536,101 +572,42 @@ function getFunnelDrillDownData(query, drill, platform) {
 }
 
 /**
- * GET /api/v1/dashboard/funnel?type=alert — 预警漏斗大盘（预设计算）
- * 复用 getOverviewBoardData 获取原始指标，在后端完成级联修正、转化率、宽度计算。
+ * GET /api/v1/dashboard/funnel?type=alert — 预警漏斗大盘
+ * 基于催办事件（notification_events nudge_%）的去重人数构建漏斗，
+ * P2/P1/P0 为各 severity 的累计人数（已催办过该级别的人），自然单调递减。
  */
 function getAlertFunnelData(query) {
   const { taskId } = query;
-  const drill = parseStoreDrill(query);
-  const platform = parsePlatformFilter(query);
+  const overview = getOverviewBoardData(query);
+  const total = overview.totalAssignments || 0;
+  const unfinished = (overview.pendingCount || 0) + (overview.inProgressCount || 0);
 
-  const taConditions = ['1=1'];
-  const taParams = [];
-  if (taskId) {
-    taConditions.push('ta.task_id = ?');
-    taParams.push(taskId);
-  }
+  // 催办各 severity 的去重人头（来自 notification_events）
+  const nsc = overview.nudgeSeverityCounts || { p2: 0, p1: 0, p0: 0 };
+  // 漏斗：P2(黄)=最宽 → P1(橙)=子集 → P0(红)=最窄子集
+  // 累计口径：P2 计入所有被黄催过的人；P1 计入被橙催过的人；P0 计入被红催过的人
+  const funnelP2 = nsc.p2;
+  const funnelP1 = nsc.p1;
+  const funnelP0 = nsc.p0;
 
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const allParams = [...taParams, ...drill.params];
-  const completedCond = completedCondition(platform);
-  const uncompletedCond = uncompletedCondition(platform);
-  const inProgressCond = platform
-    ? `${platformReadExistsSql('?')} AND ${uncompletedCond}`
-    : "ta.status = 'in_progress'";
-  const pendingCond = platform
-    ? `NOT (${platformReadExistsSql('?')}) AND ${uncompletedCond}`
-    : "ta.status = 'pending'";
-  const platformSelectParams = platform ? [platform.readSource, platform.readSource] : [];
-
-  // Base aggregation: total, completed, pending, in_progress
-  const base = db.get(
-    `SELECT
-       COUNT(*) AS total,
-       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
-       SUM(CASE WHEN ${pendingCond} THEN 1 ELSE 0 END) AS pending_count,
-       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
-       MAX(ta.updated_at) AS last_updated
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-    [...platformSelectParams, ...allParams]
-  );
-
-  const total = base.total || 0;
-  const completedCnt = base.completed_count || 0;
-  const pendingCnt = base.pending_count || 0;
-  const inProgCnt = base.in_progress_count || 0;
-  const unfinished = pendingCnt + inProgCnt;
-
-  // Store-task bucket query: 与 getOverviewBoardData 内 warningCount 同源
-  // 但改为累加 uncompleted_count 到各带，统计「人」而非「店桶」
-  const storeTaskRows = db.all(
-    `SELECT
-       ta.store_id,
-       ta.task_id,
-       t.ddl_at,
-       t.created_at,
-       t.auto_nudge_rules,
-       SUM(CASE WHEN ${uncompletedCond} THEN 1 ELSE 0 END) AS uncompleted_count
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}
-     GROUP BY ta.store_id, ta.task_id`,
-    allParams
-  );
-
+  // Task 元数据用于判定各阶段"触发"状态
   const nowMs = Date.now();
-  let p0 = 0;
-  let p1 = 0;
-  let p2 = 0;
   let hasTaskMeta = false;
+  let hoursLeft = Infinity;
   let p0Threshold = 24;
   let p1Threshold = 48;
   let p2ThresholdPercent = 50;
-  let hoursLeft = Infinity;
 
-  // 从第一个有效桶中取 task 元数据（同一 taskId 下所有桶共用）
-  for (const row of storeTaskRows) {
-    if (!row.uncompleted_count) continue;
-    const rules = parseAutoNudgeRules(row.auto_nudge_rules);
-    const ddlAt = new Date(row.ddl_at).getTime();
-    const rowHoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
-    const createdAtMs = row.created_at
-      ? new Date(row.created_at).getTime()
-      : ddlAt - 7 * 24 * 3600 * 1000;
-    const totalDurationMs = ddlAt - createdAtMs;
-    const passedMs = nowMs - createdAtMs;
-    const passedPct =
-      totalDurationMs > 0 ? ((passedMs / totalDurationMs) * 100).toFixed(2) : 100;
-    const band = classifyDeadlineCrisisBand(rules, rowHoursLeft, parseFloat(passedPct));
-
-    if (!hasTaskMeta) {
+  if (taskId) {
+    const taskRow = db.get(
+      'SELECT ddl_at, created_at, auto_nudge_rules FROM tasks WHERE id = ?',
+      [taskId]
+    );
+    if (taskRow && taskRow.ddl_at) {
       hasTaskMeta = true;
-      hoursLeft = rowHoursLeft;
+      const ddlMs = new Date(taskRow.ddl_at).getTime();
+      hoursLeft = (ddlMs - nowMs) / (1000 * 60 * 60);
+      const rules = parseAutoNudgeRules(taskRow.auto_nudge_rules);
       const h = getDeadlineCrisisHours(rules);
       if (h) {
         p0Threshold = h.p0Hours;
@@ -638,104 +615,50 @@ function getAlertFunnelData(query) {
         p2ThresholdPercent = h.p2Percent;
       }
     }
-
-    // 累加「人」而非桶数：互斥地带，同一桶只落入一档
-    if (band === 'p0') p0 += row.uncompleted_count;
-    else if (band === 'p1') p1 += row.uncompleted_count;
-    else if (band === 'p2') p2 += row.uncompleted_count;
   }
 
-  // 级联修正：P2 ≥ P1 ≥ P0 ≥ Unfinished
-  if (hasTaskMeta) {
-    if (hoursLeft <= 0) {
-      p0 = Math.max(p0, unfinished);
-      p1 = Math.max(p1, p0);
-      p2 = Math.max(p2, p1);
-    } else {
-      // 进行中：按时间窗口级联
-      if (hoursLeft <= p0Threshold) p0 = Math.max(p0, unfinished);
-      if (hoursLeft <= p1Threshold) {
-        p1 = Math.max(p1, Math.max(p0, hoursLeft <= p0Threshold ? unfinished : 0));
-      }
-      // 仅当时间进度过半时才将未完成人数计入 P2
-      const firstRow = storeTaskRows.find((r) => r.uncompleted_count > 0 && r.ddl_at);
-      if (firstRow) {
-        const ddlMs_c = new Date(firstRow.ddl_at).getTime();
-        const createdAtMs_c = firstRow.created_at
-          ? new Date(firstRow.created_at).getTime()
-          : ddlMs_c - 7 * 24 * 3600 * 1000;
-        const totalDur = ddlMs_c - createdAtMs_c;
-        const passed = nowMs - createdAtMs_c;
-        if (totalDur > 0 && (passed / totalDur) * 100 >= p2ThresholdPercent) {
-          p2 = Math.max(p2, Math.max(p1, unfinished));
-        }
-      }
-    }
-  }
+  const p2Triggered = hasTaskMeta;
+  const p1Triggered = hasTaskMeta && hoursLeft <= p1Threshold;
+  const p0Triggered = hasTaskMeta && hoursLeft <= p0Threshold;
+  const unfinishedTriggered = hasTaskMeta && hoursLeft <= 0;
 
-  // 零值守卫：若所有桶均未落入任何带且任务未过期
-  if (p0 === 0 && p1 === 0 && p2 === 0 && hasTaskMeta) {
-    const firstRow = storeTaskRows.find((r) => r.ddl_at);
-    if (firstRow) {
-      const ddlMs_z = new Date(firstRow.ddl_at).getTime();
-      const hLeft = (ddlMs_z - nowMs) / (1000 * 60 * 60);
-      const rules_z = parseAutoNudgeRules(firstRow.auto_nudge_rules);
-      const h_z = getDeadlineCrisisHours(rules_z);
-      const p1Th = h_z ? h_z.p1Hours : 48;
-      const p0Th = h_z ? h_z.p0Hours : 24;
-      if (hLeft > p1Th) p1 = 0;
-      if (hLeft > p0Th) p0 = 0;
-    }
-  }
+  // 各 severity 催办人数（即 rawCount，漏斗条与卡片共用同一口径）
+  const rawP2 = nsc.p2;
+  const rawP1 = nsc.p1;
+  const rawP0 = nsc.p0;
 
   const stageArray = [
-    { stage: 'P2', label: 'P2', count: p2 },
-    { stage: 'P1', label: 'P1', count: p1 },
-    { stage: 'P0', label: 'P0', count: p0 },
-    { stage: 'Unfinished', label: '未完成', count: unfinished },
+    { stage: 'P2', label: 'P2', count: funnelP2, rawCount: rawP2, triggered: p2Triggered },
+    { stage: 'P1', label: 'P1', count: funnelP1, rawCount: rawP1, triggered: p1Triggered },
+    { stage: 'P0', label: 'P0', count: funnelP0, rawCount: rawP0, triggered: p0Triggered },
+    { stage: 'Unfinished', label: '未完成', count: unfinished, rawCount: unfinished, triggered: unfinishedTriggered },
   ];
 
-  // 宽度计算
   const maxCount = Math.max(...stageArray.map((s) => s.count), 1);
   const stageWidth = (count) => parseFloat(((count / maxCount) * 100).toFixed(2));
 
-  // 每阶段转化率
   const stageConversionRate = (index) => {
     if (index === 0) return null;
-    if (index > 1 && stageConversionRate(index - 1) === null) return null;
-
-    const currentCount = stageArray[index].count;
-    const prevCount = stageArray[index - 1].count;
-
-    if (currentCount === 0 && hasTaskMeta) {
-      const stg = stageArray[index].stage;
-      if (stg === 'P1' && hoursLeft > p1Threshold) return null;
-      if (stg === 'P0' && hoursLeft > p0Threshold) return null;
-      if (stg === 'Unfinished' && hoursLeft > 0) return null;
-    }
-
+    const prevStage = stageArray[index - 1];
+    const currStage = stageArray[index];
+    if (!prevStage.triggered || !currStage.triggered) return null;
+    const prevCount = prevStage.count;
+    const currCount = currStage.count;
     if (prevCount === 0) return null;
-    const saved = prevCount - currentCount;
+    const saved = prevCount - currCount;
     if (saved < 0) return null;
     return parseFloat(((saved / prevCount) * 100).toFixed(2));
   };
 
-  // 整体转化率
   let overallConversionRate = null;
-  if (p2 > 0 && hasTaskMeta) {
-    let last = p2;
-    if (hoursLeft <= 0) {
-      last = unfinished;
-      const saved = p2 - last;
-      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
-    } else if (hoursLeft <= p0Threshold) {
-      last = p0;
-      const saved = p2 - last;
-      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
-    } else if (hoursLeft <= p1Threshold) {
-      last = p1;
-      const saved = p2 - last;
-      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
+  if (funnelP2 > 0 && hasTaskMeta) {
+    let lastCount = funnelP2;
+    if (hoursLeft <= 0) lastCount = unfinished;
+    else if (hoursLeft <= p0Threshold) lastCount = funnelP0;
+    else if (hoursLeft <= p1Threshold) lastCount = funnelP1;
+    const saved = funnelP2 - lastCount;
+    if (saved >= 0 && lastCount !== funnelP2) {
+      overallConversionRate = parseFloat(((saved / funnelP2) * 100).toFixed(2));
     }
   }
 
@@ -743,18 +666,20 @@ function getAlertFunnelData(query) {
     stage: s.stage,
     label: s.label,
     count: s.count,
+    rawCount: s.rawCount,
     width: stageWidth(s.count),
     conversionRate: i === 0 ? null : stageConversionRate(i),
     percentageOfTotal: total > 0 ? parseFloat(((s.count / total) * 100).toFixed(1)) : 0,
+    rawPercentageOfTotal: total > 0 ? parseFloat(((s.rawCount / total) * 100).toFixed(1)) : 0,
   }));
 
   return {
     taskId: taskId || null,
-    platform: platform ? platform.sourceLabel : null,
+    platform: overview.platform || null,
     stages: result,
     overallConversionRate,
     maxCount,
-    updatedAt: base.last_updated || formatNowSqliteLocal(),
+    updatedAt: overview.updatedAt || formatNowSqliteLocal(),
   };
 }
 
@@ -927,18 +852,27 @@ function getHeatmapBoardData(query) {
     platform ? [platform.readSource, ...heatParams] : heatParams
   );
 
-  const heatmapData = rows.map((r) => ({
-    rtmValue: r.rtm_value || '(未知)',
-    completionRate: r.completion_rate || 0,
-    avgCompletionTimeHours:
+  const heatmapData = rows.map((r) => {
+    const hours =
       r.avg_completion_time_hours !== null && r.avg_completion_time_hours !== undefined
         ? parseFloat(r.avg_completion_time_hours)
-        : 0,
-    color: heatmapColor(r.completion_rate || 0),
-    assignmentCount: r.assignment_count,
-    completedCount: r.completed_count,
-    inProgressCount: r.in_progress_count,
-  }));
+        : null;
+    let avgTimeFormatted = '-';
+    if (hours !== null && hours !== undefined) {
+      if (hours > 0 && hours < 0.1) avgTimeFormatted = '< 0.1h';
+      else avgTimeFormatted = `${hours.toFixed(1)}h`;
+    }
+    return {
+      rtmValue: r.rtm_value || '(未知)',
+      completionRate: r.completion_rate || 0,
+      avgCompletionTimeHours: hours || 0,
+      avgTimeFormatted,
+      color: heatmapColor(r.completion_rate || 0),
+      assignmentCount: r.assignment_count,
+      completedCount: r.completed_count,
+      inProgressCount: r.in_progress_count,
+    };
+  });
 
   const updatedAt =
     rows.length > 0 ? rows.reduce((m, r) => (r.last_updated > m ? r.last_updated : m), '') : formatNowSqliteLocal();

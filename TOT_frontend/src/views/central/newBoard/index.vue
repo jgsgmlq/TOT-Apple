@@ -469,24 +469,8 @@
         }
       }
 
-      if (
-        trendDataRes &&
-        trendDataRes.trendData &&
-        trendDataRes.trendData.length > 0 &&
-        overviewData.totalAssignments > 0
-      ) {
-        let cumulativeYesterday = 0;
-        for (const point of trendDataRes.trendData) {
-          if (point.timeKey <= yestStr) {
-            cumulativeYesterday = point.cumulativeCompleted;
-          } else {
-            break;
-          }
-        }
-
-        const yesterdayRate = cumulativeYesterday / overviewData.totalAssignments;
-        const todayRate = overviewData.completionRate / 100;
-        metricCompletionRateDelta.value = todayRate - yesterdayRate;
+      if (overviewData) {
+        metricCompletionRateDelta.value = overviewData.completionRateDelta / 100 || 0;
       } else {
         metricCompletionRateDelta.value = 0;
       }
@@ -618,12 +602,12 @@
     const p1 = byStage('P1');
     const p2 = byStage('P2');
     return {
-      p0_count: p0?.count || 0,
-      p1_count: p1?.count || 0,
-      p2_count: p2?.count || 0,
-      p0_breakdown: p0?.count > 0 ? [{ category: '距离截止 < 24h', count: p0.count }] : [],
-      p1_breakdown: p1?.count > 0 ? [{ category: '距离截止 < 48h', count: p1.count }] : [],
-      p2_breakdown: p2?.count > 0 ? [{ category: '起步转化异常', count: p2.count }] : [],
+      p0_count: p0?.rawCount || 0,
+      p1_count: p1?.rawCount || 0,
+      p2_count: p2?.rawCount || 0,
+      p0_breakdown: p0?.rawCount > 0 ? [{ category: '距离截止 < 24h', count: p0.rawCount }] : [],
+      p1_breakdown: p1?.rawCount > 0 ? [{ category: '距离截止 < 48h', count: p1.rawCount }] : [],
+      p2_breakdown: p2?.rawCount > 0 ? [{ category: '起步转化异常', count: p2.rawCount }] : [],
     };
   });
 
@@ -631,10 +615,10 @@
     taskId: null,
     platform: null,
     stages: [
-      { stage: 'P2', label: 'P2', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
-      { stage: 'P1', label: 'P1', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
-      { stage: 'P0', label: 'P0', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
-      { stage: 'Unfinished', label: '未完成', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
+      { stage: 'P2', label: 'P2', count: 0, rawCount: 0, width: 0, conversionRate: null, percentageOfTotal: 0, rawPercentageOfTotal: 0 },
+      { stage: 'P1', label: 'P1', count: 0, rawCount: 0, width: 0, conversionRate: null, percentageOfTotal: 0, rawPercentageOfTotal: 0 },
+      { stage: 'P0', label: 'P0', count: 0, rawCount: 0, width: 0, conversionRate: null, percentageOfTotal: 0, rawPercentageOfTotal: 0 },
+      { stage: 'Unfinished', label: '未完成', count: 0, rawCount: 0, width: 0, conversionRate: null, percentageOfTotal: 0, rawPercentageOfTotal: 0 },
     ],
     overallConversionRate: null,
     maxCount: 1,
@@ -1182,12 +1166,12 @@
     return 0;
   });
 
-  // ================= Countdown Logic =================
-  const currentTimeMs = ref(Date.now());
+  // ================= Countdown from backend remainingSeconds =================
+  const serverNow = ref(Date.now());
   let countdownTimer: ReturnType<typeof setInterval> | null = null;
   onMounted(() => {
     countdownTimer = setInterval(() => {
-      currentTimeMs.value = Date.now();
+      serverNow.value = Date.now();
     }, 1000);
   });
   onUnmounted(() => {
@@ -1195,19 +1179,12 @@
   });
 
   const metricCountdownFormatted = computed(() => {
-    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-    if (!task || !task.fullDeadline) return '00:00:00';
-
-    // Replace '-' with '/' for safe parsing in all browsers, e.g. "2026/04/20 23:59:59"
-    const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-    const diffMs = ddlTime - currentTimeMs.value;
-
-    if (diffMs <= 0) return '已截止';
-
-    const h = Math.floor(diffMs / (1000 * 60 * 60));
-    const m = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    const s = Math.floor((diffMs % (1000 * 60)) / 1000);
-
+    const sec = currentOverview.value?.remainingSeconds;
+    if (sec === undefined || sec === null) return '--';
+    if (sec <= 0) return '已截止';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
     return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
   });
 
@@ -1277,11 +1254,11 @@
   const getAlertStageCount = (stage: string) => {
     if (!alertFunnelData.value?.stages) return 0;
     const s = alertFunnelData.value.stages.find((f: any) => f.stage === stage);
-    return s ? s.count : 0;
+    return s ? s.rawCount : 0;
   };
   const alertPct = (stage: string) => {
     const s = alertFunnelData.value?.stages?.find((f: any) => f.stage === stage);
-    return (s?.percentageOfTotal || 0) + '%';
+    return (s?.rawPercentageOfTotal || 0) + '%';
   };
   const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
   const handleSelectAlertFilter = (level: string) => {
@@ -1520,12 +1497,6 @@
       rrSortOrder.value = 'desc';
     }
   };
-  const rrParseTime = (str: string) => {
-    if (!str || str === '-') return 999999;
-    if (str.endsWith('h')) return parseFloat(str) * 60;
-    if (str.endsWith('m')) return parseFloat(str);
-    return 0;
-  };
   const rrAvailableDimensions = computed(() => {
     if (!rrSelectedRTM3.value)
       return [
@@ -1592,12 +1563,8 @@
         completion_rate: h.completionRate ? h.completionRate / 100 : 0,
         completed_count: h.completedCount || 0,
         employee_count: h.assignmentCount || 0,
-        avg_time:
-          h.avgCompletionTimeHours !== undefined && h.avgCompletionTimeHours !== null
-            ? h.avgCompletionTimeHours > 0 && h.avgCompletionTimeHours < 0.1
-              ? '< 0.1h'
-              : `${h.avgCompletionTimeHours.toFixed(1)}h`
-            : '-',
+        avg_time: h.avgTimeFormatted || '-',
+        avg_time_val: h.avgCompletionTimeHours ?? 999999,
       }));
     } catch (e) {
       console.error('Fetch RTM Ranking Failed', e);
@@ -1624,15 +1591,8 @@
     }
 
     const sorted = [...nodes].sort((a, b) => {
-      let valA = a[rrSortKey.value];
-      let valB = b[rrSortKey.value];
-      if (rrSortKey.value === 'avg_time_val' || rrSortKey.value === 'avg_time') {
-        valA = rrParseTime(a.avg_time);
-        valB = rrParseTime(b.avg_time);
-      } else {
-        valA = valA || 0;
-        valB = valB || 0;
-      }
+      const valA = a[rrSortKey.value] || 0;
+      const valB = b[rrSortKey.value] || 0;
       if (valA < valB) return rrSortOrder.value === 'asc' ? -1 : 1;
       if (valA > valB) return rrSortOrder.value === 'asc' ? 1 : -1;
       return 0;
