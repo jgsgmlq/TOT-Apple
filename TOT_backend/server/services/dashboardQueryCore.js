@@ -55,6 +55,122 @@ function uncompletedCondition(platform, taAlias = 'ta') {
     : `${taAlias}.status != 'completed'`;
 }
 
+// ─── 共享内部 helper ──────────────────────────────────────────────────────────
+
+const DIM_COL_MAP = {
+  rtm: 's.rtm',
+  region: 's.region',
+  format: 's.format',
+  subrtm: 's.rtm',
+  dealer: 's.dealer_name',
+  dealer_name: 's.dealer_name',
+  dealername: 's.dealer_name',
+};
+
+/** 根据 rtmLevel 返回 { selectDim, groupByDim }，消除 3 处重复 */
+function buildDimensionSql(level, alias = 'entity_name') {
+  const lvl = String(level).toLowerCase();
+  if (lvl === 'store') {
+    return { selectDim: `MAX(s.name) AS ${alias}`, groupByDim: 's.id' };
+  }
+  if (lvl === 'dealer' || lvl === 'dealer_name' || lvl === 'dealername') {
+    return {
+      selectDim: `COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS ${alias}`,
+      groupByDim: "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')",
+    };
+  }
+  const col = DIM_COL_MAP[lvl] || 's.rtm';
+  return { selectDim: `${col} AS ${alias}`, groupByDim: col };
+}
+
+/** 查询 base aggregation：total / completed / in_progress / pending / on_time / avg_time */
+function queryBaseAgg({ taskId, drill, platform, extraSelect = '', extraWhere = '' }) {
+  const taConditions = ['1=1'];
+  const taParams = [];
+  if (taskId) { taConditions.push('ta.task_id = ?'); taParams.push(taskId); }
+  const joinStore = drill?.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+  const storeWhere = drill?.hasDrill ? (drill.sql || '') : '';
+  const allParams = [...taParams, ...(drill?.params || [])];
+  const completedCond = completedCondition(platform);
+  const inProgressCond = platform
+    ? `${platformReadExistsSql('?')} AND ${uncompletedCondition(platform)}`
+    : "ta.status = 'in_progress'";
+  const pendingCond = platform
+    ? `NOT (${platformReadExistsSql('?')}) AND ${uncompletedCondition(platform)}`
+    : "ta.status = 'pending'";
+  const psp = platform ? [platform.readSource, platform.readSource] : [];
+
+  return db.get(
+    `SELECT COUNT(*) AS total,
+       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
+       SUM(CASE WHEN ${pendingCond} THEN 1 ELSE 0 END) AS pending_count,
+       SUM(CASE WHEN ${completedCond} AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS completed_on_time_count,
+       AVG(CASE WHEN ${completedCond} AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours
+       ${extraSelect},
+       MAX(ta.updated_at) AS last_updated
+     FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere} ${extraWhere}`,
+    [...psp, ...allParams]
+  );
+}
+
+/** 查询 pushUserCount：推送通知去重目标用户数，消除 2 处重复 */
+function queryPushUserCount({ taskId, drill }) {
+  if (drill?.hasDrill && taskId) {
+    const pr = db.get(
+      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+       FROM notification_events ne
+       JOIN stores s ON s.id = ne.store_id
+       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
+      [taskId, ...drill.params]
+    );
+    return (pr && pr.cnt) || 0;
+  }
+  const pushRow = db.get(
+    `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+     FROM notification_events ne
+     ${taskId ? "WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'" : "WHERE ne.event_type = 'task_assigned'"}`,
+    taskId ? [taskId] : []
+  );
+  return (pushRow && pushRow.cnt) || 0;
+}
+
+/** 查询 nudge severity 去重人头（p2N/p1N/p0N），供 overview 与 alertFunnel 共用 */
+function queryNudgeSeverityCounts({ taskId, drill, platform }) {
+  const taConditions = ['1=1'];
+  const taParams = [];
+  if (taskId) { taConditions.push('ta.task_id = ?'); taParams.push(taskId); }
+  const joinStore = drill?.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+  const storeWhere = drill?.hasDrill ? (drill.sql || '') : '';
+  const allParams = [...taParams, ...(drill?.params || [])];
+
+  const rows = db.all(
+    `SELECT ne.severity, COUNT(DISTINCT ne.target_user_id) as cnt
+     FROM notification_events ne
+     JOIN task_assignments ta ON ne.assignment_id = ta.id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}
+       AND ne.event_type LIKE 'nudge_%'
+     GROUP BY ne.severity`,
+    allParams
+  );
+
+  let p0N = 0, p1N = 0, p2N = 0;
+  for (const r of rows) {
+    if (r.severity === 'red') p0N += r.cnt;
+    if (r.severity === 'orange') p1N += r.cnt;
+    if (r.severity === 'yellow') p2N += r.cnt;
+  }
+  return { p2: p2N, p1: p1N, p0: p0N, total: p2N + p1N + p0N };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 对外导出的 board data 函数
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
  * 与 GET /api/v1/dashboard/overview 的 data 字段一致（不含 code/message/requestId）。
  * @param {Record<string, string>} query 等价于 req.query
@@ -63,270 +179,129 @@ function getOverviewBoardData(query) {
   const { taskId } = query;
   const drill = parseStoreDrill(query);
   const platform = parsePlatformFilter(query);
-
-  const taConditions = ['1=1'];
-  const taParams = [];
-  if (taskId) {
-    taConditions.push('ta.task_id = ?');
-    taParams.push(taskId);
-  }
-
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const allParams = [...taParams, ...drill.params];
   const nowMs = Date.now();
-  const completedCond = completedCondition(platform);
-  const uncompletedCond = uncompletedCondition(platform);
-  const inProgressCond = platform
-    ? `${platformReadExistsSql('?')} AND ${uncompletedCond}`
-    : "ta.status = 'in_progress'";
-  const pendingCond = platform
-    ? `NOT (${platformReadExistsSql('?')}) AND ${uncompletedCond}`
-    : "ta.status = 'pending'";
-  const platformSelectParams = platform ? [platform.readSource, platform.readSource] : [];
 
-  const base = db.get(
-    `SELECT
-         COUNT(*) AS total,
-         SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
-         SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
-         SUM(CASE WHEN ${pendingCond} THEN 1 ELSE 0 END) AS pending_count,
-         SUM(CASE WHEN ${completedCond} AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS completed_on_time_count,
-         AVG(CASE WHEN ${completedCond} AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_completion_time_hours,
-         MAX(ta.updated_at) AS last_updated
-       FROM task_assignments ta
-       JOIN tasks t ON t.id = ta.task_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-    [...platformSelectParams, ...allParams]
-  );
-
+  // ── Base aggregation ──
+  const base = queryBaseAgg({ taskId, drill, platform });
   const total = base.total || 0;
   const completedCnt = base.completed_count || 0;
   const inProgCnt = base.in_progress_count || 0;
   const pendingCnt = base.pending_count || 0;
   const completionRate = total > 0 ? parseFloat(((100 * completedCnt) / total).toFixed(2)) : 0;
-
   const completedOnTimeCnt = base.completed_on_time_count || 0;
-  const onTimeCompletionRate =
-    total > 0 ? parseFloat(((100 * completedOnTimeCnt) / total).toFixed(2)) : 0;
+  const onTimeCompletionRate = total > 0 ? parseFloat(((100 * completedOnTimeCnt) / total).toFixed(2)) : 0;
   const avgCompletionTimeHours =
-    base.avg_completion_time_hours !== null && base.avg_completion_time_hours !== undefined
-      ? parseFloat(base.avg_completion_time_hours)
-      : 0;
+    base.avg_completion_time_hours != null ? parseFloat(base.avg_completion_time_hours) : 0;
 
-  const overdueRow = db.get(
-    `SELECT COUNT(*) AS cnt
-       FROM task_assignments ta
-       JOIN tasks t ON t.id = ta.task_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND ${uncompletedCond}
-         AND datetime('now', 'localtime') > t.ddl_at`,
-    allParams
-  );
-  const overdueCount = (overdueRow && overdueRow.cnt) || 0;
+  // ── Push user count ──
+  const pushUserCount = queryPushUserCount({ taskId, drill });
 
-  let pushUserCount = 0;
-  if (drill.hasDrill && taskId) {
-    const pr = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
-         FROM notification_events ne
-         JOIN stores s ON s.id = ne.store_id
-         WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
-      [taskId, ...drill.params]
-    );
-    pushUserCount = (pr && pr.cnt) || 0;
-  } else {
-    const pushRow = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
-         FROM notification_events ne
-         ${taskId ? "WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'" : "WHERE ne.event_type = 'task_assigned'"}`,
-      taskId ? [taskId] : []
-    );
-    pushUserCount = (pushRow && pushRow.cnt) || 0;
-  }
+  // ── Nudge severity counts ──
+  const nsc = queryNudgeSeverityCounts({ taskId, drill, platform });
+  const p2N = nsc.p2, p1N = nsc.p1, p0N = nsc.p0;
 
-  const baseNeCond = taskId ? 'ne.task_id = ?' : '1=1';
-  const baseNeParam = taskId ? [taskId] : [];
-  const readSource = platform ? platform.readSource : 'task_detail_open';
-
-  let employeeReadCount = 0;
-  let managerReadCount = 0;
-  if (drill.hasDrill && taskId) {
-    const readRow = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS cnt
-         FROM read_receipts rr
-         JOIN notification_events ne ON ne.id = rr.event_id
-         JOIN stores s ON s.id = ne.store_id
-         WHERE ne.task_id = ? AND rr.source = ? ${drill.sql}`,
-      [taskId, readSource, ...drill.params]
-    );
-    employeeReadCount = (readRow && readRow.cnt) || 0;
-    managerReadCount = employeeReadCount;
-  } else {
-    const empReadRow = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS cnt
-         FROM read_receipts rr
-         JOIN notification_events ne ON ne.id = rr.event_id
-         WHERE ${baseNeCond}
-           AND rr.source = ?`,
-      [...baseNeParam, readSource]
-    );
-    employeeReadCount = (empReadRow && empReadRow.cnt) || 0;
-    const mgrReadRow = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS cnt
-         FROM read_receipts rr
-         JOIN notification_events ne ON ne.id = rr.event_id
-         WHERE ${baseNeCond}
-           AND rr.source = ?`,
-      [...baseNeParam, readSource]
-    );
-    managerReadCount = (mgrReadRow && mgrReadRow.cnt) || 0;
-  }
-  const totalReadCount = employeeReadCount;
-
-  const storeTaskRows = db.all(
-    `SELECT
-         ta.store_id,
-         ta.task_id,
-         t.ddl_at,
-         t.created_at,
-         t.auto_nudge_rules,
-         SUM(CASE WHEN ${uncompletedCond} THEN 1 ELSE 0 END) AS uncompleted_count
-       FROM task_assignments ta
-       JOIN tasks t ON t.id = ta.task_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}
-       GROUP BY ta.store_id, ta.task_id`,
-    allParams
-  );
-  let warnP1 = 0;
-  let warnP0 = 0;
-  let warnP2 = 0;
-  for (const row of storeTaskRows) {
-    if (!row.uncompleted_count) continue;
-    const rules = parseAutoNudgeRules(row.auto_nudge_rules);
-    const ddlAt = new Date(row.ddl_at).getTime();
-    const hoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
-    const createdAtMs = new Date(row.task_created_at || row.created_at).getTime();
-    const passedPct = ddlAt - createdAtMs > 0 ? ((nowMs - createdAtMs) / (ddlAt - createdAtMs)) * 100 : 100;
-    const band = classifyDeadlineCrisisBand(rules, hoursLeft, passedPct);
-    if (band === 'p0') warnP0 += row.uncompleted_count;
-    else if (band === 'p1') warnP1 += row.uncompleted_count;
-    else if (band === 'p2') warnP2 += row.uncompleted_count;
-  }
-
-  let total_nudged = 0;
-  let converted_nudged = 0;
-  try {
-    const q = `
-        SELECT
-          COUNT(DISTINCT ne.target_user_id) AS total_nudged,
-          COUNT(DISTINCT CASE 
-            WHEN ${platform ? completedCondition(platform) : "ta.status = 'completed' AND ta.completed_at > ne.created_at"} THEN ne.target_user_id 
-            ELSE NULL 
-          END) AS converted_nudged
-        FROM notification_events ne
-        LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
-        ${drill.hasDrill ? 'JOIN stores s ON s.id = ne.store_id' : ''}
-        WHERE ne.event_type IN ('nudge_red', 'nudge_orange', 'nudge_yellow')
-          ${taskId ? 'AND ne.task_id = ?' : ''}
-          ${drill.hasDrill ? `AND ${drill.sql.replace(/^\s*AND\s+/, '')}` : ''}
-      `;
-    const p = [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])];
-    const result = db.get(q, p);
-    if (result) {
-      total_nudged = result.total_nudged || 0;
-      converted_nudged = result.converted_nudged || 0;
-    }
-  } catch (e) {
-    /* ignore */
-  }
-
-  const nudgeRow = { total_nudged, converted_nudged };
-
-  const nudgeConversionRate =
-    nudgeRow.total_nudged > 0
-      ? parseFloat(((100 * nudgeRow.converted_nudged) / nudgeRow.total_nudged).toFixed(2))
-      : 0;
-
-  const eventStats = db.all(
-    `
-      SELECT ne.severity, COUNT(DISTINCT ne.target_user_id) as cnt
-      FROM notification_events ne
-      JOIN task_assignments ta ON ne.assignment_id = ta.id
-      ${joinStore}
-      WHERE ${taConditions.join(' AND ')} ${storeWhere} 
-        AND ne.event_type LIKE 'nudge_%'
-      GROUP BY ne.severity
-    `,
-    allParams
-  );
-
-  let p0N = 0;
-  let p1N = 0;
-  let p2N = 0;
-  for (const st of eventStats) {
-    if (st.severity === 'red') p0N += st.cnt;
-    if (st.severity === 'orange') p1N += st.cnt;
-    if (st.severity === 'yellow') p2N += st.cnt;
-  }
-
+  // ── Crisis rates ──
   const crisisP2Rate = total > 0 ? parseFloat(((100 * p2N) / total).toFixed(2)) : 0;
   const crisisP1Rate = total > 0 ? parseFloat(((100 * p1N) / total).toFixed(2)) : 0;
   const crisisP0Rate = total > 0 ? parseFloat(((100 * p0N) / total).toFixed(2)) : 0;
 
+  // ── Employee read count ──
+  const readSource = platform ? platform.readSource : 'task_detail_open';
+  let employeeReadCount = 0;
+  if (drill.hasDrill && taskId) {
+    const rr = db.get(
+      `SELECT COUNT(DISTINCT rr.user_id) AS cnt FROM read_receipts rr
+       JOIN notification_events ne ON ne.id = rr.event_id
+       JOIN stores s ON s.id = ne.store_id
+       WHERE ne.task_id = ? AND rr.source = ? ${drill.sql}`,
+      [taskId, readSource, ...drill.params]);
+    employeeReadCount = (rr && rr.cnt) || 0;
+  } else {
+    const cond = taskId ? 'ne.task_id = ?' : '1=1';
+    const param = taskId ? [taskId] : [];
+    const rr = db.get(
+      `SELECT COUNT(DISTINCT rr.user_id) AS cnt FROM read_receipts rr
+       JOIN notification_events ne ON ne.id = rr.event_id
+       WHERE ${cond} AND rr.source = ?`,
+      [...param, readSource]);
+    employeeReadCount = (rr && rr.cnt) || 0;
+  }
+  const totalReadCount = employeeReadCount;
+
+  // ── Overdue count ──
+  const overdueRow = db.get(
+    `SELECT COUNT(*) AS cnt FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
+     ${drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : ''}
+     WHERE ${taskId ? 'ta.task_id = ?' : '1=1'} ${drill.hasDrill ? drill.sql : ''}
+       AND ${uncompletedCondition(platform)}
+       AND datetime('now', 'localtime') > t.ddl_at`,
+    [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])]
+  );
+  const overdueCount = (overdueRow && overdueRow.cnt) || 0;
+
+  // ── Reach rate ──
   const reachRow = db.get(
-    `SELECT COUNT(ta.id) AS reached_count
-       FROM task_assignments ta
-       JOIN users u ON ta.user_id = u.employee_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND (
-           ${platform ? platformReadExistsSql('?') : '(u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at) OR ta.received_at IS NOT NULL'}
-         )`,
-    platform ? [platform.readSource, ...allParams] : allParams
+    `SELECT COUNT(ta.id) AS reached_count FROM task_assignments ta
+     JOIN users u ON ta.user_id = u.employee_id
+     ${drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : ''}
+     WHERE ${taskId ? 'ta.task_id = ?' : '1=1'} ${drill.hasDrill ? drill.sql : ''}
+       AND (${platform ? platformReadExistsSql('?') : "(u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at) OR ta.received_at IS NOT NULL"})`,
+    platform ? [platform.readSource, ...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])]
+             : [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])]
   );
   const reachedCount = (reachRow && reachRow.reached_count) || 0;
   const taskReachRate = total > 0 ? parseFloat(((reachedCount / total) * 100).toFixed(2)) : 0;
 
-  // 较昨日变化：查询截至昨天 23:59:59 的累计完成数
+  // ── Nudge conversion rate ──
+  let nudgeConversionRate = 0;
+  try {
+    const nr = db.get(
+      `SELECT
+         COUNT(DISTINCT ne.target_user_id) AS total_nudged,
+         COUNT(DISTINCT CASE WHEN ${platform ? completedCondition(platform) : "ta.status = 'completed' AND ta.completed_at > ne.created_at"} THEN ne.target_user_id END) AS converted_nudged
+       FROM notification_events ne
+       LEFT JOIN task_assignments ta ON ta.id = ne.assignment_id
+       ${drill.hasDrill ? 'JOIN stores s ON s.id = ne.store_id' : ''}
+       WHERE ne.event_type IN ('nudge_red', 'nudge_orange', 'nudge_yellow')
+         ${taskId ? 'AND ne.task_id = ?' : ''}
+         ${drill.hasDrill ? 'AND ' + drill.sql.replace(/^\s*AND\s+/, '') : ''}`,
+      [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : [])]
+    );
+    if (nr && nr.total_nudged > 0) {
+      nudgeConversionRate = parseFloat(((100 * nr.converted_nudged) / nr.total_nudged).toFixed(2));
+    }
+  } catch (e) { /* ignore */ }
+
+  // ── Completion rate delta ──
   let completionRateDelta = 0;
   if (total > 0) {
-    const yesterdayEnd = new Date();
-    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1);
-    yesterdayEnd.setHours(23, 59, 59, 999);
-    const yesterdayEndStr = yesterdayEnd.toISOString().replace('T', ' ').substring(0, 19);
-    const yesterdayRow = db.get(
-      `SELECT COUNT(ta.id) AS cnt
-       FROM task_assignments ta
+    const ye = new Date(); ye.setDate(ye.getDate() - 1); ye.setHours(23, 59, 59, 999);
+    const yr = db.get(
+      `SELECT COUNT(ta.id) AS cnt FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
-       ${joinStore}
-       WHERE ${taConditions.join(' AND ')} ${storeWhere}
-         AND ${completedCond}
+       ${drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : ''}
+       WHERE ${taskId ? 'ta.task_id = ?' : '1=1'} ${drill.hasDrill ? drill.sql : ''}
+         AND ${completedCondition(platform)}
          AND ta.completed_at <= ?`,
-      [...platformSelectParams, ...allParams, yesterdayEndStr]
+      [...(taskId ? [taskId] : []), ...(drill.hasDrill ? drill.params : []), ye.toISOString().replace('T', ' ').substring(0, 19)]
     );
-    const yesterdayCnt = (yesterdayRow && yesterdayRow.cnt) || 0;
-    const yesterdayRate = total > 0 ? (yesterdayCnt / total) * 100 : 0;
-    completionRateDelta = parseFloat((completionRate - yesterdayRate).toFixed(2));
+    const yc = (yr && yr.cnt) || 0;
+    completionRateDelta = parseFloat((completionRate - (total > 0 ? (yc / total) * 100 : 0)).toFixed(2));
   }
 
-  // 剩余秒数：查 task ddl_at
+  // ── Remaining seconds ──
   let remainingSeconds = 0;
   if (taskId) {
-    const taskRow = db.get('SELECT ddl_at FROM tasks WHERE id = ?', [taskId]);
-    if (taskRow && taskRow.ddl_at) {
-      remainingSeconds = Math.floor((new Date(taskRow.ddl_at).getTime() - Date.now()) / 1000);
-    }
+    const tr = db.get('SELECT ddl_at FROM tasks WHERE id = ?', [taskId]);
+    if (tr && tr.ddl_at) remainingSeconds = Math.floor((new Date(tr.ddl_at).getTime() - nowMs) / 1000);
   }
 
   return {
     totalAssignments: total,
     pushUserCount,
     employeeReadCount,
-    managerReadCount,
+    managerReadCount: employeeReadCount,
     totalReadCount,
 
     completionRate,
@@ -383,59 +358,11 @@ function getFunnelBoardData(query) {
 
 function getFunnelSummaryData(query, drill, platform) {
   const { taskId } = query;
-
-  const taConditions = ['1=1'];
-  const taParams = [];
-  if (taskId) {
-    taConditions.push('ta.task_id = ?');
-    taParams.push(taskId);
-  }
-
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const allParams = [...taParams, ...drill.params];
-  const completedCond = completedCondition(platform);
-  const inProgressCond = platform
-    ? `${platformReadExistsSql('?')} AND ${uncompletedCondition(platform)}`
-    : "ta.status = 'in_progress'";
-  const platformSelectParams = platform ? [platform.readSource] : [];
-
-  const base = db.get(
-    `SELECT
-       COUNT(*) AS total,
-       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
-       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
-       MAX(ta.updated_at) AS last_updated
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-    [...platformSelectParams, ...allParams]
-  );
-
+  const base = queryBaseAgg({ taskId, drill, platform });
   const total = base.total || 0;
   const completedCnt = base.completed_count || 0;
   const inProgCnt = base.in_progress_count || 0;
-
-  let pushUserCount = 0;
-  if (drill.hasDrill && taskId) {
-    const pr = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
-       FROM notification_events ne
-       JOIN stores s ON s.id = ne.store_id
-       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
-      [taskId, ...drill.params]
-    );
-    pushUserCount = (pr && pr.cnt) || 0;
-  } else {
-    const pushRow = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
-       FROM notification_events ne
-       ${taskId ? "WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'" : "WHERE ne.event_type = 'task_assigned'"}`,
-      taskId ? [taskId] : []
-    );
-    pushUserCount = (pushRow && pushRow.cnt) || 0;
-  }
+  const pushUserCount = queryPushUserCount({ taskId, drill });
 
   const pushed = pushUserCount || total;
   const delivered = total;
@@ -467,32 +394,7 @@ function getFunnelSummaryData(query, drill, platform) {
 function getFunnelDrillDownData(query, drill, platform) {
   const { taskId, funnelStage, rtmLevel = 'rtm' } = query;
   if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
-
-  const level = String(rtmLevel).toLowerCase();
-
-  const colMap = {
-    rtm: 's.rtm',
-    region: 's.region',
-    format: 's.format',
-    subrtm: 's.rtm',
-    dealer: 's.dealer_name',
-    dealer_name: 's.dealer_name',
-    dealername: 's.dealer_name',
-  };
-
-  let selectDim;
-  let groupByDim;
-  if (level === 'store') {
-    selectDim = 'MAX(s.name) AS entity_name';
-    groupByDim = 's.id';
-  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
-    selectDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS entity_name";
-    groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
-  } else {
-    const col = colMap[level] || 's.rtm';
-    selectDim = `${col} AS entity_name`;
-    groupByDim = col;
-  }
+  const { selectDim, groupByDim } = buildDimensionSql(rtmLevel, 'entity_name');
 
   const updatedAt = formatNowSqliteLocal();
 
@@ -509,7 +411,7 @@ function getFunnelDrillDownData(query, drill, platform) {
     return {
       taskId,
       funnelStage,
-      rtmLevel: level,
+      rtmLevel: String(rtmLevel).toLowerCase(),
       platform: platform ? platform.sourceLabel : null,
       rows: rows.map((r) => ({
         name: r.entity_name || '(未知)',
@@ -564,7 +466,7 @@ function getFunnelDrillDownData(query, drill, platform) {
   return {
     taskId,
     funnelStage,
-    rtmLevel: level,
+    rtmLevel: String(rtmLevel).toLowerCase(),
     platform: platform ? platform.sourceLabel : null,
     rows: mappedRows,
     updatedAt,
@@ -690,34 +592,9 @@ function getAlertFunnelData(query) {
 function getAlertDrillDownData(query) {
   const { taskId, alertLevel, rtmLevel = 'rtm' } = query;
   if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
-
   const drill = parseStoreDrill(query);
   const platform = parsePlatformFilter(query);
-  const level = String(rtmLevel).toLowerCase();
-
-  const colMap = {
-    rtm: 's.rtm',
-    region: 's.region',
-    format: 's.format',
-    subrtm: 's.rtm',
-    dealer: 's.dealer_name',
-    dealer_name: 's.dealer_name',
-    dealername: 's.dealer_name',
-  };
-
-  let selectDim;
-  let groupByDim;
-  if (level === 'store') {
-    selectDim = 'MAX(s.name) AS entity_name';
-    groupByDim = 's.id';
-  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
-    selectDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS entity_name";
-    groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
-  } else {
-    const col = colMap[level] || 's.rtm';
-    selectDim = `${col} AS entity_name`;
-    groupByDim = col;
-  }
+  const { selectDim, groupByDim } = buildDimensionSql(rtmLevel, 'entity_name');
 
   const updatedAt = formatNowSqliteLocal();
 
@@ -746,7 +623,7 @@ function getAlertDrillDownData(query) {
     return {
       taskId,
       alertLevel,
-      dimension: level,
+      dimension: String(rtmLevel).toLowerCase(),
       platform: platform ? platform.sourceLabel : null,
       rows: rows.map((r) => {
         const total = r.assignment_count || 0;
@@ -765,7 +642,7 @@ function getAlertDrillDownData(query) {
 
   // P0 / P1 / P2 — nudge conversion data
   const levelKey = alertLevel === 'P0' ? 'red' : alertLevel === 'P1' ? 'orange' : 'yellow';
-  const nudgeData = getNudgeConversionBoardData({ ...query, level: level });
+  const nudgeData = getNudgeConversionBoardData({ ...query, level: String(rtmLevel).toLowerCase() });
 
   const mappedRows = nudgeData.list
     .filter((a) => a[levelKey].nudged > 0)
@@ -786,7 +663,7 @@ function getAlertDrillDownData(query) {
   return {
     taskId,
     alertLevel,
-    dimension: level,
+    dimension: String(rtmLevel).toLowerCase(),
     platform: platform ? platform.sourceLabel : null,
     rows: mappedRows,
     updatedAt,
@@ -800,34 +677,10 @@ function getAlertDrillDownData(query) {
 function getHeatmapBoardData(query) {
   const { taskId, rtmLevel = 'rtm' } = query;
   if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
-
   const drill = parseStoreDrill(query);
   const platform = parsePlatformFilter(query);
-  const level = String(rtmLevel).toLowerCase();
-
-  const colMap = {
-    rtm: 's.rtm',
-    region: 's.region',
-    format: 's.format',
-    subrtm: 's.rtm',
-    dealer: 's.dealer_name',
-    dealer_name: 's.dealer_name',
-    dealername: 's.dealer_name',
-  };
-
-  let selectDim;
-  let groupByDim;
-  if (level === 'store') {
-    selectDim = 'MAX(s.name) AS rtm_value';
-    groupByDim = 's.id';
-  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
-    selectDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS rtm_value";
-    groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
-  } else {
-    const col = colMap[level] || 's.rtm';
-    selectDim = `${col} AS rtm_value`;
-    groupByDim = col;
-  }
+  const { selectDim: selectDimRaw, groupByDim } = buildDimensionSql(rtmLevel, 'rtm_value');
+  const selectDim = selectDimRaw; // alias already set by buildDimensionSql
 
   const heatParams = [taskId, ...drill.params];
   const completedCond = completedCondition(platform);
@@ -1343,11 +1196,6 @@ function getNudgeConversionBoardData(query) {
 }
 
 module.exports = {
-  heatmapColor,
-  parsePlatformFilter,
-  platformReadExistsSql,
-  completedCondition,
-  uncompletedCondition,
   getOverviewBoardData,
   getFunnelBoardData,
   getAlertFunnelData,
