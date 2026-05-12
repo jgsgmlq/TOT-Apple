@@ -11,7 +11,7 @@
 ### 2026-05-13 — Phase 0 归档
 
 - `superpowers/` 全部 10 个文件（2026 年 3 月早期 AI 生成计划）
-- `plans/2026-04-*` 10 个 4 月 Executive Chat 执行方案
+- `plans/2026-04-*` 15 个 4 月 Executive Chat 执行方案
 - `plans/appendix-*` 4 个历史阶段性附录
 - `DEV-PLAN.md` Day 1-6 P0 开发计划
 

@@ -1,5 +1,7 @@
 # 数据库现状文档
 
+> **迁移预告:** 本数据库 Schema 即将被新设计替换，新 ER 图见 `docs/er-diagram-graphviz.svg`。数据库搭建由另一组负责，本文档在新 DB 交付后将重写。
+
 **版本:** 2.0.1 | **更新:** 2026-04-13 | **与代码同步:** `server/db/schema.sql`、`server/db/index.js`
 
 ---
