@@ -648,6 +648,24 @@
         }
       };
 
+      // 提取所有有数据的历史日期
+      const allDatesSet = new Set<string>();
+      if (trendDataRes && trendDataRes.trendData) {
+        trendDataRes.trendData.forEach((d: any) => allDatesSet.add(d.timeKey));
+      }
+      allDatesSet.add(todayStr);
+      allDatesSet.add(yestStr);
+
+      const sortedDates = Array.from(allDatesSet).sort((a, b) => b.localeCompare(a));
+      sortedDates.forEach((dateStr) => {
+        let label = dateStr;
+        if (dateStr === todayStr) label += ' (今日)';
+        if (dateStr === yestStr) label += ' (昨日)';
+        // 先用空数组占位，使得下拉框能够枚举出这些天
+        newTrend.hourly[label] = [];
+      });
+
+      // 预先填充今天和昨天已经拉取到的数据
       processHourly(trendHourlyResToday, `${todayStr} (今日)`);
       processHourly(trendHourlyResYest, `${yestStr} (昨日)`);
 
@@ -1356,7 +1374,8 @@
   // ... Metrics
   const metricCompletionRate = computed(() => {
     if (currentOverview.value) {
-      return currentOverview.value.completionRate / 100 || 0;
+      // 修正：直接获取后端算好的“按时完成率” (onTimeCompletionRate)
+      return currentOverview.value.onTimeCompletionRate / 100 || 0;
     }
     return 0;
   });
@@ -1425,25 +1444,13 @@
   });
   const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
   const metricP0Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP0Rate || 0)) /
-        100
-    );
+    return currentOverview.value?.warningCount?.p0 || 0;
   });
   const metricP1Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP1Rate || 0)) /
-        100
-    );
+    return currentOverview.value?.warningCount?.p1 || 0;
   });
   const metricP2Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP2Rate || 0)) /
-        100
-    );
+    return currentOverview.value?.warningCount?.p2 || 0;
   });
   const metricTotalAlerts = computed(
     () => metricP0Count.value + metricP1Count.value + metricP2Count.value
@@ -1504,9 +1511,14 @@
   };
   const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
   const getAlertPercentage = (stage: string) => {
-    const count = getAlertStageCount(stage);
-    if (!alertTotalPeople.value || alertTotalPeople.value === 0 || count === 0) return '0%';
-    return Math.round((count / alertTotalPeople.value) * 100) + '%';
+    if (!currentOverview.value) return '0%';
+    const rateMap: Record<string, number> = {
+      P0: currentOverview.value.crisisP0Rate || 0,
+      P1: currentOverview.value.crisisP1Rate || 0,
+      P2: currentOverview.value.crisisP2Rate || 0,
+    };
+    const rate = rateMap[stage];
+    return rate ? Math.round(rate) + '%' : '0%';
   };
   const handleSelectAlertFilter = (level: string) => {
     alertFilter.value = level;
@@ -1654,7 +1666,39 @@
     if (keys.length > 0) currentSubPeriod.value = keys[0];
     else currentSubPeriod.value = '';
   });
-  watch(currentSubPeriod, () => {
+  watch(currentSubPeriod, async (newVal) => {
+    if (!newVal || !trendData.value) return;
+    if (currentDim.value === 'hourly') {
+      const cached = trendData.value.hourly[newVal];
+      // 如果当前选中日期的数组为空，说明还没有通过 API 懒加载过它的 24 小时数据
+      if (cached && cached.length === 0) {
+        const targetDate = newVal.split(' ')[0]; // 从 "2026-05-10" 或 "2026-05-12 (今日)" 中提取纯日期
+        try {
+          const res = await getDashboardTrend({
+            taskId: currentTaskId.value,
+            type: 'hourly',
+            date: targetDate,
+            platform: activePlatform.value || undefined,
+          }).send();
+          
+          const hourlyArr: any[] = [];
+          let cumulative = 0;
+          for (let h = 0; h < 24; h++) {
+            const hStr = h.toString().padStart(2, '0');
+            const found = (res.trendData || []).find((d: any) => d.timeKey === hStr);
+            if (found) {
+              cumulative = found.cumulativeCompleted;
+              hourlyArr.push({ time: `${hStr}:00`, increment: found.newCompleted || 0, cumulative });
+            } else {
+              hourlyArr.push({ time: `${hStr}:00`, increment: 0, cumulative });
+            }
+          }
+          trendData.value.hourly[newVal] = hourlyArr;
+        } catch (error) {
+          console.error('Failed to fetch historical hourly trend:', error);
+        }
+      }
+    }
     nextTick(renderChart);
   });
 
