@@ -7,6 +7,7 @@
  *   GET /api/v1/dashboard/overview   §5.1 总部/Executive 概览 KPI
  *   GET /api/v1/dashboard/heatmap    §5.2 RTM/区域热力图
  *   GET /api/v1/dashboard/store-rank §5.3 Top/Bottom N 门店排行
+ *   GET /api/v1/dashboard/funnel     §5.10 转化漏斗（大盘 + 按阶段下钻）
  *   GET /api/v1/dashboard/warnings   §5.5 预警列表（临期 p0/p1 + 起步 p2）
  *
  * 门店层级下钻（可选 query，可组合，AND）：rtm、format、dealerName、storeId
@@ -26,6 +27,10 @@ const {
   parsePlatformFilter,
   completedCondition,
   getOverviewBoardData,
+  getFunnelBoardData,
+  getAlertFunnelData,
+  getAlertDrillDownData,
+  getUnifiedAlertsBoardData,
   getHeatmapBoardData,
   getTrendBoardData,
   getWarningsBoardData,
@@ -153,6 +158,22 @@ router.get('/warnings', authenticate, requireRole(['central', 'admin']), (req, r
   }
 });
 
+// ─── GET /api/v1/dashboard/alerts-unified ───────────────────────────────────
+// 预警列表四合一（P2/P1/P0/Unfinished），消除前端 4 次 API 合并
+router.get('/alerts-unified', authenticate, requireRole(['central', 'admin']), (req, res, next) => {
+  try {
+    const data = getUnifiedAlertsBoardData(req.query);
+    res.json({
+      code: 200,
+      message: 'success',
+      data,
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /api/v1/dashboard/trend ──────────────────────────────────────────────
 router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
   try {
@@ -168,6 +189,29 @@ router.get('/trend', authenticate, requireRole(['central', 'executive', 'admin']
   }
 });
 
+
+// ─── GET /api/v1/dashboard/funnel ────────────────────────────────────────
+// §5.10 转化漏斗 — 大盘阶段数据 + 按阶段下钻
+router.get('/funnel', authenticate, requireRole(['central', 'executive', 'admin']), (req, res, next) => {
+  try {
+    let data;
+    if (req.query.type === 'alert') {
+      data = req.query.alertLevel
+        ? getAlertDrillDownData(req.query)
+        : getAlertFunnelData(req.query);
+    } else {
+      data = getFunnelBoardData(req.query);
+    }
+    res.json({
+      code: 200,
+      message: 'success',
+      data,
+      requestId: req.requestId,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ─── GET /api/v1/dashboard/nudge-conversion ──────────────────────────────
 router.get('/nudge-conversion', authenticate, requireRole(['central', 'admin', 'executive']), (req, res, next) => {

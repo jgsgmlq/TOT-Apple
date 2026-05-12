@@ -11,7 +11,7 @@ export interface DashboardOverview {
   onTimeCompletionRate: number;
   /** 人均完成时间（小时），仅统计已完成 assignment */
   avgCompletionTimeHours: number;
-  /** 触达率：后端当前实现为「有下发即视为触达」时常为 100 */
+  /** 触达率 */
   taskReachRate: number;
   /** 读取率：已读人数 / 总 assignment 数 */
   taskReadRate: number;
@@ -21,6 +21,7 @@ export interface DashboardOverview {
   startDelayRate: number;
   crisisP0Rate: number;
   crisisP1Rate: number;
+  crisisP2Rate: number;
   inProgressCount: number;
   pendingCount: number;
   overdueCount: number;
@@ -28,7 +29,13 @@ export interface DashboardOverview {
   employeeReadCount?: number;
   managerReadCount?: number;
   totalReadCount?: number;
-  warningCount?: { p1: number; p2: number };
+  warningCount?: { p2: number; p1: number; p0: number };
+  /** 已确认人数 = inProgress + completed */
+  confirmedCount: number;
+  /** 确认率 = confirmedCount / totalAssignments × 100 */
+  confirmationRate: number;
+  /** 催办通知各严重级别的去重人头绝对数 */
+  nudgeSeverityCounts: { p2: number; p1: number; p0: number };
   updatedAt?: string;
 }
 
@@ -292,5 +299,176 @@ export const getDashboardAgentInsight = (params?: { refresh?: boolean }) => {
       skipAuthRedirect: true,
       skipGlobalErrorMessage: true,
     },
+  });
+};
+
+/** ─── GET /api/v1/dashboard/funnel — 转化漏斗（大盘 + 下钻） ─── */
+
+export interface FunnelStageData {
+  stage: 'pushed' | 'delivered' | 'in_progress' | 'completed';
+  label: string;
+  count: number;
+  /** 占首阶段百分比，0–100 */
+  sharePercent: number;
+  /** 较上一阶段流失百分比，0–100；首阶段为 0 */
+  dropPercent: number;
+  /** 与上一阶段的 sharePercent 差值，用于红色流失条宽度；首阶段为 0 */
+  dropWidth: number;
+}
+
+export interface FunnelBoardResponse {
+  taskId: string | null;
+  platform: string | null;
+  stages: FunnelStageData[];
+  updatedAt: string;
+}
+
+export interface FunnelDrillDownRow {
+  name: string;
+  total: number;
+  count: number;
+  /** count / total，0–1 */
+  rate: number;
+}
+
+export interface FunnelDrillDownResponse {
+  taskId: string;
+  funnelStage: string;
+  rtmLevel: string;
+  platform: string | null;
+  rows: FunnelDrillDownRow[];
+  updatedAt: string;
+}
+
+/** 大盘转化漏斗（不传 funnelStage） */
+export const getDashboardFunnel = (params: {
+  taskId?: string;
+  platform?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
+}) => {
+  return Alova.Get<FunnelBoardResponse>('/dashboard/funnel', {
+    params,
+    localCache: 0,
+  });
+};
+
+/** 下钻明细（传 funnelStage + rtmLevel） */
+export const getDashboardFunnelDrillDown = (params: {
+  taskId: string;
+  funnelStage: string;
+  rtmLevel?: string;
+  platform?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+  storeId?: string;
+}) => {
+  return Alova.Get<FunnelDrillDownResponse>('/dashboard/funnel', {
+    params,
+    localCache: 0,
+  });
+};
+
+/** ─── GET /api/v1/dashboard/funnel?type=alert — 预警漏斗（大盘 + 下钻） ─── */
+
+export interface AlertFunnelStageData {
+  stage: 'P2' | 'P1' | 'P0' | 'Unfinished';
+  label: string;
+  count: number;
+  /** 占最宽阶段百分比，0–100 */
+  width: number;
+  /** 本阶段转化率（被拯救比例），0–100；null 表示"未触发" */
+  conversionRate: number | null;
+  /** 占总人数百分比，0–100 */
+  percentageOfTotal: number;
+}
+
+export interface AlertFunnelResponse {
+  taskId: string | null;
+  platform: string | null;
+  stages: AlertFunnelStageData[];
+  /** 整体转化率（P2 → 当前最后触发阶段），0–100；null 表示未进入任何阶段 */
+  overallConversionRate: number | null;
+  maxCount: number;
+  updatedAt: string;
+}
+
+export interface AlertDrillDownRow {
+  name: string;
+  totalEmployees: number;
+  completedCount: number;
+  riskCount: number;
+  riskRate: number;
+  nudged?: number;
+  converted?: number;
+  conversionRate?: number;
+}
+
+export interface AlertDrillDownResponse {
+  taskId: string;
+  alertLevel: string;
+  dimension: string;
+  platform: string | null;
+  rows: AlertDrillDownRow[];
+  updatedAt: string;
+}
+
+/** 预警漏斗大盘（type=alert，不传 alertLevel） */
+export const getDashboardAlertFunnel = (params: { taskId?: string; platform?: string }) => {
+  return Alova.Get<AlertFunnelResponse>('/dashboard/funnel', {
+    params: { ...params, type: 'alert' },
+    localCache: 0,
+  });
+};
+
+/** 预警下钻（type=alert + alertLevel + rtmLevel） */
+export const getDashboardAlertDrillDown = (params: {
+  taskId: string;
+  alertLevel: string;
+  rtmLevel?: string;
+  platform?: string;
+  rtm?: string;
+  format?: string;
+  dealerName?: string;
+}) => {
+  return Alova.Get<AlertDrillDownResponse>('/dashboard/funnel', {
+    params: { ...params, type: 'alert' },
+    localCache: 0,
+  });
+};
+
+/** ─── GET /api/v1/dashboard/alerts-unified — 预警列表四合一 ─── */
+
+export interface UnifiedAlertRow {
+  alert_id: string;
+  level: string;
+  description: string;
+  related_entity: string;
+  storeName: string;
+  total_employees: number;
+  completed_count: number;
+  risk_rate: number;
+  aiSuggestion?: string;
+  rtm3: string;
+  rtm4: string;
+  dealer: string;
+  store: string;
+}
+
+export interface UnifiedAlertsResponse {
+  taskId: string | null;
+  platform: string | null;
+  list: UnifiedAlertRow[];
+  total: number;
+  updatedAt: string;
+}
+
+export const getUnifiedAlerts = (params: { taskId: string; platform?: string }) => {
+  return Alova.Get<UnifiedAlertsResponse>('/dashboard/alerts-unified', {
+    params,
+    localCache: 0,
   });
 };

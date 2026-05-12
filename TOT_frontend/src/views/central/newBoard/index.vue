@@ -7,14 +7,21 @@
   import { useVoiceInput } from '@/hooks/useVoiceInput';
   import {
     getDashboardOverview,
-    getDashboardWarnings,
-    getDashboardNudgeConversion,
     getDashboardTrend,
     getDashboardHeatmap,
     getDashboardAgentInsight,
     streamDashboardInsight,
     postDashboardInsightVote,
+    getDashboardFunnel,
+    getDashboardFunnelDrillDown,
+    getDashboardAlertFunnel,
+    getDashboardAlertDrillDown,
+    getUnifiedAlerts,
     type CreateDashboardInsightBody,
+    type FunnelStageData,
+    type FunnelDrillDownResponse,
+    type AlertFunnelResponse,
+    type AlertFunnelStageData,
   } from '@/api/dashboard';
   import { marked } from 'marked';
   import {
@@ -411,127 +418,8 @@
     currentAlertsLoading.value = true;
     try {
       const platformParam = activePlatform.value || undefined;
-      const promises = [
-        getDashboardWarnings({
-          taskId,
-          warningLevel: 'p2',
-          pageSize: 100,
-          platform: platformParam,
-        }).send(),
-        getDashboardWarnings({
-          taskId,
-          warningLevel: 'p1',
-          pageSize: 100,
-          platform: platformParam,
-        }).send(),
-        getDashboardWarnings({
-          taskId,
-          warningLevel: 'p0',
-          pageSize: 100,
-          platform: platformParam,
-        }).send(),
-        getDashboardHeatmap({ taskId, rtmLevel: 'store', platform: platformParam }).send(),
-      ];
-      const [p2Res, p1Res, p0Res, heatmapRes] = await Promise.all(promises);
-
-      let combinedAlerts = [];
-      if (p2Res && p2Res.list) {
-        combinedAlerts = combinedAlerts.concat(
-          p2Res.list.map((a: any) => ({
-            ...a,
-            alert_id: a.storeId + '-p2',
-            level: 'P2',
-            description: a.triggerDesc || '起步异常',
-            related_entity: a.storeName,
-            total_employees: a.totalCount,
-            completed_count: a.completedCount,
-            risk_rate: a.warningRate,
-          }))
-        );
-      }
-      if (p1Res && p1Res.list) {
-        combinedAlerts = combinedAlerts.concat(
-          p1Res.list.map((a: any) => ({
-            ...a,
-            alert_id: a.storeId + '-p1',
-            level: 'P1',
-            description: a.triggerDesc || '临期 P1 预警',
-            related_entity: a.storeName,
-            total_employees: a.totalCount,
-            completed_count: a.completedCount,
-            risk_rate: a.warningRate,
-          }))
-        );
-      }
-      if (p0Res && p0Res.list) {
-        combinedAlerts = combinedAlerts.concat(
-          p0Res.list.map((a: any) => ({
-            ...a,
-            alert_id: a.storeId + '-p0',
-            level: 'P0',
-            description: a.triggerDesc || '高危 P0 预警',
-            related_entity: a.storeName,
-            total_employees: a.totalCount,
-            completed_count: a.completedCount,
-            risk_rate: a.warningRate,
-          }))
-        );
-      }
-
-      // Synthesize 'Unfinished' list from heatmap data for overdue/uncompleted items
-      // Note: Heatmap has assignmentCount and completedCount.
-      // Unfinished count = assignmentCount - completedCount.
-      // We will only add it if the task is overdue (determined globally) OR if we just want to list all uncompleted.
-      // Since it's 'Unfinished', we show stores with unfinished > 0.
-      if (heatmapRes && (heatmapRes as any).heatmapData) {
-        const heatmapData = (heatmapRes as any).heatmapData;
-        const unfinishedStores = heatmapData.filter((h: any) => {
-          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-          return uncompleted > 0;
-        });
-
-        // Check if global task is overdue to provide better description
-        const currentTaskInfo = (allTasks.value || []).find((t: any) => t.task_id === taskId);
-        let isTaskOverdue = false;
-        if (
-          currentTaskInfo &&
-          currentTaskInfo.deadline &&
-          currentTaskInfo.deadline !== '无截止时间'
-        ) {
-          const todayStr = new Date().toISOString().split('T')[0];
-          if (currentTaskInfo.deadline < todayStr) isTaskOverdue = true;
-        }
-
-        combinedAlerts = combinedAlerts.concat(
-          unfinishedStores.map((h: any) => {
-            const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-            const riskRate = h.assignmentCount > 0 ? (uncompleted / h.assignmentCount) * 100 : 0;
-            return {
-              alert_id: h.rtmValue + '-unfinished',
-              level: 'Unfinished',
-              description: isTaskOverdue
-                ? `任务已逾期，仍有 ${uncompleted} 人未完成`
-                : `目前仍有 ${uncompleted} 人未完成任务`,
-              related_entity: h.rtmValue || '未知门店',
-              storeName: h.rtmValue,
-              total_employees: h.assignmentCount || 0,
-              completed_count: h.completedCount || 0,
-              risk_rate: parseFloat(riskRate.toFixed(2)),
-              aiSuggestion: '建议及时督促对应门店/区域进行学习',
-            };
-          })
-        );
-      }
-
-      // Mock the required grouping fields if they don't exist on the backend response
-      // So that the table's "rtm3", "rtm4", "dealer", "store" dimensions can still fallback nicely
-      currentAlerts.value = combinedAlerts.map((a) => ({
-        ...a,
-        rtm3: a.rtm3 || '未分类 RTM3',
-        rtm4: a.rtm4 || '未分类 RTM4',
-        dealer: a.dealer || '默认经销商',
-        store: a.storeName || a.related_entity || '默认门店',
-      }));
+      const res = await getUnifiedAlerts({ taskId, platform: platformParam }).send();
+      currentAlerts.value = res.list || [];
     } catch (error) {
       console.error('获取预警列表失败', error);
     } finally {
@@ -550,9 +438,15 @@
       const todayStr = today.toISOString().split('T')[0];
       const yestStr = yest.toISOString().split('T')[0];
 
-      const [overviewData, trendDataRes, trendHourlyResToday, trendHourlyResYest] =
+      const [overviewData, funnelRes, alertFunnelRes, trendDataRes, trendHourlyResToday, trendHourlyResYest] =
         await Promise.all([
           getDashboardOverview({ taskId, platform: platformParam }).send(),
+          getDashboardFunnel({ taskId, platform: platformParam })
+            .send()
+            .catch(() => null),
+          getDashboardAlertFunnel({ taskId, platform: platformParam })
+            .send()
+            .catch(() => null),
           getDashboardTrend({ taskId, type: 'daily', platform: platformParam })
             .send()
             .catch(() => null),
@@ -564,6 +458,12 @@
             .catch(() => null),
         ]);
       currentOverview.value = overviewData;
+      if (alertFunnelRes?.stages) {
+        alertFunnelData.value = alertFunnelRes;
+      }
+      if (funnelRes?.stages) {
+        funnelData.value = { funnel: funnelRes.stages };
+      }
 
       if (overviewData) {
         // Sync rate back to the allTasks object for UI presentation
@@ -686,144 +586,46 @@
 
   // ================= Computed Data =================
 
-  const funnelData = computed(() => {
-    if (currentOverview.value) {
-      const o = currentOverview.value;
-      const pushed = o.pushUserCount || o.totalAssignments || 0;
-      const delivered = o.totalAssignments || 0;
-      const inProgress = o.inProgressCount || 0;
-      const completed = o.completedCount || 0;
-      return {
-        funnel: [
-          { stage: 'pushed', label: '推送', count: pushed },
-          { stage: 'delivered', label: '送达', count: delivered },
-          { stage: 'in_progress', label: '学习中', count: inProgress + completed },
-          { stage: 'completed', label: '已完成', count: completed },
-        ],
-      };
-    }
-    return {
-      funnel: [
-        { stage: 'pushed', label: '推送', count: 0 },
-        { stage: 'delivered', label: '送达', count: 0 },
-        { stage: 'in_progress', label: '学习中', count: 0 },
-        { stage: 'completed', label: '已完成', count: 0 },
-      ],
-    };
+  const funnelData = ref<{ funnel: FunnelStageData[] }>({
+    funnel: [
+      { stage: 'pushed', label: '推送', count: 0, sharePercent: 0, dropPercent: 0, dropWidth: 0 },
+      { stage: 'delivered', label: '送达', count: 0, sharePercent: 0, dropPercent: 0, dropWidth: 0 },
+      { stage: 'in_progress', label: '学习中', count: 0, sharePercent: 0, dropPercent: 0, dropWidth: 0 },
+      { stage: 'completed', label: '已完成', count: 0, sharePercent: 0, dropPercent: 0, dropWidth: 0 },
+    ],
   });
 
   // obsolete, removed usage
 
   const alertSummary = computed(() => {
-    if (currentOverview.value) {
-      // 从 alertFunnelData 中取数，确保统计口径绝对一致
-      const getCount = (stage: string) => {
-        const found = alertFunnelData.value.find((f: any) => f.stage === stage);
-        return found ? found.count : 0;
-      };
-
-      const p0 = getCount('P0');
-      const p1 = getCount('P1');
-      const p2 = getCount('P2');
-
-      return {
-        p0_count: p0,
-        p1_count: p1,
-        p2_count: p2,
-        p0_breakdown: p0 > 0 ? [{ category: '距离截止 < 24h', count: p0 }] : [],
-        p1_breakdown: p1 > 0 ? [{ category: '距离截止 < 48h', count: p1 }] : [],
-        p2_breakdown: p2 > 0 ? [{ category: '起步转化异常', count: p2 }] : [],
-      };
-    }
+    const stages = alertFunnelData.value?.stages;
+    if (!stages) return null;
+    const byStage = (s: string) => stages.find((f: any) => f.stage === s);
+    const p0 = byStage('P0');
+    const p1 = byStage('P1');
+    const p2 = byStage('P2');
     return {
-      p0_count: 0,
-      p1_count: 0,
-      p2_count: 0,
-      p0_breakdown: [],
-      p1_breakdown: [],
-      p2_breakdown: [],
+      p0_count: p0?.count || 0,
+      p1_count: p1?.count || 0,
+      p2_count: p2?.count || 0,
+      p0_breakdown: p0?.count > 0 ? [{ category: '距离截止 < 24h', count: p0.count }] : [],
+      p1_breakdown: p1?.count > 0 ? [{ category: '距离截止 < 48h', count: p1.count }] : [],
+      p2_breakdown: p2?.count > 0 ? [{ category: '起步转化异常', count: p2.count }] : [],
     };
   });
 
-  const alertFunnelData = computed(() => {
-    if (currentOverview.value) {
-      const o = currentOverview.value;
-      const total = o.totalAssignments || 0;
-
-      let p0 = Math.round((total * (o.crisisP0Rate || 0)) / 100);
-      let p1 = Math.round((total * (o.crisisP1Rate || 0)) / 100);
-      let p2 = Math.round((total * (o.crisisP2Rate || 0)) / 100);
-
-      const unfinished = (o.pendingCount || 0) + (o.inProgressCount || 0);
-
-      // 逻辑修复：漏斗逻辑严密化（P2 >= P1 >= P0 >= Unfinished）
-      // 我们通过从下往上的最大值约束，确保“转化率”真正体现“被拯救/完成”的人数。
-      const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-      if (task && task.fullDeadline) {
-        const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-        const startAtTime = task.startAt
-          ? new Date(task.startAt.replace(/-/g, '/')).getTime()
-          : ddlTime - 7 * 24 * 3600 * 1000;
-
-        const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
-        const rules = task.autoNudgeRules?.deadlineCrisis || {};
-        const p1Threshold = rules.p1 || 48;
-        const p0Threshold = rules.p0 || 24;
-
-        const totalDurationMs = ddlTime - startAtTime;
-        const passedMs = currentTimeMs.value - startAtTime;
-        const passedPercent = totalDurationMs > 0 ? (passedMs / totalDurationMs) * 100 : 100;
-        const p2ThresholdPercent = rules.p2 || 50;
-
-        // 仅当时间已经进入相应阶段，才进行下级向上追溯修正
-        if (hoursLeft <= 0) {
-          // 已过期：最终未完成人数就是底层指标
-          p0 = Math.max(p0, unfinished);
-          p1 = Math.max(p1, p0);
-          p2 = Math.max(p2, p1);
-        } else {
-          // 进行中：按时间窗口修正
-          // 如果时间尚未到达 P0 临界，P0 不应该强制托底 unfinished
-          if (hoursLeft <= p0Threshold) p0 = Math.max(p0, unfinished);
-          // 如果时间尚未到达 P1 临界，P1 不应该强制托底 p0 或 unfinished
-          if (hoursLeft <= p1Threshold)
-            p1 = Math.max(p1, Math.max(p0, hoursLeft <= p0Threshold ? unfinished : 0));
-
-          // 核心修复：只有当任务时间进度已经过半时，才将未完成人数计入 P2 风险
-          if (passedPercent >= p2ThresholdPercent) {
-            p2 = Math.max(p2, Math.max(p1, unfinished));
-          }
-        }
-      }
-
-      // 如果没有任何历史预警数据且任务还没过期，并且时间上不满足任何条件，应该保持为0
-      if (o.crisisP0Rate === 0 && o.crisisP1Rate === 0 && o.crisisP2Rate === 0) {
-        const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-        if (task && task.fullDeadline) {
-          const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-          const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
-          const rules = task.autoNudgeRules?.deadlineCrisis || {};
-          const p1Threshold = rules.p1 || 48;
-          const p0Threshold = rules.p0 || 24;
-
-          if (hoursLeft > p1Threshold) p1 = 0;
-          if (hoursLeft > p0Threshold) p0 = 0;
-        }
-      }
-
-      return [
-        { stage: 'P2', label: 'P2', count: p2 },
-        { stage: 'P1', label: 'P1', count: p1 },
-        { stage: 'P0', label: 'P0', count: p0 },
-        { stage: 'Unfinished', label: '未完成', count: unfinished },
-      ];
-    }
-    return [
-      { stage: 'P2', label: 'P2', count: 0 },
-      { stage: 'P1', label: 'P1', count: 0 },
-      { stage: 'P0', label: 'P0', count: 0 },
-      { stage: 'Unfinished', label: '未完成', count: 0 },
-    ];
+  const alertFunnelData = ref<AlertFunnelResponse>({
+    taskId: null,
+    platform: null,
+    stages: [
+      { stage: 'P2', label: 'P2', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
+      { stage: 'P1', label: 'P1', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
+      { stage: 'P0', label: 'P0', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
+      { stage: 'Unfinished', label: '未完成', count: 0, width: 0, conversionRate: null, percentageOfTotal: 0 },
+    ],
+    overallConversionRate: null,
+    maxCount: 1,
+    updatedAt: '',
   });
   const trendData = ref<any>(null);
 
@@ -1411,49 +1213,18 @@
   const metricAvgCompletionTime = computed(() => {
     const hours = currentOverview.value?.avgCompletionTimeHours;
     if (hours === undefined || hours === null) return '-';
-    // 如果已有完成数据（即使是0），正常格式化
     if (hours > 0 && hours < 0.1) return '< 0.1';
     return hours.toFixed(1);
   });
-  const metricReadCount = computed(() => {
-    return (
-      (currentOverview.value?.inProgressCount || 0) + (currentOverview.value?.completedCount || 0)
-    );
-  });
-
-  const metricConfirmationRate = computed(() => {
-    if (currentOverview.value && currentOverview.value.totalAssignments > 0) {
-      const confirmed =
-        (currentOverview.value.inProgressCount || 0) + (currentOverview.value.completedCount || 0);
-      return confirmed / currentOverview.value.totalAssignments;
-    }
-    return 0;
-  });
-  const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
-  const metricP0Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP0Rate || 0)) /
-        100
-    );
-  });
-  const metricP1Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP1Rate || 0)) /
-        100
-    );
-  });
-  const metricP2Count = computed(() => {
-    if (!currentOverview.value) return 0;
-    return Math.round(
-      ((currentOverview.value.totalAssignments || 0) * (currentOverview.value.crisisP2Rate || 0)) /
-        100
-    );
-  });
-  const metricTotalAlerts = computed(
-    () => metricP0Count.value + metricP1Count.value + metricP2Count.value
+  const metricReadCount = computed(() => currentOverview.value?.confirmedCount || 0);
+  const metricConfirmationRate = computed(
+    () => (currentOverview.value?.confirmationRate || 0) / 100
   );
+  const metricDeliveredCount = computed(() => currentOverview.value?.totalAssignments || 0);
+  const metricP0Count = computed(() => currentOverview.value?.nudgeSeverityCounts?.p0 || 0);
+  const metricP1Count = computed(() => currentOverview.value?.nudgeSeverityCounts?.p1 || 0);
+  const metricP2Count = computed(() => currentOverview.value?.nudgeSeverityCounts?.p2 || 0);
+  const metricTotalAlerts = computed(() => metricP0Count.value + metricP1Count.value + metricP2Count.value);
 
   const getTrendColor = (delta: number) =>
     delta > 0 ? '#34C759' : delta < 0 ? '#FF3B30' : '#86868B';
@@ -1481,21 +1252,6 @@
     { immediate: true }
   );
 
-  const funnelMaxCount = computed(() => funnelData.value?.funnel?.[0]?.count || 1);
-  const getFunnelWidth = (stage: any) => (stage.count / funnelMaxCount.value) * 100;
-  const getFunnelRate = (stage: any) => (stage.count / funnelMaxCount.value) * 100;
-  const getFunnelDropRate = (index: number) => {
-    if (index === 0 || !funnelData.value?.funnel) return 0;
-    const prev = funnelData.value.funnel[index - 1].count;
-    const curr = funnelData.value.funnel[index].count;
-    return ((prev - curr) / prev) * 100;
-  };
-  const getFunnelDropWidth = (index: number) => {
-    if (!funnelData.value?.funnel) return 0;
-    const prev = funnelData.value.funnel[index - 1].count;
-    const curr = funnelData.value.funnel[index].count;
-    return ((prev - curr) / funnelMaxCount.value) * 100;
-  };
 
   const handleFunnelDrillDown = (stage: any) => {
     selectedFunnelStage.value = stage;
@@ -1504,16 +1260,15 @@
 
   // ... Alert Summary
   const getAlertStageCount = (stage: string) => {
-    if (!alertFunnelData.value) return 0;
-    const s = alertFunnelData.value.find((f: any) => f.stage === stage);
+    if (!alertFunnelData.value?.stages) return 0;
+    const s = alertFunnelData.value.stages.find((f: any) => f.stage === stage);
     return s ? s.count : 0;
   };
-  const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
-  const getAlertPercentage = (stage: string) => {
-    const count = getAlertStageCount(stage);
-    if (!alertTotalPeople.value || alertTotalPeople.value === 0 || count === 0) return '0%';
-    return Math.round((count / alertTotalPeople.value) * 100) + '%';
+  const alertPct = (stage: string) => {
+    const s = alertFunnelData.value?.stages?.find((f: any) => f.stage === stage);
+    return (s?.percentageOfTotal || 0) + '%';
   };
+  const alertTotalPeople = computed(() => currentOverview.value?.totalAssignments || 0);
   const handleSelectAlertFilter = (level: string) => {
     alertFilter.value = level;
   };
@@ -1521,98 +1276,13 @@
   // ... Alert Funnel
   const alertFunnelAnimated = ref(false);
   watch(
-    [() => currentTaskId.value, () => (alertFunnelData.value || []).map((s) => s.count).join(',')],
+    alertFunnelData,
     () => {
       alertFunnelAnimated.value = false;
       setTimeout(() => (alertFunnelAnimated.value = true), 50);
     },
     { immediate: true }
   );
-  const alertFunnelMaxCount = computed(() => {
-    if (!alertFunnelData.value || alertFunnelData.value.length === 0) return 1;
-    const max = Math.max(...alertFunnelData.value.map((s) => s.count));
-    return max > 0 ? max : 1;
-  });
-  const getAlertFunnelWidth = (stage: any) => (stage.count / alertFunnelMaxCount.value) * 100;
-  const getAlertConversionRate = (index: number): number | null => {
-    if (!alertFunnelData.value || index === 0 || index >= alertFunnelData.value.length) return 0;
-
-    // 级联逻辑：如果上一个阶段的转化率已经是 null（未触发），则本阶段也一定是 null
-    if (index > 1 && getAlertConversionRate(index - 1) === null) {
-      return null;
-    }
-
-    const currentStage = alertFunnelData.value[index].stage;
-    const currentCount = alertFunnelData.value[index].count;
-    const prevCount = alertFunnelData.value[index - 1].count;
-
-    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-
-    // 逻辑优化：只有当本阶段人数为 0，且【确实】还没到该阶段的时间点时，才显示“未触发”。
-    if (currentCount === 0 && task && task.fullDeadline) {
-      const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-      const hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
-
-      const rules = task.autoNudgeRules?.deadlineCrisis || {};
-      const p1Threshold = rules.p1 || 48;
-      const p0Threshold = rules.p0 || 24;
-
-      if (currentStage === 'P1' && hoursLeft > p1Threshold) return null;
-      if (currentStage === 'P0' && hoursLeft > p0Threshold) return null;
-      if (currentStage === 'Unfinished' && hoursLeft > 0) return null;
-    }
-
-    if (prevCount === 0) return '-';
-
-    // 预警漏斗的转化含义是：在上一阶段的催办作用下，有多少人“被拯救”了（即没有恶化到当前阶段）
-    // 公式：(上一阶段人数 - 当前阶段人数) / 上一阶段人数 * 100
-    const saved = prevCount - currentCount;
-    if (saved < 0) return '-'; // 理论上漏斗不应该出现逆势倒挂，如果有说明存在未触发直接跳级的情况
-    return (saved / prevCount) * 100;
-  };
-  const getOverallConversionRate = () => {
-    if (!alertFunnelData.value || alertFunnelData.value.length < 2) return 0;
-
-    // 基数：最早进入预警池的人数 (P2)
-    const first = alertFunnelData.value[0].count;
-    if (first === 0) return null; // 连 P2 都还没人，说明预警都还没触发或者没异常，无法计算转化率
-
-    const task = (allTasks.value || []).find((t) => t.task_id === currentTaskId.value);
-    let hoursLeft = 9999;
-    let p1Threshold = 48;
-    let p0Threshold = 24;
-
-    if (task && task.fullDeadline) {
-      const ddlTime = new Date(task.fullDeadline.replace(/-/g, '/')).getTime();
-      hoursLeft = (ddlTime - currentTimeMs.value) / (1000 * 60 * 60);
-
-      const rules = task.autoNudgeRules?.deadlineCrisis || {};
-      p1Threshold = rules.p1 || 48;
-      p0Threshold = rules.p0 || 24;
-    }
-
-    // 寻找当前时间已经跨过了哪个层级，作为总账的计算终点（last）
-    let last = first; // 默认就是 P2 阶段
-
-    if (hoursLeft <= 0) {
-      // 已经完全截止，算最终的未完成
-      last = alertFunnelData.value[3].count; // Unfinished
-    } else if (hoursLeft <= p0Threshold) {
-      // 进入了 P0 阶段，用 P0 算账
-      last = alertFunnelData.value[2].count; // P0
-    } else if (hoursLeft <= p1Threshold) {
-      // 进入了 P1 阶段，用 P1 算账
-      last = alertFunnelData.value[1].count; // P1
-    } else {
-      // 只到了 P2（或者时间还没到 P2 但我们有 P2 数据），其实转化率是 0，但可以视作刚启动
-      // 或者说还没跨入下一阶段，没法检验上一阶段的效果
-      return null;
-    }
-
-    const saved = first - last;
-    if (saved < 0) return 0;
-    return (saved / first) * 100;
-  };
   const getAlertBarColor = (stageId: string) => {
     switch (stageId) {
       case 'P2':
@@ -2545,8 +2215,9 @@
     fmTableLoading.value = true;
     try {
       const platformParam = activePlatform.value || undefined;
-      const heatParams: any = {
+      const params: Record<string, any> = {
         taskId: currentTaskId.value,
+        funnelStage: selectedFunnelStage.value.stage,
         rtmLevel:
           fmCurrentDimension.value === 'rtm3'
             ? 'rtm'
@@ -2557,60 +2228,12 @@
             : 'store',
         platform: platformParam,
       };
-      if (fmSelectedRTM3.value) heatParams.rtm = fmSelectedRTM3.value;
-      if (fmSelectedRTM4.value) heatParams.format = fmSelectedRTM4.value;
-      if (fmSelectedDealer.value) heatParams.dealerName = fmSelectedDealer.value;
+      if (fmSelectedRTM3.value) params.rtm = fmSelectedRTM3.value;
+      if (fmSelectedRTM4.value) params.format = fmSelectedRTM4.value;
+      if (fmSelectedDealer.value) params.dealerName = fmSelectedDealer.value;
 
-      const heatRes = await getDashboardHeatmap(heatParams).send();
-      const entities = heatRes?.heatmapData || [];
-
-      // Only fetch overview concurrently if we really need "read" or "in_progress"
-      // Wait, heatmap doesn't return 'in_progress'.
-      // But let's check what the overview endpoints need:
-      // For each entity, we need its specific data
-
-      const promises = entities.map(async (h: any) => {
-        const ovParams = { ...heatParams };
-        if (fmCurrentDimension.value === 'rtm3') ovParams.rtm = h.rtmValue;
-        else if (fmCurrentDimension.value === 'rtm4') ovParams.format = h.rtmValue;
-        else if (fmCurrentDimension.value === 'dealer') ovParams.dealerName = h.rtmValue;
-        else if (fmCurrentDimension.value === 'store') {
-          // Heatmap API returns store name in rtmValue. Overview API only accepts storeId.
-          // Wait, heatmap API doesn't return storeId! Actually, if level=store, heatmap groups by s.id but returns MAX(s.name) AS rtm_value.
-          // Since we can't reliably map store name to storeId on the fly, for store level we might have to use only the heatmap data!
-          // Heatmap provides assignmentCount and completedCount.
-        }
-
-        // If it's just 'pushed' or 'completed', heatmap data already has it!
-        // We can save API calls.
-        const st = selectedFunnelStage.value.stage;
-        let count = 0;
-        let total = h.assignmentCount || 1;
-
-        if (st === 'pushed' || st === 'delivered') {
-          return { name: h.rtmValue, total, count: total, rate: 1 };
-        } else if (st === 'completed') {
-          return { name: h.rtmValue, total, count: h.completedCount, rate: h.completionRate / 100 };
-        } else if (st === 'in_progress') {
-          // Heatmap now returns inProgressCount!
-          // Funnel "in_progress" logic is inProgressCount + completedCount
-          count = (h.inProgressCount || 0) + (h.completedCount || 0);
-          return { name: h.rtmValue, total, count, rate: total > 0 ? count / total : 0 };
-        } else {
-          // 'read' - fallback to overview if possible, else 0.
-          // For safety, let's just make the overview call if NOT store level
-          if (fmCurrentDimension.value !== 'store') {
-            try {
-              const ov = await getDashboardOverview(ovParams).send();
-              if (st === 'read') count = ov.employeeReadCount || ov.totalReadCount || 0;
-            } catch (e) {}
-          }
-          return { name: h.rtmValue, total, count, rate: total > 0 ? count / total : 0 };
-        }
-      });
-
-      const rawList = await Promise.all(promises);
-      fmTableData.value = rawList;
+      const res = await getDashboardFunnelDrillDown(params).send();
+      fmTableData.value = res.rows || [];
     } catch (e) {
       fmTableData.value = [];
     } finally {
@@ -2772,85 +2395,34 @@
     amTableLoading.value = true;
     try {
       const platformParam = activePlatform.value || undefined;
-      if (alertFilter.value === 'Unfinished') {
-        const heatmapParams: any = {
-          taskId: currentTaskId.value,
-          rtmLevel:
-            amCurrentDimension.value === 'rtm3'
-              ? 'rtm'
-              : amCurrentDimension.value === 'rtm4'
-              ? 'format'
-              : amCurrentDimension.value,
-          platform: platformParam,
-        };
-        // Heatmap API handles rtm, format, dealerName differently.
-        if (amSelectedRTM3.value) heatmapParams.rtm = amSelectedRTM3.value;
-        if (amSelectedRTM4.value) heatmapParams.format = amSelectedRTM4.value;
-        if (amSelectedDealer.value) heatmapParams.dealerName = amSelectedDealer.value;
+      const params: Record<string, any> = {
+        taskId: currentTaskId.value,
+        alertLevel: alertFilter.value,
+        rtmLevel:
+          amCurrentDimension.value === 'rtm3'
+            ? 'rtm'
+            : amCurrentDimension.value === 'rtm4'
+            ? 'format'
+            : amCurrentDimension.value,
+        platform: platformParam,
+      };
+      if (amSelectedRTM3.value) params.rtm = amSelectedRTM3.value;
+      if (amSelectedRTM4.value) params.format = amSelectedRTM4.value;
+      if (amSelectedDealer.value) params.dealerName = amSelectedDealer.value;
 
-        const res = await getDashboardHeatmap(heatmapParams).send();
-        const heatmapData = (res as any)?.heatmapData || (res as any)?.data?.heatmapData || [];
-
-        const unfinishedNodes = heatmapData.filter((h: any) => {
-          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-          return uncompleted > 0;
-        });
-
-        amTableData.value = unfinishedNodes.map((h: any) => {
-          const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
-          const riskRate = h.assignmentCount > 0 ? uncompleted / h.assignmentCount : 0;
-          return {
-            alert_id: h.rtmValue + '-unfinished',
-            level: 'Unfinished',
-            entity_name: h.rtmValue || '未知实体',
-            total_employees: h.assignmentCount || 0,
-            completed_count: h.completedCount || 0,
-            risk_count: uncompleted,
-            risk_rate: riskRate,
-          };
-        });
-      } else {
-        const params: any = {
-          taskId: currentTaskId.value,
-          level:
-            amCurrentDimension.value === 'rtm3'
-              ? 'rtm'
-              : amCurrentDimension.value === 'rtm4'
-              ? 'format'
-              : amCurrentDimension.value,
-          pageSize: 100,
-          platform: platformParam,
-        };
-        if (amSelectedRTM3.value) params.rtm = amSelectedRTM3.value;
-        if (amSelectedRTM4.value) params.format = amSelectedRTM4.value;
-        if (amSelectedDealer.value) params.dealerName = amSelectedDealer.value;
-
-        const res = await getDashboardNudgeConversion(params).send();
-        const rawList = res?.list || [];
-
-        // Map backend response (red/orange/yellow objects) to table rows based on current alertFilter
-        const levelKey =
-          alertFilter.value === 'P0' ? 'red' : alertFilter.value === 'P1' ? 'orange' : 'yellow';
-
-        amTableData.value = rawList
-          .filter((a: any) => a[levelKey].nudged > 0) // Only show entities that actually have alerts at this level
-          .map((a: any) => {
-            const stats = a[levelKey];
-            return {
-              alert_id: a.targetId + '-' + alertFilter.value,
-              level: alertFilter.value,
-              entity_name: a.targetName,
-              total_employees: a.total?.nudged || 0, // In conversion view, total refers to total nudged or we can fallback
-              completed_count: stats.converted,
-              risk_count: stats.nudged,
-              risk_rate: stats.rate / 100,
-              // Extra metadata for potentially showing more info
-              nudged: stats.nudged,
-              converted: stats.converted,
-              conversion_rate: stats.rate,
-            };
-          });
-      }
+      const res = await getDashboardAlertDrillDown(params).send();
+      amTableData.value = (res.rows || []).map((r) => ({
+        alert_id: r.name + '-' + alertFilter.value,
+        level: alertFilter.value,
+        entity_name: r.name,
+        total_employees: r.totalEmployees,
+        completed_count: r.completedCount,
+        risk_count: r.riskCount,
+        risk_rate: r.riskRate,
+        nudged: r.nudged,
+        converted: r.converted,
+        conversion_rate: r.conversionRate,
+      }));
     } catch (e) {
       console.error('Fetch Alert Modal Data Failed', e);
       amTableData.value = [];
@@ -3716,7 +3288,7 @@
                 <div v-if="funnelData && funnelData.funnel" class="space-y-4 w-full">
                   <div v-for="(stage, index) in funnelData.funnel" :key="stage.stage">
                     <div
-                      v-if="index > 0 && getFunnelDropRate(index) > 0"
+                      v-if="index > 0 && stage.dropPercent > 0"
                       class="flex justify-end items-center gap-2 py-1 pr-4"
                     >
                       <svg
@@ -3730,8 +3302,8 @@
                         stroke-linecap="round"
                         stroke-linejoin="round"
                         :style="{
-                          color: getFunnelDropRate(index) >= 20 ? '#FF3B30' : '#86868B',
-                          fontWeight: getFunnelDropRate(index) >= 20 ? 600 : 400,
+                          color: stage.dropPercent >= 20 ? '#FF3B30' : '#86868B',
+                          fontWeight: stage.dropPercent >= 20 ? 600 : 400,
                         }"
                       >
                         <path d="m6 9 6 6 6-6" />
@@ -3739,11 +3311,11 @@
                       <span
                         class="text-[12px]"
                         :style="{
-                          color: getFunnelDropRate(index) >= 20 ? '#FF3B30' : '#86868B',
-                          fontWeight: getFunnelDropRate(index) >= 20 ? 600 : 400,
+                          color: stage.dropPercent >= 20 ? '#FF3B30' : '#86868B',
+                          fontWeight: stage.dropPercent >= 20 ? 600 : 400,
                         }"
                       >
-                        流失 {{ safeFormatRate(getFunnelDropRate(index), 0) }}
+                        流失 {{ safeFormatRate(stage.dropPercent, 0) }}
                       </span>
                     </div>
                     <div
@@ -3773,17 +3345,17 @@
                         <div
                           class="h-7 rounded-md transition-all duration-500 ease-out"
                           :style="{
-                            width: funnelAnimated ? getFunnelWidth(stage) + '%' : '0%',
+                            width: funnelAnimated ? stage.sharePercent + '%' : '0%',
                             backgroundColor: stageColors[stage.stage],
                             transitionDelay: index * 80 + 'ms',
                           }"
                         ></div>
                         <div
-                          v-if="getFunnelDropRate(index) >= 20"
+                          v-if="stage.dropPercent >= 20"
                           class="absolute top-0 h-7 rounded-md pointer-events-none"
                           :style="{
-                            left: getFunnelWidth(stage) + '%',
-                            width: getFunnelDropWidth(index) + '%',
+                            left: stage.sharePercent + '%',
+                            width: stage.dropWidth + '%',
                             backgroundColor: 'rgba(255, 59, 48, 0.14)',
                             border: '1px solid rgba(255, 59, 48, 0.3)',
                           }"
@@ -3794,7 +3366,7 @@
                           stage.count.toLocaleString()
                         }}</div>
                         <div class="text-[13px] text-[#86868B]">{{
-                          safeFormatRate(getFunnelRate(stage), 0)
+                          safeFormatRate(stage.sharePercent, 0)
                         }}</div>
                       </div>
                     </div>
@@ -3857,7 +3429,7 @@
                           <div
                             class="text-[32px] leading-[1] font-bold font-outfit"
                             :style="{ color: getAlertStageCount('P2') > 0 ? '#FFCC00' : '#D1D1D6' }"
-                            >{{ getAlertPercentage('P2') }}</div
+                            >{{ alertPct('P2') }}</div
                           >
                         </div>
                         <div
@@ -3924,7 +3496,7 @@
                           <div
                             class="text-[32px] leading-[1] font-bold font-outfit"
                             :style="{ color: getAlertStageCount('P1') > 0 ? '#FF9500' : '#D1D1D6' }"
-                            >{{ getAlertPercentage('P1') }}</div
+                            >{{ alertPct('P1') }}</div
                           >
                         </div>
                         <div
@@ -3991,7 +3563,7 @@
                           <div
                             class="text-[32px] leading-[1] font-bold font-outfit"
                             :style="{ color: getAlertStageCount('P0') > 0 ? '#FF3B30' : '#D1D1D6' }"
-                            >{{ getAlertPercentage('P0') }}</div
+                            >{{ alertPct('P0') }}</div
                           >
                         </div>
                         <div
@@ -4089,19 +3661,16 @@
                 <div class="flex-1 flex flex-col justify-center">
                   <!-- Alert Funnel Component Inlined -->
                   <div
-                    v-if="alertFunnelData"
+                    v-if="alertFunnelData && alertFunnelData.stages"
                     class="w-full flex flex-col justify-center h-full space-y-1.5 pt-2"
                   >
-                    <div v-for="(stage, index) in alertFunnelData" :key="stage.stage">
+                    <div v-for="(stage, index) in alertFunnelData.stages" :key="stage.stage">
                       <div
                         v-if="index > 0"
                         class="flex justify-end items-center gap-1.5 py-0.5 pr-[52px]"
                       >
-                        <template v-if="getAlertConversionRate(index) === null">
+                        <template v-if="stage.conversionRate === null">
                           <span class="text-[11px] font-medium text-[#86868B]">阶段未触发</span>
-                        </template>
-                        <template v-else-if="getAlertConversionRate(index) === '-'">
-                          <span class="text-[14px] font-bold font-outfit text-[#86868B]">-</span>
                         </template>
                         <template v-else>
                           <svg
@@ -4110,7 +3679,7 @@
                             height="12"
                             viewBox="0 0 24 24"
                             fill="none"
-                            :stroke="getAlertConversionRate(index) === 0 ? '#FF3B30' : '#34C759'"
+                            :stroke="stage.conversionRate === 0 ? '#FF3B30' : '#34C759'"
                             stroke-width="2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
@@ -4120,12 +3689,12 @@
                           <span
                             class="text-[11px] font-medium"
                             :class="
-                              getAlertConversionRate(index) === 0
+                              stage.conversionRate === 0
                                 ? 'text-[#FF3B30]'
                                 : 'text-[#34C759]'
                             "
                           >
-                            转化率 {{ safeFormatRate(Number(getAlertConversionRate(index)), 1) }}
+                            转化率 {{ safeFormatRate(Number(stage.conversionRate), 1) }}
                           </span>
                         </template>
                       </div>
@@ -4152,7 +3721,7 @@
                           <div
                             class="h-6 rounded-md transition-all duration-500 ease-out shadow-sm"
                             :style="{
-                              width: alertFunnelAnimated ? getAlertFunnelWidth(stage) + '%' : '0%',
+                              width: alertFunnelAnimated ? stage.width + '%' : '0%',
                               backgroundColor: getAlertBarColor(stage.stage),
                               transitionDelay: index * 80 + 'ms',
                             }"
@@ -4236,12 +3805,12 @@
                         </div>
                       </div>
                       <div class="flex items-baseline gap-1">
-                        <template v-if="getOverallConversionRate() === null">
+                        <template v-if="alertFunnelData.overallConversionRate === null">
                           <span class="text-[16px] font-semibold text-[#86868B]">进行中</span>
                         </template>
                         <template v-else>
                           <span class="text-[20px] font-bold font-outfit text-[#0071E3]">{{
-                            safeFormatRate(getOverallConversionRate() as number, 1)
+                            safeFormatRate(alertFunnelData.overallConversionRate as number, 1)
                           }}</span>
                         </template>
                       </div>

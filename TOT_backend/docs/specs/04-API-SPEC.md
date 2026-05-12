@@ -1761,6 +1761,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   | taskId | string | 是 | 任务ID |
   | type | string | 否 | `daily`（按天，默认）或 `hourly`（按小时） |
   | date | string | 否 | 查询具体日期的 `hourly` 数据时传入（格式 `YYYY-MM-DD`），默认当天 |
+  | groupBy | string | 否 | `day`（默认）或 `week`（按周聚合，仅 type=daily 时生效） |
   | rtm | string | 否 | 可选门店下钻，同 §5.1（仅统计该范围内 assignment 的完成时间） |
   | format | string | 否 | 同上 |
   | dealerName | string | 否 | 同上 |
@@ -1779,7 +1780,7 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
       "trendData": [
         {
           "timeKey": "2026-04-01",  // daily返回日期，hourly返回小时(如 "09", "10")
-          "newCompleted": 15,       // 该时间段内新增完成人数
+          "dailyCompleted": 15,     // 该时间段内新增完成人数（单期增量）
           "cumulativeCompleted": 15 // 该时间段结束时的累计完成人数（hourly为当日累计）
         }
       ]
@@ -2109,6 +2110,30 @@ pending ──(start_task)──▶ in_progress ──(complete_platform × N)�
   ```
 
 - **异常场景**：400 **`DASH_006`**：`platform` 非法
+
+### 5.10 获取转化漏斗数据 **P0**
+
+- **接口地址**：`GET /api/v1/dashboard/funnel`
+- **功能描述**：获取针对特定任务或全局的转化漏斗各层级数据（推送 -> 阅读 -> 学习中 -> 已完成）。
+- **鉴权限制**：需要 `central`, `executive` 或 `admin` 权限。
+
+- **Query 参数**：支持与 `overview` 相同的下钻与筛选参数（如 `taskId`, `rtm`, `format`, `dealerName`, `storeId`, `platform`）。
+
+- **响应体（成功）**：
+
+  ```json
+  {
+    "code": 200,
+    "message": "success",
+    "data": [
+      { "stage": "pushed", "label": "推送", "count": 100, "churnRate": "-" },
+      { "stage": "delivered", "label": "阅读", "count": 80, "churnRate": "20.0%" },
+      { "stage": "in_progress", "label": "学习中", "count": 50, "churnRate": "37.5%" },
+      { "stage": "completed", "label": "已完成", "count": 30, "churnRate": "40.0%" }
+    ],
+    "requestId": "req-12345"
+  }
+  ```
 
 ## 6. Executive Chat Agent API（核心AI Native接口）
 

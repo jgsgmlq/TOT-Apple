@@ -315,8 +315,556 @@ function getOverviewBoardData(query) {
     pendingCount: pendingCnt,
     overdueCount,
     warningCount: { p2: warnP2, p1: warnP1, p0: warnP0 },
+
+    // 前端直绑字段（消除 rate×total 反推）
+    confirmedCount: inProgCnt + completedCnt,
+    confirmationRate: total > 0 ? parseFloat(((100 * (inProgCnt + completedCnt)) / total).toFixed(2)) : 0,
+    nudgeSeverityCounts: { p2: p2N, p1: p1N, p0: p0N },
+
     platform: platform ? platform.sourceLabel : null,
     updatedAt: base.last_updated || formatNowSqliteLocal(),
+  };
+}
+
+/**
+ * GET /api/v1/dashboard/funnel — 转化漏斗（大盘阶段 + 下钻）
+ * 按 funnelStage 参数分派：无 → 大盘 4 阶段；有 → 按维度下钻行
+ */
+function getFunnelBoardData(query) {
+  const { funnelStage } = query;
+  const drill = parseStoreDrill(query);
+  const platform = parsePlatformFilter(query);
+
+  if (funnelStage) {
+    const validStages = ['pushed', 'delivered', 'in_progress', 'completed'];
+    if (!validStages.includes(funnelStage)) {
+      throw createError(400, 'funnelStage 参数非法', 'DASH_007');
+    }
+    return getFunnelDrillDownData(query, drill, platform);
+  }
+  return getFunnelSummaryData(query, drill, platform);
+}
+
+function getFunnelSummaryData(query, drill, platform) {
+  const { taskId } = query;
+
+  const taConditions = ['1=1'];
+  const taParams = [];
+  if (taskId) {
+    taConditions.push('ta.task_id = ?');
+    taParams.push(taskId);
+  }
+
+  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+  const storeWhere = drill.hasDrill ? drill.sql : '';
+  const allParams = [...taParams, ...drill.params];
+  const completedCond = completedCondition(platform);
+  const inProgressCond = platform
+    ? `${platformReadExistsSql('?')} AND ${uncompletedCondition(platform)}`
+    : "ta.status = 'in_progress'";
+  const platformSelectParams = platform ? [platform.readSource] : [];
+
+  const base = db.get(
+    `SELECT
+       COUNT(*) AS total,
+       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
+       MAX(ta.updated_at) AS last_updated
+     FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
+    [...platformSelectParams, ...allParams]
+  );
+
+  const total = base.total || 0;
+  const completedCnt = base.completed_count || 0;
+  const inProgCnt = base.in_progress_count || 0;
+
+  let pushUserCount = 0;
+  if (drill.hasDrill && taskId) {
+    const pr = db.get(
+      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+       FROM notification_events ne
+       JOIN stores s ON s.id = ne.store_id
+       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
+      [taskId, ...drill.params]
+    );
+    pushUserCount = (pr && pr.cnt) || 0;
+  } else {
+    const pushRow = db.get(
+      `SELECT COUNT(DISTINCT ne.target_user_id) AS cnt
+       FROM notification_events ne
+       ${taskId ? "WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'" : "WHERE ne.event_type = 'task_assigned'"}`,
+      taskId ? [taskId] : []
+    );
+    pushUserCount = (pushRow && pushRow.cnt) || 0;
+  }
+
+  const pushed = pushUserCount || total;
+  const delivered = total;
+  const inProgress = inProgCnt + completedCnt;
+  const completed = completedCnt;
+
+  const first = pushed || 1;
+  const share = (v) => parseFloat(((100 * v) / first).toFixed(2));
+  const drop = (prev, curr) => {
+    if (prev === 0) return 0;
+    return parseFloat((((prev - curr) / prev) * 100).toFixed(2));
+  };
+
+  const stages = [
+    { stage: 'pushed', label: '推送', count: pushed, sharePercent: share(pushed), dropPercent: 0, dropWidth: 0 },
+    { stage: 'delivered', label: '送达', count: delivered, sharePercent: share(delivered), dropPercent: drop(pushed, delivered), dropWidth: parseFloat((share(pushed) - share(delivered)).toFixed(2)) },
+    { stage: 'in_progress', label: '学习中', count: inProgress, sharePercent: share(inProgress), dropPercent: drop(delivered, inProgress), dropWidth: parseFloat((share(delivered) - share(inProgress)).toFixed(2)) },
+    { stage: 'completed', label: '已完成', count: completed, sharePercent: share(completed), dropPercent: drop(inProgress, completed), dropWidth: parseFloat((share(inProgress) - share(completed)).toFixed(2)) },
+  ];
+
+  return {
+    taskId: taskId || null,
+    platform: platform ? platform.sourceLabel : null,
+    stages,
+    updatedAt: base.last_updated || formatNowSqliteLocal(),
+  };
+}
+
+function getFunnelDrillDownData(query, drill, platform) {
+  const { taskId, funnelStage, rtmLevel = 'rtm' } = query;
+  if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
+
+  const level = String(rtmLevel).toLowerCase();
+
+  const colMap = {
+    rtm: 's.rtm',
+    region: 's.region',
+    format: 's.format',
+    subrtm: 's.rtm',
+    dealer: 's.dealer_name',
+    dealer_name: 's.dealer_name',
+    dealername: 's.dealer_name',
+  };
+
+  let selectDim;
+  let groupByDim;
+  if (level === 'store') {
+    selectDim = 'MAX(s.name) AS entity_name';
+    groupByDim = 's.id';
+  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
+    selectDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS entity_name";
+    groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
+  } else {
+    const col = colMap[level] || 's.rtm';
+    selectDim = `${col} AS entity_name`;
+    groupByDim = col;
+  }
+
+  const updatedAt = formatNowSqliteLocal();
+
+  if (funnelStage === 'pushed') {
+    const rows = db.all(
+      `SELECT ${selectDim}, COUNT(DISTINCT ne.target_user_id) AS entity_count
+       FROM notification_events ne
+       JOIN stores s ON s.id = ne.store_id
+       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}
+       GROUP BY ${groupByDim}
+       ORDER BY entity_count DESC`,
+      [taskId, ...drill.params]
+    );
+    return {
+      taskId,
+      funnelStage,
+      rtmLevel: level,
+      platform: platform ? platform.sourceLabel : null,
+      rows: rows.map((r) => ({
+        name: r.entity_name || '(未知)',
+        total: r.entity_count || 0,
+        count: r.entity_count || 0,
+        rate: 1,
+      })),
+      updatedAt,
+    };
+  }
+
+  // delivered / in_progress / completed — task_assignments aggregation
+  const completedCond = completedCondition(platform);
+  const inProgressCond = platform
+    ? `${platformReadExistsSql('?')} AND ${uncompletedCondition(platform)}`
+    : "ta.status = 'in_progress'";
+  const params = platform ? [platform.readSource, taskId, ...drill.params] : [taskId, ...drill.params];
+
+  const rows = db.all(
+    `SELECT
+       ${selectDim},
+       COUNT(ta.id) AS assignment_count,
+       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count
+     FROM task_assignments ta
+     JOIN stores s ON s.id = ta.store_id
+     JOIN tasks t ON t.id = ta.task_id
+     WHERE ta.task_id = ? ${drill.sql}
+     GROUP BY ${groupByDim}
+     ORDER BY assignment_count DESC`,
+    params
+  );
+
+  const mappedRows = rows.map((r) => {
+    const total = r.assignment_count || 0;
+    let count = 0;
+    if (funnelStage === 'delivered') {
+      count = total;
+    } else if (funnelStage === 'in_progress') {
+      count = (r.in_progress_count || 0) + (r.completed_count || 0);
+    } else if (funnelStage === 'completed') {
+      count = r.completed_count || 0;
+    }
+    return {
+      name: r.entity_name || '(未知)',
+      total,
+      count,
+      rate: total > 0 ? parseFloat((count / total).toFixed(4)) : 0,
+    };
+  });
+
+  return {
+    taskId,
+    funnelStage,
+    rtmLevel: level,
+    platform: platform ? platform.sourceLabel : null,
+    rows: mappedRows,
+    updatedAt,
+  };
+}
+
+/**
+ * GET /api/v1/dashboard/funnel?type=alert — 预警漏斗大盘（预设计算）
+ * 复用 getOverviewBoardData 获取原始指标，在后端完成级联修正、转化率、宽度计算。
+ */
+function getAlertFunnelData(query) {
+  const { taskId } = query;
+  const drill = parseStoreDrill(query);
+  const platform = parsePlatformFilter(query);
+
+  const taConditions = ['1=1'];
+  const taParams = [];
+  if (taskId) {
+    taConditions.push('ta.task_id = ?');
+    taParams.push(taskId);
+  }
+
+  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
+  const storeWhere = drill.hasDrill ? drill.sql : '';
+  const allParams = [...taParams, ...drill.params];
+  const completedCond = completedCondition(platform);
+  const uncompletedCond = uncompletedCondition(platform);
+  const inProgressCond = platform
+    ? `${platformReadExistsSql('?')} AND ${uncompletedCond}`
+    : "ta.status = 'in_progress'";
+  const pendingCond = platform
+    ? `NOT (${platformReadExistsSql('?')}) AND ${uncompletedCond}`
+    : "ta.status = 'pending'";
+  const platformSelectParams = platform ? [platform.readSource, platform.readSource] : [];
+
+  // Base aggregation: total, completed, pending, in_progress
+  const base = db.get(
+    `SELECT
+       COUNT(*) AS total,
+       SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+       SUM(CASE WHEN ${pendingCond} THEN 1 ELSE 0 END) AS pending_count,
+       SUM(CASE WHEN ${inProgressCond} THEN 1 ELSE 0 END) AS in_progress_count,
+       MAX(ta.updated_at) AS last_updated
+     FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
+    [...platformSelectParams, ...allParams]
+  );
+
+  const total = base.total || 0;
+  const completedCnt = base.completed_count || 0;
+  const pendingCnt = base.pending_count || 0;
+  const inProgCnt = base.in_progress_count || 0;
+  const unfinished = pendingCnt + inProgCnt;
+
+  // Store-task bucket query: 与 getOverviewBoardData 内 warningCount 同源
+  // 但改为累加 uncompleted_count 到各带，统计「人」而非「店桶」
+  const storeTaskRows = db.all(
+    `SELECT
+       ta.store_id,
+       ta.task_id,
+       t.ddl_at,
+       t.created_at,
+       t.auto_nudge_rules,
+       SUM(CASE WHEN ${uncompletedCond} THEN 1 ELSE 0 END) AS uncompleted_count
+     FROM task_assignments ta
+     JOIN tasks t ON t.id = ta.task_id
+     ${joinStore}
+     WHERE ${taConditions.join(' AND ')} ${storeWhere}
+     GROUP BY ta.store_id, ta.task_id`,
+    allParams
+  );
+
+  const nowMs = Date.now();
+  let p0 = 0;
+  let p1 = 0;
+  let p2 = 0;
+  let hasTaskMeta = false;
+  let p0Threshold = 24;
+  let p1Threshold = 48;
+  let p2ThresholdPercent = 50;
+  let hoursLeft = Infinity;
+
+  // 从第一个有效桶中取 task 元数据（同一 taskId 下所有桶共用）
+  for (const row of storeTaskRows) {
+    if (!row.uncompleted_count) continue;
+    const rules = parseAutoNudgeRules(row.auto_nudge_rules);
+    const ddlAt = new Date(row.ddl_at).getTime();
+    const rowHoursLeft = (ddlAt - nowMs) / (1000 * 60 * 60);
+    const createdAtMs = row.created_at
+      ? new Date(row.created_at).getTime()
+      : ddlAt - 7 * 24 * 3600 * 1000;
+    const totalDurationMs = ddlAt - createdAtMs;
+    const passedMs = nowMs - createdAtMs;
+    const passedPct =
+      totalDurationMs > 0 ? ((passedMs / totalDurationMs) * 100).toFixed(2) : 100;
+    const band = classifyDeadlineCrisisBand(rules, rowHoursLeft, parseFloat(passedPct));
+
+    if (!hasTaskMeta) {
+      hasTaskMeta = true;
+      hoursLeft = rowHoursLeft;
+      const h = getDeadlineCrisisHours(rules);
+      if (h) {
+        p0Threshold = h.p0Hours;
+        p1Threshold = h.p1Hours;
+        p2ThresholdPercent = h.p2Percent;
+      }
+    }
+
+    // 累加「人」而非桶数：互斥地带，同一桶只落入一档
+    if (band === 'p0') p0 += row.uncompleted_count;
+    else if (band === 'p1') p1 += row.uncompleted_count;
+    else if (band === 'p2') p2 += row.uncompleted_count;
+  }
+
+  // 级联修正：P2 ≥ P1 ≥ P0 ≥ Unfinished
+  if (hasTaskMeta) {
+    if (hoursLeft <= 0) {
+      p0 = Math.max(p0, unfinished);
+      p1 = Math.max(p1, p0);
+      p2 = Math.max(p2, p1);
+    } else {
+      // 进行中：按时间窗口级联
+      if (hoursLeft <= p0Threshold) p0 = Math.max(p0, unfinished);
+      if (hoursLeft <= p1Threshold) {
+        p1 = Math.max(p1, Math.max(p0, hoursLeft <= p0Threshold ? unfinished : 0));
+      }
+      // 仅当时间进度过半时才将未完成人数计入 P2
+      const firstRow = storeTaskRows.find((r) => r.uncompleted_count > 0 && r.ddl_at);
+      if (firstRow) {
+        const ddlMs_c = new Date(firstRow.ddl_at).getTime();
+        const createdAtMs_c = firstRow.created_at
+          ? new Date(firstRow.created_at).getTime()
+          : ddlMs_c - 7 * 24 * 3600 * 1000;
+        const totalDur = ddlMs_c - createdAtMs_c;
+        const passed = nowMs - createdAtMs_c;
+        if (totalDur > 0 && (passed / totalDur) * 100 >= p2ThresholdPercent) {
+          p2 = Math.max(p2, Math.max(p1, unfinished));
+        }
+      }
+    }
+  }
+
+  // 零值守卫：若所有桶均未落入任何带且任务未过期
+  if (p0 === 0 && p1 === 0 && p2 === 0 && hasTaskMeta) {
+    const firstRow = storeTaskRows.find((r) => r.ddl_at);
+    if (firstRow) {
+      const ddlMs_z = new Date(firstRow.ddl_at).getTime();
+      const hLeft = (ddlMs_z - nowMs) / (1000 * 60 * 60);
+      const rules_z = parseAutoNudgeRules(firstRow.auto_nudge_rules);
+      const h_z = getDeadlineCrisisHours(rules_z);
+      const p1Th = h_z ? h_z.p1Hours : 48;
+      const p0Th = h_z ? h_z.p0Hours : 24;
+      if (hLeft > p1Th) p1 = 0;
+      if (hLeft > p0Th) p0 = 0;
+    }
+  }
+
+  const stageArray = [
+    { stage: 'P2', label: 'P2', count: p2 },
+    { stage: 'P1', label: 'P1', count: p1 },
+    { stage: 'P0', label: 'P0', count: p0 },
+    { stage: 'Unfinished', label: '未完成', count: unfinished },
+  ];
+
+  // 宽度计算
+  const maxCount = Math.max(...stageArray.map((s) => s.count), 1);
+  const stageWidth = (count) => parseFloat(((count / maxCount) * 100).toFixed(2));
+
+  // 每阶段转化率
+  const stageConversionRate = (index) => {
+    if (index === 0) return null;
+    if (index > 1 && stageConversionRate(index - 1) === null) return null;
+
+    const currentCount = stageArray[index].count;
+    const prevCount = stageArray[index - 1].count;
+
+    if (currentCount === 0 && hasTaskMeta) {
+      const stg = stageArray[index].stage;
+      if (stg === 'P1' && hoursLeft > p1Threshold) return null;
+      if (stg === 'P0' && hoursLeft > p0Threshold) return null;
+      if (stg === 'Unfinished' && hoursLeft > 0) return null;
+    }
+
+    if (prevCount === 0) return null;
+    const saved = prevCount - currentCount;
+    if (saved < 0) return null;
+    return parseFloat(((saved / prevCount) * 100).toFixed(2));
+  };
+
+  // 整体转化率
+  let overallConversionRate = null;
+  if (p2 > 0 && hasTaskMeta) {
+    let last = p2;
+    if (hoursLeft <= 0) {
+      last = unfinished;
+      const saved = p2 - last;
+      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
+    } else if (hoursLeft <= p0Threshold) {
+      last = p0;
+      const saved = p2 - last;
+      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
+    } else if (hoursLeft <= p1Threshold) {
+      last = p1;
+      const saved = p2 - last;
+      overallConversionRate = saved >= 0 ? parseFloat(((saved / p2) * 100).toFixed(2)) : 0;
+    }
+  }
+
+  const result = stageArray.map((s, i) => ({
+    stage: s.stage,
+    label: s.label,
+    count: s.count,
+    width: stageWidth(s.count),
+    conversionRate: i === 0 ? null : stageConversionRate(i),
+    percentageOfTotal: total > 0 ? parseFloat(((s.count / total) * 100).toFixed(1)) : 0,
+  }));
+
+  return {
+    taskId: taskId || null,
+    platform: platform ? platform.sourceLabel : null,
+    stages: result,
+    overallConversionRate,
+    maxCount,
+    updatedAt: base.last_updated || formatNowSqliteLocal(),
+  };
+}
+
+/**
+ * GET /api/v1/dashboard/funnel?type=alert&alertLevel=... — 预警下钻
+ * Unfinished → task_assignments 分组；P0/P1/P2 → 复用 getNudgeConversionBoardData
+ */
+function getAlertDrillDownData(query) {
+  const { taskId, alertLevel, rtmLevel = 'rtm' } = query;
+  if (!taskId) throw createError(400, 'taskId 为必填参数', 'DASH_001');
+
+  const drill = parseStoreDrill(query);
+  const platform = parsePlatformFilter(query);
+  const level = String(rtmLevel).toLowerCase();
+
+  const colMap = {
+    rtm: 's.rtm',
+    region: 's.region',
+    format: 's.format',
+    subrtm: 's.rtm',
+    dealer: 's.dealer_name',
+    dealer_name: 's.dealer_name',
+    dealername: 's.dealer_name',
+  };
+
+  let selectDim;
+  let groupByDim;
+  if (level === 'store') {
+    selectDim = 'MAX(s.name) AS entity_name';
+    groupByDim = 's.id';
+  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
+    selectDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '(未知)') AS entity_name";
+    groupByDim = "COALESCE(NULLIF(TRIM(s.dealer_name), ''), '')";
+  } else {
+    const col = colMap[level] || 's.rtm';
+    selectDim = `${col} AS entity_name`;
+    groupByDim = col;
+  }
+
+  const updatedAt = formatNowSqliteLocal();
+
+  if (alertLevel === 'Unfinished') {
+    const completedCond = completedCondition(platform);
+    const params = platform
+      ? [platform.readSource, taskId, ...drill.params]
+      : [taskId, ...drill.params];
+
+    const rows = db.all(
+      `SELECT
+         ${selectDim},
+         COUNT(ta.id) AS assignment_count,
+         SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS completed_count,
+         COUNT(ta.id) - SUM(CASE WHEN ${completedCond} THEN 1 ELSE 0 END) AS uncompleted_count
+       FROM task_assignments ta
+       JOIN stores s ON s.id = ta.store_id
+       JOIN tasks t ON t.id = ta.task_id
+       WHERE ta.task_id = ? ${drill.sql}
+       GROUP BY ${groupByDim}
+       HAVING uncompleted_count > 0
+       ORDER BY assignment_count DESC`,
+      params
+    );
+
+    return {
+      taskId,
+      alertLevel,
+      dimension: level,
+      platform: platform ? platform.sourceLabel : null,
+      rows: rows.map((r) => {
+        const total = r.assignment_count || 0;
+        const uncompleted = r.uncompleted_count || 0;
+        return {
+          name: r.entity_name || '(未知)',
+          totalEmployees: total,
+          completedCount: r.completed_count || 0,
+          riskCount: uncompleted,
+          riskRate: total > 0 ? parseFloat((uncompleted / total).toFixed(4)) : 0,
+        };
+      }),
+      updatedAt,
+    };
+  }
+
+  // P0 / P1 / P2 — nudge conversion data
+  const levelKey = alertLevel === 'P0' ? 'red' : alertLevel === 'P1' ? 'orange' : 'yellow';
+  const nudgeData = getNudgeConversionBoardData({ ...query, level: level });
+
+  const mappedRows = nudgeData.list
+    .filter((a) => a[levelKey].nudged > 0)
+    .map((a) => {
+      const stats = a[levelKey];
+      return {
+        name: a.targetName,
+        totalEmployees: a.total?.nudged || 0,
+        completedCount: stats.converted,
+        riskCount: stats.nudged,
+        riskRate: stats.rate / 100,
+        nudged: stats.nudged,
+        converted: stats.converted,
+        conversionRate: stats.rate,
+      };
+    });
+
+  return {
+    taskId,
+    alertLevel,
+    dimension: level,
+    platform: platform ? platform.sourceLabel : null,
+    rows: mappedRows,
+    updatedAt,
   };
 }
 
@@ -469,6 +1017,88 @@ function getTrendBoardData(query) {
     date: targetDate,
     platform: platform ? platform.sourceLabel : null,
     trendData,
+  };
+}
+
+/**
+ * GET /api/v1/dashboard/alerts-unified — 预警列表（P2/P1/P0/Unfinished 四合一）
+ * 将前端原先 4 次 API 调用合并为 1 次返回，消除前端数据合并与形状转换。
+ */
+function getUnifiedAlertsBoardData(query) {
+  const { taskId } = query;
+  const platform = parsePlatformFilter(query);
+
+  const alerts = [];
+
+  // P2 / P1 / P0 — 复用 getWarningsBoardData
+  const levels = [
+    { level: 'p2', label: 'P2', descFallback: '起步异常' },
+    { level: 'p1', label: 'P1', descFallback: '临期 P1 预警' },
+    { level: 'p0', label: 'P0', descFallback: '高危 P0 预警' },
+  ];
+  for (const { level, label, descFallback } of levels) {
+    try {
+      const wr = getWarningsBoardData({
+        ...query,
+        warningLevel: level,
+        pageSize: 500,
+        level: 'store',
+      });
+      for (const a of wr.list) {
+        alerts.push({
+          alert_id: (a.storeId || '') + '-' + level,
+          level: label,
+          description: a.triggerDesc || descFallback,
+          related_entity: a.storeName,
+          storeName: a.storeName,
+          total_employees: a.totalCount || 0,
+          completed_count: a.completedCount || 0,
+          risk_rate: a.warningRate || 0,
+          aiSuggestion: a.aiSuggestion || '',
+          taskId: a.taskId,
+          storeId: a.storeId,
+        });
+      }
+    } catch (e) { /* skip failed level */ }
+  }
+
+  // Unfinished — heatmap store-level data
+  try {
+    const hm = getHeatmapBoardData({ taskId, rtmLevel: 'store', platform: platform ? platform.sourceLabel : undefined });
+    for (const h of (hm.heatmapData || [])) {
+      const uncompleted = (h.assignmentCount || 0) - (h.completedCount || 0);
+      if (uncompleted <= 0) continue;
+      alerts.push({
+        alert_id: (h.rtmValue || '') + '-unfinished',
+        level: 'Unfinished',
+        description: `目前仍有 ${uncompleted} 人未完成任务`,
+        related_entity: h.rtmValue || '未知门店',
+        storeName: h.rtmValue,
+        total_employees: h.assignmentCount || 0,
+        completed_count: h.completedCount || 0,
+        risk_rate: h.assignmentCount > 0 ? parseFloat(((uncompleted / h.assignmentCount) * 100).toFixed(2)) : 0,
+        aiSuggestion: '建议及时督促对应门店/区域进行学习',
+        taskId,
+        storeId: h.rtmValue,
+      });
+    }
+  } catch (e) { /* skip */ }
+
+  // Fallback dimension fields
+  const list = alerts.map((a) => ({
+    ...a,
+    rtm3: a.rtm3 || '未分类 RTM3',
+    rtm4: a.rtm4 || '未分类 RTM4',
+    dealer: a.dealer || '默认经销商',
+    store: a.storeName || a.related_entity || '默认门店',
+  }));
+
+  return {
+    taskId: taskId || null,
+    platform: platform ? platform.sourceLabel : null,
+    list,
+    total: list.length,
+    updatedAt: formatNowSqliteLocal(),
   };
 }
 
@@ -785,6 +1415,10 @@ module.exports = {
   completedCondition,
   uncompletedCondition,
   getOverviewBoardData,
+  getFunnelBoardData,
+  getAlertFunnelData,
+  getAlertDrillDownData,
+  getUnifiedAlertsBoardData,
   getHeatmapBoardData,
   getTrendBoardData,
   getWarningsBoardData,
