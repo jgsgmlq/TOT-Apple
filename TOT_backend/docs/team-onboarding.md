@@ -1,7 +1,7 @@
 # TOT 团队接入指南
 
 本文档帮助新成员从零开始接入共享开发环境（Tailscale / SSH / 集成后端）。  
-完成后你可以：在家/公司/任何网络访问 **Mac Studio 上的集成后端**；**日常后端开发推荐在本机克隆仓库运行 `npm run dev`**，合并进 `dev_joint` 后由管理员执行 `deploy.sh` 更新 PM2（集成态），无需每人占用共享 `:3000`。
+完成后你可以：在家/公司/任何网络访问 **Mac Studio 上的集成后端**；**日常后端开发推荐在本机克隆仓库运行 `npm run dev`**，合并进 `dev` 后由管理员执行 `deploy.sh` 更新 PM2（集成态），无需每人占用共享 `:3000`。
 
 ---
 
@@ -11,18 +11,18 @@
 | 项目                           | 值                                                                               |
 | ---------------------------- | ------------------------------------------------------------------------------- |
 | 共享服务器                        | Mac Studio（始终开机）                                                                |
-| macOS 用户名                    | `skylerwang`                                                                    |
+| macOS 用户名                    | `skyler`                                                                    |
 | Mac Studio Tailscale IP      | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`）                                    |
 | 后端端口                         | `3000`                                                                          |
 | 前端开发端口                       | `8001`                                                                          |
 | 生产环境 URL                     | `http://gctrainingdashboard.corp.apple.com`（内网）                                  |
 | Git 仓库                       | GitHub（问管理员要链接）                                                                 |
-| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）；大型功能分支（如 `Echat2.0`）完成后合并回 `dev_joint` |
+| 稳定 / 集成分支                    | `dev`（Mac Studio PM2、日常 PR 目标）；大型功能分支（如 `Echat2.0`）完成后合并回 `dev` |
 | 后端日常调试                       | **各人本机** `TOT_backend/server` +本机 `database.db`；Mac Studio PM2 仅表示 **已部署的集成实例** |
-| Mac Studio 仓库根路径 `REPO_ROOT` | `/Users/skylerwang/Desktop/MVP`                                                             |
+| Mac Studio 仓库根路径 `REPO_ROOT` | `/Users/skyler/Desktop/MVP 3.0/TOT-Apple                                                             |
 
 
-**关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。该值已填入上表，下文命令里出现 `$REPO_ROOT` 时请直接替换为上表中的路径，或在终端先执行 `export REPO_ROOT='/Users/skylerwang/Desktop/MVP'` 再复制命令。若路径发生变化（如 Mac Studio 重装或仓库迁移），请管理员同步更新此表。
+**关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。该值已填入上表，下文命令里出现 `$REPO_ROOT` 时请直接替换为上表中的路径，或在终端先执行 `export REPO_ROOT='/Users/skyler/Desktop/MVP 3.0/TOT-Apple` 再复制命令。若路径发生变化（如 Mac Studio 重装或仓库迁移），请管理员同步更新此表。
 
 ---
 
@@ -48,7 +48,7 @@ Tailscale 是一个 P2P VPN 工具，安装后无论你在哪个网络（家里�
 
 ### 1-A 管理员操作（仅管理员做一次）
 
-> 管理员 = 持有 Mac Studio 的人（skylerwang）
+> 管理员 = 持有 Mac Studio 的人（skyler）
 
 **创建 Tailscale 账号并建立 Network：**
 
@@ -171,7 +171,7 @@ chmod 600 ~/.ssh/authorized_keys
 ```
 Host mac-studio
   HostName 100.65.95.128          # 换成 Mac Studio 的 Tailscale IP
-  User skylerwang
+  User skyler
   IdentityFile ~/.ssh/id_ed25519
   ServerAliveInterval 60
   ServerAliveCountMax 3
@@ -192,7 +192,7 @@ ssh mac-studio
 1. 打开 Cursor → 左侧 Extensions 图标 → 搜索 `Remote - SSH` → Install
 2. 按 `Cmd+Shift+P` → 输入 `Remote-SSH: Connect to Host` → 选 `mac-studio`
 3. 第一次连接会在 Mac Studio 安装 VS Code Server，等待约 1 分钟
-4. 连接成功后：`File → Open Folder` → 选择 **REPO_ROOT**（`/Users/skylerwang/Desktop/MVP`，内含 `TOT_frontend`、`TOT_backend`）
+4. 连接成功后：`File → Open Folder` → 选择 **REPO_ROOT**（`/Users/skyler/Desktop/MVP 3.0/TOT-Apple，内含 `TOT_frontend`、`TOT_backend`）
 
 连接后，你在 **Mac Studio 的文件系统**上编辑（适合前端在远程跑 Vite、或需要统一环境时）。**后端日常开发**仍推荐在本机克隆中进行（见 Step 6），不必为改后端而长期 SSH 占用 Mac Studio。
 
@@ -232,7 +232,7 @@ ssh mac-studio
 | 场景                          | 做法                                                                                                                               |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | **日常写代码、反复调试**              | 在**自己电脑**上克隆仓库，于 `TOT_backend/server` 执行 `npm run dev`，使用**本机** `database.db`（文件不进 Git）。多人并行互不抢端口，**不要**为自测去停 Mac Studio 上的 PM2。 |
-| **全员对齐的 API / 演示 / 前端默认联调** | 使用 Tailscale 访问 Mac Studio 上 PM2 守护的 `tot-api`（`:3000`）。该进程对应 **已合并进 `dev_joint` 且已由 `deploy.sh` 部署的代码**。                        |
+| **全员对齐的 API / 演示 / 前端默认联调** | 使用 Tailscale 访问 Mac Studio 上 PM2 守护的 `tot-api`（`:3000`）。该进程对应 **已合并进 `dev` 且已由 `deploy.sh` 部署的代码**。                        |
 | **PM2**                     | 表示 **集成态**，不是每个人的调试终端；无运维需要时不要 `pm2 stop tot-api`。                                                                               |
 
 
@@ -282,21 +282,21 @@ node db/seed.js
 - 前端也在本机时：在 `TOT_frontend` 使用 **未跟踪** 的 `.env.development.local`，设置 `VITE_GLOB_API_URL=http://127.0.0.1:3000`（或你本机局域网 / Tailscale IP + 端口）。勿改已提交的 `.env.development`。
 - 前端本机、后端暂时用 **共享集成**：`VITE_GLOB_API_URL=http://<Tailscale IP>:3000`（与 Step 5「选项 B」一致）。
 
-### Git 工作流（集成分支：`dev_joint`）
+### Git 工作流（集成分支：`dev`）
 
 以下命令在**你正在开发的那台机器**上、于**仓库根目录**执行即可（本机克隆与 Mac Studio 上克隆同理）。  
 原则只有两条：  
 
-1. 永远从 `dev_joint` 拉分支；2) 永远把 PR 提回 `dev_joint`。
+1. 永远从 `dev` 拉分支；2) 永远把 PR 提回 `dev`。
 
 **标准流程（从开始到合并后收尾）**
 
 ```bash
 # 0) 同步集成分支（确保基线最新）
-git checkout dev_joint
-git pull origin dev_joint
+git checkout dev
+git pull origin dev
 
-# 1) 创建并推送功能分支（不要直接在 dev_joint 开发）
+# 1) 创建并推送功能分支（不要直接在 dev 开发）
 git checkout -b feature/be-你的功能名
 # 首次推送并建立 upstream
 git push -u origin feature/be-你的功能名
@@ -307,30 +307,30 @@ git add .
 git commit -m "feat: 简短说明"
 git push
 
-# 3) 定期同步 dev_joint（在线性历史下更新）
-# 在你自己的功能分支执行：把远程 dev_joint 的最新提交同步到当前分支
-git pull --rebase origin dev_joint
+# 3) 定期同步 dev（在线性历史下更新）
+# 在你自己的功能分支执行：把远程 dev 的最新提交同步到当前分支
+git pull --rebase origin dev
 
-# 4) 提 PR：base=dev_joint，compare=你的功能分支
+# 4) 提 PR：base=dev，compare=你的功能分支
 # 5) 合并后本地收尾
-git checkout dev_joint
-git pull origin dev_joint
+git checkout dev
+git pull origin dev
 # 删除已合并分支（-d 安全删除）
 git branch -d feature/be-你的功能名
 ```
 
 提交信息前缀可按约定使用 `feat:`、`fix:`、`chore:` 等。  
-不要用无参数 `git pull --rebase`，否则可能跟错 upstream，而不是 `dev_joint`。
+不要用无参数 `git pull --rebase`，否则可能跟错 upstream，而不是 `dev`。
 
 **冲突处理（本地统一处理）**
 
-当 `git pull --rebase origin dev_joint` 停在冲突处，或 GitHub PR 页面提示  
+当 `git pull --rebase origin dev` 停在冲突处，或 GitHub PR 页面提示  
 `This branch has conflicts that must be resolved` 且 `Resolve conflicts` 不可用时：
 
 ```bash
 # 仍在你的功能分支上
 git fetch origin
-git pull --rebase origin dev_joint
+git pull --rebase origin dev
 
 # 解决冲突标记后继续
 git add .
@@ -343,7 +343,7 @@ git rebase --continue
 git push --force-with-lease
 ```
 
-最后刷新 PR 页面确认冲突消失。若仍有冲突，重复一次「同步 `dev_joint` → 解决冲突 → 推送」。
+最后刷新 PR 页面确认冲突消失。若仍有冲突，重复一次「同步 `dev` → 解决冲突 → 推送」。
 
 **可选收尾（删除远程功能分支）**
 
@@ -387,7 +387,7 @@ http://gctrainingdashboard.corp.apple.com (:80)
 
 ### 部署（更新唯一共享实例）
 
-PR 合并进 `dev_joint` 后，由管理员在 **Mac Studio** 上执行一条命令即可：
+PR 合并进 `dev` 后，由管理员在 **Mac Studio** 上执行一条命令即可：
 
 ```bash
 cd "$REPO_ROOT"
@@ -398,7 +398,7 @@ bash scripts/deploy.sh
 
 | 步骤 | 操作 | 说明 |
 |------|------|------|
-| 1/6 | `git pull origin dev_joint` | 拉取最新代码 |
+| 1/6 | `git pull origin dev` | 拉取最新代码 |
 | 2/6 | `npm install`（后端） | 更新后端依赖 |
 | 3/6 | `pnpm install && pnpm run build`（前端） | 安装前端依赖 + 打包到 `dist/` |
 | 4/6 | `sudo rsync` | 同步 `dist/` → `/opt/homebrew/var/www/tot/`（nginx web root） |
@@ -409,7 +409,7 @@ bash scripts/deploy.sh
 
 ```bash
 cd "$REPO_ROOT"
-git pull origin dev_joint
+git pull origin dev
 cd TOT_backend/server && npm install
 pm2 reload ecosystem.config.js --env development
 ```
@@ -418,7 +418,7 @@ pm2 reload ecosystem.config.js --env development
 
 ```bash
 cd "$REPO_ROOT"
-git pull origin dev_joint
+git pull origin dev
 cd TOT_frontend && pnpm install && pnpm run build
 sudo nginx -s reload
 ```
@@ -507,7 +507,7 @@ TOT_backend/server/
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | **不要把 `database.db` 提交进 Git** | 仓库已用 `.gitignore` 忽略 `*.db`，且不应再跟踪该文件。版本库里只维护 **结构** 与 **可重复的初始化方式**，不维护某台机器上的「当前数据快照」。                                                      |
 | **用 schema + seed 表达「应有数据」**  | 表结构见 `TOT_backend/server/db/schema.sql`；开发/演示用 mock 数据通过 `TOT_backend/server/db/seed.js` 写入（改 seed 请走 PR，便于全员一致）。                            |
-| **集成库在 Mac Studio**           | PM2 的 `tot-api` 使用 Mac Studio 上 `TOT_backend/server/database.db`，作为 **dev_joint 部署后的共享联调数据**。各人本机另有独立 `database.db`，仅用于个人调试，**不假设**与集成库内容一致。 |
+| **集成库在 Mac Studio**           | PM2 的 `tot-api` 使用 Mac Studio 上 `TOT_backend/server/database.db`，作为 **dev 部署后的共享联调数据**。各人本机另有独立 `database.db`，仅用于个人调试，**不假设**与集成库内容一致。 |
 | **需要与集成库隔离**                  | 日常优先在**本机**开发；若必须在 Mac Studio 双进程并行，见 Step 6「换端口」并注意共库锁竞争；临时换库路径需改代码或环境变量，由团队另行约定。                                                           |
 
 
@@ -574,7 +574,7 @@ TOT_backend/server/
 ```bash
 # Terminal A（Mac Studio）- 运行前端演示服务
 pm2 status tot-api
-cd /Users/skylerwang/Desktop/MVP/TOT_frontend
+cd /Users/skyler/Desktop/MVP 3.0/TOT-Apple3.0/TOT-Apple/TOT_frontend
 pnpm install
 pnpm run build
 pnpm run preview:dist --host 0.0.0.0 --port 4173
@@ -615,11 +615,11 @@ tailscale funnel status
 
 ## Git 分支规范（命名）
 
-完整命令流请看上文「Git 工作流（集成分支：`dev_joint`）」。  
+完整命令流请看上文「Git 工作流（集成分支：`dev`）」。  
 这里仅保留命名与分支关系，便于速查。
 
 ```
-dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
+dev                 ← 稳定集成分支（Mac Studio PM2 部署源）
   ├── Echat2.0            ← 大型功能分支（例：Executive Chat 2.0）
   ├── feature/<主题>      ← 中小型功能分支
   └── fix/<描述>          ← 缺陷修复分支
@@ -635,7 +635,7 @@ dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
 | Bug 修复 | `fix/<描述>` | `fix/ws-reconnect` |
 
 
-**PR 目标分支始终选 `dev_joint`**。大型功能分支（如 `Echat2.0`）在完成后通过 PR 合并回 `dev_joint`，再由 `deploy.sh` 部署到 Mac Studio。
+**PR 目标分支始终选 `dev`**。大型功能分支（如 `Echat2.0`）在完成后通过 PR 合并回 `dev`，再由 `deploy.sh` 部署到 Mac Studio。
 
 ---
 
@@ -648,12 +648,12 @@ dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
 bash "$REPO_ROOT/scripts/deploy.sh"
 
 # 仅后端更新
-cd "$REPO_ROOT" && git pull origin dev_joint
+cd "$REPO_ROOT" && git pull origin dev
 cd TOT_backend/server && npm install
 pm2 reload ecosystem.config.js --env development
 
 # 仅前端更新
-cd "$REPO_ROOT/TOT_frontend" && git pull origin dev_joint
+cd "$REPO_ROOT/TOT_frontend" && git pull origin dev
 pnpm install && pnpm run build
 sudo nginx -s reload
 

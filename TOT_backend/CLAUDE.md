@@ -1,9 +1,9 @@
-# MVP2.0 项目助手指令
+# TOT/Apple MVP 3.0 项目助手指令
 
 ## 项目背景速读
 
-TOT/Apple 培训任务管理系统，后端 P0 已完成（Day 1–6）。
-详细进度见：`/Users/skyler/.claude/projects/-Users-skyler-Desktop-MVP2-0/memory/project_progress.md`
+TOT/Apple 培训任务管理系统，模块化重构进行中，见 docs/plans/2026-05-12-modularization-plan.md。
+详细进度见：`/Users/skyler/.claude/projects/-Users-skyler-Desktop-MVP-3-0-TOT-Apple/memory/project_progress.md`
 
 ---
 
@@ -12,12 +12,12 @@ TOT/Apple 培训任务管理系统，后端 P0 已完成（Day 1–6）。
 **每当你在本次对话中使用了 Edit 或 Write 工具修改了代码文件，在完成该轮任务后，必须更新项目记录文件：**
 
 ```
-/Users/skyler/.claude/projects/-Users-skyler-Desktop-MVP2-0/memory/project_progress.md
+/Users/skyler/.claude/projects/-Users-skyler-Desktop-MVP-3-0-TOT-Apple/memory/project_progress.md
 ```
 
 ### 更新规则
 
-1. **追加修复/变更记录**：在文件"Code Review 修复记录"或新建"变更记录"章节，追加本次修改的内容，格式：
+1. **追加修复/变更记录**：在文件"变更记录"章节，追加本次修改的内容，格式：
    ```
    | 日期 | 文件 | 变更描述 |
    ```
@@ -26,7 +26,6 @@ TOT/Apple 培训任务管理系统，后端 P0 已完成（Day 1–6）。
 
 3. **更新"下一步"章节**：反映当前最新的待办事项。
 
-4. **参考追踪日志**：本轮被修改的文件路径记录在 `/tmp/mvp2_modified.log`（若存在），可用于确认修改范围。
 
 ### 不需要更新的情况
 

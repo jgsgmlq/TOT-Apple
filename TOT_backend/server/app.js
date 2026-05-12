@@ -15,6 +15,8 @@ const { errorHandler } = require('./middleware/errorHandler');
 const { setupWebSocket } = require('./ws/manager');
 const { setupTtsRealtimeWebSocket } = require('./ws/ttsRealtime');
 
+// Phase 1 改造：路由移至 modules/{dashboard,task-publish,admin}/routes/
+// 当前保持旧路径兼容
 const authRoutes          = require('./routes/auth');
 const tasksRoutes         = require('./routes/tasks');
 const storesRoutes        = require('./routes/stores');
