@@ -26,25 +26,6 @@ function getTaskList({ week, statuses, modelType, limit, offset } = {}) {
   if (week) { cond.push('task_week = ?'); p.push(week); }
   if (statuses && statuses.length) {
     cond.push('publish_status IN (' + statuses.map(function() { return '?'; }).join(',') + ')');
-    p.push.apply(p, statuses);
-  }
-  if (modelType) { cond.push('model_type = ?'); p.push(modelType); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-
-  return getDb().prepare(
-    'SELECT * FROM task_publish ' + where +
-    ' ORDER BY task_week DESC, sort_order LIMIT ? OFFSET ?'
-  ).all.apply(getDb().prepare(
-    'SELECT * FROM task_publish ' + where +
-    ' ORDER BY task_week DESC, sort_order LIMIT ? OFFSET ?'
-  ), p.concat([limit || 50, offset || 0]));
-}
-
-function getTaskListFixed({ week, statuses, modelType, limit, offset } = {}) {
-  var cond = []; var p = [];
-  if (week) { cond.push('task_week = ?'); p.push(week); }
-  if (statuses && statuses.length) {
-    cond.push('publish_status IN (' + statuses.map(function() { return '?'; }).join(',') + ')');
     Array.prototype.push.apply(p, statuses);
   }
   if (modelType) { cond.push('model_type = ?'); p.push(modelType); }
@@ -381,7 +362,7 @@ function deleteCampaign(id) {
 
 module.exports = {
   // task_publish
-  getTaskById, getTaskList, getTaskListFixed, getTaskPage, createTask, updateTask, deleteTask, countTasks,
+  getTaskById, getTaskList, getTaskPage, createTask, updateTask, deleteTask, countTasks,
   // task_audience_rule
   getAudienceRules, createAudienceRule, deleteAudienceRule, deleteAudienceRulesByTask,
   // learner_task_queue
