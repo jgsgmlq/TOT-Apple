@@ -55,7 +55,7 @@ async function dashboardDiagnoseHandler(context) {
 【你的职责】
 - 综合 4 个 region 的 \`severity\` 与 \`focusHint\`，**为每个任务选出最严重的一个 focusModule（优先细粒度）**：
   - 任务整体 severity = 4 个 region 中最严重者（red > orange > green）。
-  - focusModule 优先取最严重 region 的 focusHint；多个区域同等严重时按 warning_p0_rate > overdue_count > nudge_total_conversion > task_read_rate > rtm_completion_gap > trend_daily_drop > north_star 的优先级裁决。
+  - focusModule 优先取最严重 region 的 focusHint；多个区域同等严重时按 warning_p0_rate > overdue_count > nudge_total_conversion > rtm_completion_gap > trend_daily_drop > north_star 的优先级裁决。
 - 全局最多 1 个任务被评为 "red"（按"最坏"挑选）。
 - 整理 \`insight\` 与 \`focusReason\`：要复用对应 region.summary 与 keyFindings 的真实数字与说法，禁止出现后端变量名。
 
@@ -81,7 +81,7 @@ async function dashboardDiagnoseHandler(context) {
       "taskId": "...",
       "severity": "red|orange|green",
       "insight": "一句话建议(不超过30字)，必须聚焦到一个具体模块",
-      "focusModule": "none|north_star|warning_details|rtm_timezone|crisis_p0|funnel_read_rate|nudge_conversion|metrics_overdue|on_time_completion_rate|avg_completion_time|task_reach_rate|task_read_rate|warning_count_total|warning_p2_rate|warning_p1_rate|warning_p0_rate|warning_p2_stores|warning_p1_stores|warning_p0_stores|nudge_red_conversion|nudge_orange_conversion|nudge_yellow_conversion|nudge_total_conversion|overdue_count|deadline_risk|trend_daily_drop|trend_silent_days|rtm_completion_gap|rtm_worst_bucket|store_worst_bucket",
+      "focusModule": "none|north_star|warning_details|rtm_timezone|crisis_p0|nudge_conversion|metrics_overdue|on_time_completion_rate|avg_completion_time|warning_count_total|warning_p2_rate|warning_p1_rate|warning_p0_rate|warning_p2_stores|warning_p1_stores|warning_p0_stores|nudge_red_conversion|nudge_orange_conversion|nudge_yellow_conversion|nudge_total_conversion|overdue_count|deadline_risk|trend_daily_drop|trend_silent_days|rtm_completion_gap|rtm_worst_bucket|store_worst_bucket",
       "focusReason": "详细解释为什么推荐聚焦在这个模块。要求有具体数据和业务逻辑支撑，字数30-50字"
     }
   ],
@@ -90,9 +90,9 @@ async function dashboardDiagnoseHandler(context) {
 
 【聚焦模块 (focusModule) 取值与含义】
 - 若无需跳转：\`none\`
-- 粗粒度板块：\`north_star\`、\`warning_details\`、\`rtm_timezone\`、\`crisis_p0\`、\`funnel_read_rate\`、\`nudge_conversion\`、\`metrics_overdue\`
+- 粗粒度板块：\`north_star\`、\`warning_details\`、\`rtm_timezone\`、\`crisis_p0\`、\`nudge_conversion\`、\`metrics_overdue\`
 - 细粒度下钻（优先使用）：
-  - 漏斗与核心指标：\`on_time_completion_rate\`、\`avg_completion_time\`、\`task_reach_rate\`、\`task_read_rate\`
+  - 漏斗与核心指标：\`on_time_completion_rate\`、\`avg_completion_time\`
   - 预警：\`warning_count_total\`、\`warning_p2_rate\`、\`warning_p1_rate\`、\`warning_p0_rate\`、\`warning_p2_stores\`、\`warning_p1_stores\`、\`warning_p0_stores\`
   - 催办转化：\`nudge_red_conversion\`、\`nudge_orange_conversion\`、\`nudge_yellow_conversion\`、\`nudge_total_conversion\`
   - 截止/趋势：\`overdue_count\`、\`deadline_risk\`、\`trend_daily_drop\`、\`trend_silent_days\`

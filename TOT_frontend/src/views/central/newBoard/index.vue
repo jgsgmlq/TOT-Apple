@@ -232,24 +232,21 @@
     warning_details: 'module-warning_details',
     rtm_timezone: 'module-rtm_timezone',
     crisis_p0: 'module-crisis_p0',
-    funnel_read_rate: 'module-funnel_read_rate',
     nudge_conversion: 'module-nudge_conversion',
     metrics_overdue: 'module-metrics_overdue',
     // fine-grained drill targets
     on_time_completion_rate: 'module-metrics_overdue',
     avg_completion_time: 'module-metrics_overdue',
-    task_reach_rate: 'module-funnel_read_rate',
-    task_read_rate: 'module-funnel_read_rate',
-    warning_count_total: 'module-warning_details',
+    warning_count_total: 'module-warning_count_total',
     warning_p2_rate: 'module-warning_p2_rate',
     warning_p1_rate: 'module-warning_p1_rate',
     warning_p0_rate: 'module-crisis_p0',
-    warning_p2_stores: 'module-warning_details',
-    warning_p1_stores: 'module-warning_details',
+    warning_p2_stores: 'module-warning_p2_rate',
+    warning_p1_stores: 'module-warning_p1_rate',
     warning_p0_stores: 'module-crisis_p0',
-    nudge_red_conversion: 'module-nudge_conversion',
-    nudge_orange_conversion: 'module-nudge_conversion',
-    nudge_yellow_conversion: 'module-nudge_conversion',
+    nudge_red_conversion: 'module-nudge_P0',
+    nudge_orange_conversion: 'module-nudge_P1',
+    nudge_yellow_conversion: 'module-nudge_P2',
     nudge_total_conversion: 'module-nudge_conversion',
     overdue_count: 'module-metrics_overdue',
     deadline_risk: 'module-trend_chart',
@@ -273,8 +270,6 @@
       return severity === 'red' ? '紧急处理P0事故' : '防范重大风险';
     if (['nudge_total_conversion', 'nudge_red_conversion', 'nudge_orange_conversion', 'nudge_yellow_conversion', 'nudge_conversion'].includes(fm))
       return severity === 'red' ? '优化Nudge转化' : '分析Nudge效果';
-    if (['task_read_rate', 'task_reach_rate', 'funnel_read_rate'].includes(fm))
-      return severity === 'red' ? '拉升阅读率' : '分析阅读瓶颈';
     if (['overdue_count', 'deadline_risk', 'metrics_overdue'].includes(fm))
       return severity === 'red' ? '催办过期指标' : '跟进延期数据';
     if (['rtm_completion_gap', 'rtm_worst_bucket', 'store_worst_bucket', 'rtm_timezone'].includes(fm))
@@ -1309,7 +1304,7 @@
       if (diagnosis.related_task_id) {
         triggerLoading(() => (currentTaskId.value = diagnosis.related_task_id));
       }
-      
+
       if (diagnosis.focus_module) {
         setTimeout(() => {
           const domId = resolveFocusModuleDomId(diagnosis.focus_module);
@@ -1324,7 +1319,6 @@
       }
     }
   };
-
   const handleTaskSelect = (taskId: string) => {
     const task = allTasks.value.find((t) => t.task_id === taskId);
     if (task && task.status === 'draft') {
@@ -1635,6 +1629,7 @@
   // ... Trend Chart
   const chartRef = ref<HTMLElement | null>(null);
   let chartInstance: echarts.ECharts | null = null;
+  let chartResizeObserver: ResizeObserver | null = null;
   const currentDim = ref('daily');
   const currentSubPeriod = ref('');
   const subPeriodOptions = computed(() => {
@@ -2902,9 +2897,19 @@
     window.addEventListener('resize', () => {
       if (chartInstance) chartInstance.resize();
     });
+    if (chartRef.value) {
+      chartResizeObserver = new ResizeObserver(() => {
+        if (chartInstance) chartInstance.resize();
+      });
+      chartResizeObserver.observe(chartRef.value);
+    }
   });
   onUnmounted(() => {
     closeHqWebSocket();
+    if (chartResizeObserver) {
+      chartResizeObserver.disconnect();
+      chartResizeObserver = null;
+    }
     if (chartInstance) chartInstance.dispose();
   });
 </script>
@@ -3561,49 +3566,7 @@
                   </div>
                 </div>
                 <div class="h-px bg-gray-100 mx-6"></div>
-                <div id="module-funnel_read_rate" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
-                  <div
-                    class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
-                  >
-                    触达确认率
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      class="text-[#9CA3AF] hover:text-[#6B7280] transition-colors peer"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                      <path d="M12 17h.01" />
-                    </svg>
-                    <div
-                      class="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-56 bg-gray-900 text-white text-[11px] font-normal leading-relaxed rounded-lg py-2 px-3 opacity-0 peer-hover:opacity-100 pointer-events-none transition-opacity duration-200 text-left shadow-lg z-[999]"
-                    >
-                      已阅读/确认任务的人数占成功送达总人数的比例，体现任务下发的触达质量。
-                    </div>
-                  </div>
-                  <div
-                    class="text-[36px] leading-none font-bold text-[#111827] font-outfit tracking-tight mb-3"
-                    >{{ safeFormatRate(metricConfirmationRate * 100, 1) }}</div
-                  >
-                  <div class="flex items-center gap-3 text-[12px]">
-                    <div class="text-[#111827] font-semibold"
-                      >{{ metricReadCount.toLocaleString() }} 已确认</div
-                    >
-                    <div class="w-px h-3 bg-gray-200"></div>
-                    <div class="text-[#6B7280]"
-                      >{{ metricDeliveredCount.toLocaleString() }} 已送达</div
-                    >
-                  </div>
-                </div>
-                <div class="h-px bg-gray-100 mx-6"></div>
-                <div class="flex-1 p-5 flex flex-col items-center justify-center text-center">
+                <div id="module-warning_count_total" class="flex-1 p-5 flex flex-col items-center justify-center text-center">
                   <div
                     class="text-[12px] font-medium text-[#6B7280] mb-2 flex items-center gap-1.5 uppercase tracking-wide relative cursor-help z-10"
                   >
@@ -4130,6 +4093,7 @@
                         </template>
                       </div>
                       <div
+                        :id="stage.stage === 'P0' ? 'module-nudge_P0' : stage.stage === 'P1' ? 'module-nudge_P1' : stage.stage === 'P2' ? 'module-nudge_P2' : undefined"
                         :class="[
                           'flex items-center gap-3 cursor-pointer p-2 -mx-2 rounded-xl transition-all duration-200 group',
                           alertFilter === stage.stage
