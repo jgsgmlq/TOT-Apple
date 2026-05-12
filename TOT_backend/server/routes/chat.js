@@ -27,7 +27,8 @@ function requireSessionOwnership(req, res, next) {
 
 function handleCreateSession(req, res, next) {
   try {
-    const result = chatService.createSession(req.user.id, req.user);
+    const ip = req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || null;
+    const result = chatService.createSession(req.user.id, req.user, ip);
     res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);
@@ -41,12 +42,6 @@ async function handlePostMessage(req, res, next) {
 
     if (!content || !content.trim()) {
       throw createError(400, 'content 不能为空', 'CHAT_005');
-    }
-
-    if (stream === 'legacy_stream') {
-      // 保留一个后门，允许测试人员或灰度策略回退到老引擎
-      await chatService.sendMessageStream(sessionId, content.trim(), req.user.id, req, res);
-      return;
     }
 
     if (stream === true || stream === 'langgraph') {
@@ -118,25 +113,8 @@ async function handleRegenerate(req, res, next) {
     const { sessionId, messageId } = req.params;
     const { stream } = req.body;
 
-    if (stream === 'legacy_stream') {
-      await chatService.regenerateLastAssistantStream(sessionId, messageId, req.user.id, req, res);
-      return;
-    }
-
-    if (stream === true || stream === 'langgraph') {
-      // Regenerate 也要引向 LangGraph 引擎（需要在 chatService 中增加映射方法）
-      await chatService.regenerateLastAssistantStreamLangGraph(sessionId, messageId, req.user.id, req, res);
-      return;
-    }
-
-    const result = await chatService.regenerateLastAssistant(sessionId, messageId, req.user.id, req);
-
-    res.json({
-      code: 200,
-      message: 'success',
-      data: result,
-      requestId: req.requestId,
-    });
+    // All regenerate requests go through LangGraph
+    await chatService.regenerateLastAssistantStreamLangGraph(sessionId, messageId, req.user.id, req, res);
   } catch (err) {
     next(err);
   }

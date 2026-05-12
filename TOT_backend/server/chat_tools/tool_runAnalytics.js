@@ -7,7 +7,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'runAnalytics',
-      description: '执行高阶统计分析（分位数、分布、相关性等），返回结构化统计结果',
+      description: '执行高阶统计分析（趋势预测、同比环比对比、完成率分布、相关性分析等），返回结构化统计结果。用户问"分析趋势""预测完成率""对比去年同期""为什么下滑"时使用。',
       parameters: {
         type: 'object',
         required: ['analysisType'],

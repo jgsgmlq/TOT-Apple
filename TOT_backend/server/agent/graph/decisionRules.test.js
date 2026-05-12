@@ -22,11 +22,13 @@ assert(selectTier(0.5, true) === 'L3_fc_guarded', 'riskFlags=true → L3 conserv
 assert(selectTier(undefined, false) === 'L3_fc_guarded', 'undefined complexity → default L3');
 
 // ─── getLowConfidenceEntities ─────────────────────────────────
+const e = (field, raw) => ({ [field]: { raw, canonical: raw } });
 assert(getLowConfidenceEntities({}).length === 0, 'empty entities → empty');
-assert(getLowConfidenceEntities({ metric: 0.9 }).length === 0, '0.9 confidence → not low');
-assert(getLowConfidenceEntities({ metric: 0.8 }).length === 1, '0.8 confidence → low');
-assert(getLowConfidenceEntities({ metric: 0.9, region: 0.7 }).length === 1, 'only region is low');
-assert(getLowConfidenceEntities({ metric: 'high', region: null }).length === 0, 'non-numeric confidence → skipped');
+assert(getLowConfidenceEntities({ metric: 0.9 }, e('metric', '完成率')).length === 0, '0.9 confidence → not low');
+assert(getLowConfidenceEntities({ metric: 0.8 }, e('metric', '完成率')).length === 1, '0.8 confidence → low');
+assert(getLowConfidenceEntities({ metric: 0.9, region: 0.7 }, e('region', '华东')).length === 1, 'only region is low');
+assert(getLowConfidenceEntities({ metric: 'high', region: null }, e('region', '华东')).length === 0, 'non-numeric → skipped');
+assert(getLowConfidenceEntities({ metric: 0, region: 0, store: 0, rtm: 0 }, {}).length === 0, 'confidence-0 without entity → skipped');
 
 // ─── hasUrgentSignal ──────────────────────────────────────────
 assert(hasUrgentSignal('这个任务很紧急需要关注') === true, '紧急 → urgent');

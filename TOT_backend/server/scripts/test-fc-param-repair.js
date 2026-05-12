@@ -20,7 +20,7 @@ logger.info = () => {};
 logger.warn = () => {};
 logger.error = () => {};
 
-const { fc_ValidateParams, fc_ParamRepair } = require('../agent/graph/nodes');
+const { fc_ValidateParams, fc_ParamRepair } = require('../agent/graph/nodes/fcExecute');
 const RoutingPolicy = require('../agent/graph/routingPolicy');
 
 let passed = 0;

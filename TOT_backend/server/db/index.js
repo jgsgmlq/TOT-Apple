@@ -48,6 +48,7 @@ function getDb() {
     ensureChatTables(_db);
     migrateChatMessagesAgentSupport(_db);
     migrateChatMessagesIdempotency(_db);
+    migrateChatSessionsIpAddress(_db);
     ensureChatFeedbackTable(_db);
     ensureUserMemoriesTable(_db);
     migrateDashboardInsightCounts(_db);
@@ -70,6 +71,16 @@ function migrateChatMessagesIdempotency(database) {
   if (!names.has('client_message_id')) {
     database.exec('ALTER TABLE chat_messages ADD COLUMN client_message_id TEXT');
     database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_client_msg_id ON chat_messages(client_message_id)');
+  }
+}
+
+/** 旧库补 `chat_sessions.ip_address` 列（2026-05-12）。 */
+function migrateChatSessionsIpAddress(database) {
+  const names = new Set(
+    database.prepare('PRAGMA table_info(chat_sessions)').all().map((c) => c.name)
+  );
+  if (!names.has('ip_address')) {
+    database.exec('ALTER TABLE chat_sessions ADD COLUMN ip_address TEXT');
   }
 }
 
@@ -447,6 +458,7 @@ function ensureChatTables(database) {
       role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
       content     TEXT NOT NULL,
       intent_type TEXT,
+      entities_json TEXT,
       tool_calls  TEXT,
       tool_call_id TEXT,
       client_message_id TEXT UNIQUE,
@@ -478,6 +490,9 @@ function migrateChatMessagesAgentSupport(database) {
   const hasToolInCheck = ddl.includes("'tool'");
   const hasToolCallsCol = colNames.has('tool_calls');
   const hasToolCallIdCol = colNames.has('tool_call_id');
+  const hasEntitiesJsonCol = colNames.has('entities_json');
+
+  if (!hasEntitiesJsonCol) database.exec('ALTER TABLE chat_messages ADD COLUMN entities_json TEXT');
 
   if (hasToolInCheck && hasToolCallsCol && hasToolCallIdCol) return;
 
@@ -496,11 +511,12 @@ function migrateChatMessagesAgentSupport(database) {
         session_id   TEXT NOT NULL REFERENCES chat_sessions(id),
         role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
         content      TEXT NOT NULL,
-        intent_type  TEXT,
-        tool_calls   TEXT,
-        tool_call_id TEXT,
+        intent_type   TEXT,
+        entities_json TEXT,
+        tool_calls    TEXT,
+        tool_call_id  TEXT,
         client_message_id TEXT UNIQUE,
-        created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
       )
     `);
 

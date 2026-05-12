@@ -1622,11 +1622,11 @@
 
   .chat-body {
     flex: 1;
-    padding: 32px;
+    padding: 24px 16px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 32px;
     scroll-behavior: smooth;
 
     .empty-chat {
@@ -1694,36 +1694,43 @@
 
     .message-row {
       display: flex;
-      gap: 16px;
-      max-width: 85%;
+      gap: 14px;
+      width: 100%;
+      max-width: 768px;
+      margin: 0 auto;
 
       &.is-user {
-        align-self: flex-end;
-        flex-direction: row-reverse;
+        justify-content: flex-end;
+
+        .message-avatar {
+          order: 2;
+        }
 
         .message-content {
-          background: #0071e3;
-          color: #ffffff;
-          border-radius: 18px 4px 18px 18px;
+          background: #f0f2f5;
+          color: #1d1d1f;
+          border-radius: 18px 18px 4px 18px;
+          max-width: 85%;
         }
       }
 
       &.is-ai {
-        align-self: flex-start;
+        justify-content: flex-start;
 
         .message-content {
-          background: #f5f5f7;
+          flex: 1;
+          min-width: 0;
+          background: transparent;
           color: #1d1d1f;
-          border-radius: 4px 18px 18px 18px;
-          border: none;
+          padding: 0;
+          max-width: 100%;
         }
       }
 
       .message-content {
-        padding: 12px 16px;
-        font-size: 15px;
-        line-height: 1.47;
-        letter-spacing: -0.374px;
+        padding: 12px 18px;
+        font-size: 16px;
+        line-height: 1.75;
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
           Arial, sans-serif;
         word-wrap: break-word;
@@ -1948,16 +1955,15 @@
   }
 
   .chat-footer {
-    padding: 20px 32px;
+    padding: 16px 16px 20px;
     background: #ffffff;
-    border-top: 1px solid rgba(0, 0, 0, 0.05);
 
     .input-wrapper {
       position: relative;
-      max-width: 860px;
+      max-width: 768px;
       margin: 0 auto;
       display: flex;
-      gap: 16px;
+      gap: 10px;
       align-items: flex-end;
 
       > :deep(.n-input) {
@@ -1966,68 +1972,60 @@
       }
 
       :deep(.n-input) {
-        border-radius: 12px;
-        padding: 6px;
-        background: #fafafc;
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        font-size: 15px;
+        border-radius: 16px;
+        padding: 10px 14px;
+        background: #f4f4f5;
+        border: 1px solid transparent;
+        font-size: 16px;
+        line-height: 1.5;
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
           Arial, sans-serif;
         box-shadow: none;
+        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
 
-        &:hover,
+        &:hover {
+          background: #eaeaec;
+        }
+
         &.n-input--focus {
           background: #ffffff;
-          border-color: #0071e3;
-          box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.2);
+          border-color: #d1d5db;
+          box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.04);
         }
       }
 
       .send-btn {
         flex-shrink: 0;
-        border-radius: 980px;
-        height: 44px;
-        padding: 0 24px;
-        font-weight: 600;
-        background-color: #0071e3;
+        border-radius: 24px;
+        height: 40px;
+        padding: 0 20px;
+        font-weight: 500;
+        font-size: 15px;
+        background-color: #1d1d1f;
         color: #ffffff;
         border: none;
-        font-size: 15px;
-        letter-spacing: -0.374px;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-          Arial, sans-serif;
-        transition: background-color 0.2s ease;
+        transition: background-color 0.15s;
 
         &:hover {
-          background-color: #0077ed;
+          background-color: #333;
         }
 
         &:active {
-          background-color: #ededf2;
-          color: #0071e3;
+          background-color: #555;
         }
 
         &.n-button--disabled {
-          background-color: #fafafc;
-          color: rgba(0, 0, 0, 0.48);
-          border: 1px solid rgba(0, 0, 0, 0.04);
+          background-color: #e5e5e7;
+          color: #b0b0b5;
         }
       }
 
       .send-btn--stop {
-        background-color: #f5f5f7;
-        color: #1f2937;
-        border: 1px solid rgba(0, 0, 0, 0.1);
-        box-shadow: none;
+        background-color: #e5e5e7;
+        color: #1d1d1f;
 
         &:hover {
-          background-color: #e8e8ed;
-          color: #0f172a;
-        }
-
-        &:active {
-          background-color: #d2d2d7;
-          color: #0f172a;
+          background-color: #d5d5d8;
         }
       }
     }
@@ -2035,9 +2033,8 @@
     .footer-tip {
       text-align: center;
       font-size: 12px;
-      color: rgba(0, 0, 0, 0.48);
-      margin-top: 16px;
-      letter-spacing: -0.12px;
+      color: rgba(0, 0, 0, 0.35);
+      margin-top: 12px;
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
         Arial, sans-serif;
     }
@@ -2097,33 +2094,34 @@
   /* 移动端响应式适配 */
   @media (max-width: 768px) {
     .chat-header {
-      padding: 0 16px;
+      padding: 0 12px;
     }
 
     .chat-body {
-      padding: 20px 16px;
-      gap: 20px;
+      padding: 16px 12px;
+      gap: 24px;
 
       .message-row {
         max-width: 100%;
         gap: 10px;
 
+        &.is-user .message-content {
+          max-width: 90%;
+        }
+
         .message-content {
-          padding: 10px 14px;
-          font-size: 14px;
+          font-size: 15px;
+          line-height: 1.65;
         }
       }
     }
 
     .chat-footer {
-      padding: 12px 16px;
+      padding: 12px;
 
       .input-wrapper {
-        gap: 10px;
-
-        .send-btn {
-          padding: 0 16px;
-        }
+        gap: 8px;
+        max-width: 100%;
       }
 
       .footer-tip {

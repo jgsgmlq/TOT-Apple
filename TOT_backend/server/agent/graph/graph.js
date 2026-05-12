@@ -1,24 +1,18 @@
 const { StateGraph, END, START } = require("@langchain/langgraph");
 const { ExecChatGraphState } = require("./state");
-const { loadContext, contextAnalyzerRouter, toolRetrieve, fc_CheckSteps, fc_LlmToolCallStep, fc_CheckDuplicate, fc_ValidateParams, fc_ParamRepair, fc_ExecuteTool, fc_MergeToolResults, persistAndEmit, humanInTheLoopGate, finalResponseStep } = require("./nodes");
+const { loadContext, contextAnalyzerRouter, renderMemoryBlock } = require("./nodes/routerNode");
+const { toolRetrieve, fc_CheckSteps, fc_LlmToolCallStep } = require("./nodes/fcLoop");
+const { fc_CheckDuplicate, fc_ValidateParams, fc_ParamRepair, fc_ExecuteTool, fc_MergeToolResults } = require("./nodes/fcExecute");
+const { humanInTheLoopGate, finalResponseStep, persistAndEmit } = require("./nodes/responseNode");
 
 // 路由条件分支
 const routeAfterRouter = (state) => {
   if (state.mode === "deny") return "deny";
 
-  // 闲聊捷径：极短消息（<5字）→ 无条件跳 FC 循环
-  // 含 5-9 字 + 无数据上下文 → 也跳。长消息或已有数据上下文的短消息走 FC。
+  // Router 判定为 chat_only → 直接走聊天回复（绕过 FC 循环）
+  // Router 由 prevIntent hint 辅助判断短追问 vs 短确认，此处信任其分类
   if (state.mode === "chat_only" || state.intent === "chat_only") {
-    const msg = (state.userMessage || '').trim();
-    if (msg.length < 5) return "chat_only";
-    if (msg.length < 10) {
-      const hasDataContext = (state.messages || []).some(m => {
-        if (!m._getType || m._getType() !== 'ai') return false;
-        const c = typeof m.content === 'string' ? m.content : '';
-        return c.includes('|') || c.includes('完成率') || c.includes('###');
-      });
-      if (!hasDataContext) return "chat_only";
-    }
+    return "chat_only";
   }
 
   return "tool_action";
