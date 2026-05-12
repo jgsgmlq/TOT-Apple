@@ -1,7 +1,7 @@
 # Executive Chat 代码与状态图对照
 
-**最后更新：** 2026-04-30  
-**定位：** 面向开发者的 Executive Chat 导读，帮助快速建立“文档正本 -> 当前代码入口 -> To-Be 状态图映射”的认知地图。  
+**最后更新：** 2026-05-11  
+**定位：** 面向开发者的 Executive Chat 导读。**最近变更：** P0 Agent 改进（Router response_format、entity 多维扩展、超时保护、seed region 补齐、工具描述增强），详见 `docs/plans/2026-05-11-agent-refactor-plan.md`。，帮助快速建立“文档正本 -> 当前代码入口 -> To-Be 状态图映射”的认知地图。  
 **阅读原则：** 当前实现优先以运行中的代码为准；`docs/plans/` 中的 To-Be 图用于理解目标形态与 LangGraph 设计意图。
 
 ---
@@ -111,15 +111,15 @@
 | `Route /chat/*` | `server/routes/chat.js` -> `handlePostMessage` / `handleResume` / `handleRegenerate` | 已接入 | Executive 与 dashboard 共用挂载逻辑 |
 | `chatService` | `server/services/chatService.js` | 已接入 | 会话校验、SSE、落库、历史、LangGraph invoke 都在这里 |
 | `LoadContext` | `server/agent/graph/nodes.js` -> `loadContext()` | 已实现 | 从 `chatMemoryService.getMemories()` 读取记忆，写入 `memoryContext` |
-| `ContextAnalyzerRouter` | `server/agent/graph/nodes.js` -> `contextAnalyzerRouter()` | 已实现 | 单次 LLM 路由，输出 `safety` / `intent` / `entities` / `selected_tier` |
+| `ContextAnalyzerRouter` | `server/agent/graph/nodes.js` -> `contextAnalyzerRouter()` | 已实现 | 单次 LLM 路由（`response_format: json_object`），输出 5 维 entities（metric/region/store/task/rtm）+ intent + tier；含 15s 超时保护 |
 | `QuickReply` | `server/agent/graph/graph.js` -> `routeAfterRouter()` + `nodes.js` -> `finalResponseStep()` | 部分实现 | 通过 `intent === 'chat_only'` 进入，但当前仅返回占位字符串 `CHAT_MESSAGE` |
 | `DenyReply` | `graph.js` -> `routeAfterRouter()` + `nodes.js` -> `finalResponseStep()` | 部分实现 | 通过 `safety === 'deny'` 进入，但当前仅返回占位字符串 `DENY_MESSAGE` |
 | `HumanInTheLoopGate` | `nodes.js` -> `humanInTheLoopGate()` | 已实现（后端） | 使用 `interrupt()` 真挂起，等待 `Command({ resume })` |
 | `Checkpointer InterruptPayload` | `chatService.sendMessageStreamLangGraph()` / `resumeMessageStreamLangGraph()` + `buildGraph().compile({ checkpointer })` | 已实现 | 用 `SqliteSaver` 做 checkpoint |
-| `ToolRetrieve` | `nodes.js` -> `toolRetrieve()` | Stub | 当前只是 `return { ...state }`，没有真正做 Top-K Registry 检索 |
+| `ToolRetrieve` | `nodes.js` -> `toolRetrieve()` | 已实现 | Intent Map prior + BM25 混合排序，选出 Top-K 候选工具 |
 | `fc_CheckSteps` | `nodes.js` -> `fc_CheckSteps()` + `graph.js` -> `routeAfterFcCheckSteps()` | 已实现 | 按 `routingPolicy.tiers[*].max_super_steps` 控制 FC 步数 |
 | `fc_LlmToolCallStep` | `nodes.js` -> `fc_LlmToolCallStep()` | 已实现 | 绑定工具、流式发 token、根据步数决定是否继续允许工具调用 |
-| `fc_CheckDuplicate` | `nodes.js` -> `fc_CheckDuplicate()` | Stub | 当前无重复工具检测逻辑 |
+| `fc_CheckDuplicate` | `nodes.js` -> `fc_CheckDuplicate()` | 已实现 | 三级去重：同 batch / 同图 / session 缓存 |
 | `fc_ValidateParams` | `nodes.js` -> `fc_ValidateParams()` | 部分实现 | 已有 Zod 校验与低置信 HITL，但 schema 只覆盖少数工具 |
 | `fc_ParamRepair` | `nodes.js` -> `fc_ParamRepair()` | 已实现 | 把参数错误包装成 `ToolMessage`，回给模型重修 |
 | `fc_ExecuteTool` | `nodes.js` -> `fc_ExecuteTool()` -> `chatToolsService.executeByName()` | 已实现 | 真正执行工具，并复用现有工具护栏与错误语义 |
@@ -230,12 +230,10 @@ To-Be 图里强调的是**单层拍平状态**，这点在当前代码里已经�
 
 ### 8.2 LangGraph 已接入，但仍是“半收口”
 
-虽然 `graph.js` 和 `nodes.js` 已覆盖 To-Be 图上的大部分节点名，但还有几处没有完全收口：
+虽然 `graph.js` 和 `nodes.js` 已覆盖 To-Be 图上的大部分节点名，还有以下待收口项：
 
-- `ToolRetrieve` 还是空实现
-- `fc_CheckDuplicate` 还是空实现
-- `PersistAndEmit` 不负责 `chat_messages` 落库，真正持久化仍由 `chatService` 外层完成
 - `QuickReply` / `DenyReply` 目前还是占位回复
+- `PersistAndEmit` 负责记忆发布 + Langfuse trace 更新，但 `chat_messages` 实际落库仍由 `chatService` 外层完成
 
 ### 8.3 前端默认走 LangGraph，但没接住 `clarify/resume`
 
@@ -268,7 +266,28 @@ To-Be 图里强调的是**单层拍平状态**，这点在当前代码里已经�
 
 ---
 
-## 9. 如果要继续往 To-Be 收口，建议先看哪里
+## 9. Eval 评估体系
+
+已有 Agent 评估工具，位于 `server/agent/eval/`：
+
+| 文件 | 用途 |
+|---|---|
+| `evalCases.json` | 30 条 Router/ToolRetrieve 单元测试用例 + 10 条端到端用例设计 |
+| `runEval.js` | Eval 执行脚本，支持 `--baseline`（录基线）/ `--compare`（对比基线）模式 |
+| `baseline.json` | 当前代码的基线数据（2026-05-11 首次录制：intent 准确率 97%） |
+| `reports/` | 每次 `--compare` 产出的差异报告 |
+
+运行方式：
+```bash
+cd TOT_backend
+export $(grep -v '^#' .env | xargs)
+node server/agent/eval/runEval.js --baseline   # 录基线
+node server/agent/eval/runEval.js --compare    # 对比基线
+```
+
+---
+
+## 10. 如果要继续往 To-Be 收口，建议先看哪里
 
 建议顺序：
 

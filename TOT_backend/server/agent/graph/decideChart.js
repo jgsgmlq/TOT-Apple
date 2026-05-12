@@ -51,7 +51,7 @@ function chartForQueryMetrics(rows) {
 
   // 找维度字段和指标字段
   const sample = rows[0];
-  const dimKeys = ['channel_l3', 'channel_l4', 'dealer_name', 'store_name', 'region', 'format', 'dimension'];
+  const dimKeys = ['channel_l3', 'channel_l4', 'dealer_name', 'store_name', 'region', 'format', 'dimension', 'task_name', 'title'];
   const metricKeys = ['completion_rate', 'completed_count', 'total_count', 'avg_completion_time_hours', 'crisis_p0_rate', 'crisis_p1_rate', 'read_rate', 'start_delay_rate'];
 
   const dimKey = dimKeys.find(k => sample[k] !== undefined || (sample.dimensions && sample.dimensions[k] !== undefined));
@@ -76,7 +76,7 @@ function chartForQueryMetrics(rows) {
   const isPercent = metricKey.includes('rate') || metricKey.includes('completion');
   return {
     type: 'bar',
-    title: dimKey ? `各${_shortLabel(dimKey === 'channel_l3' ? '大区' : dimKey === 'channel_l4' ? '业态' : dimKey === 'dealer_name' ? '经销商' : dimKey === 'store_name' ? '门店' : dimKey)}完成率对比` : '指标对比',
+    title: dimKey ? `各${_shortLabel(dimKey === 'channel_l3' ? '大区' : dimKey === 'channel_l4' ? '业态' : dimKey === 'dealer_name' ? '经销商' : dimKey === 'store_name' ? '门店' : dimKey === 'task_name' || dimKey === 'title' ? '任务' : dimKey)}完成率对比` : '指标对比',
     xAxis,
     series: [{ name: isPercent ? '完成率 (%)' : '数值', data }],
   };

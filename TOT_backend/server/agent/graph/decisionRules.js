@@ -56,14 +56,15 @@ function getMaxRepairAttempts(tier) {
 
 // ─── §3 HITL 触发判断 ─────────────────────────────────────────────────
 
-/** 实体置信度低于阈值 → 触发 HITL */
-function getLowConfidenceEntities(entitiesConfidence) {
+/** 实体置信度低于阈值 → 触发 HITL。只检查实际提取到的实体（entities 中有值），过滤空占位。 */
+function getLowConfidenceEntities(entitiesConfidence, entities) {
   const threshold = RoutingPolicy.thresholds.ner_confidence;
   const low = [];
   for (const [field, confidence] of Object.entries(entitiesConfidence || {})) {
-    if (typeof confidence === 'number' && confidence < threshold) {
-      low.push([field, confidence]);
-    }
+    if (typeof confidence !== 'number' || confidence >= threshold) continue;
+    const entity = (entities || {})[field];
+    if (!entity || (!entity.raw && !entity.canonical)) continue;
+    low.push([field, confidence]);
   }
   return low;
 }

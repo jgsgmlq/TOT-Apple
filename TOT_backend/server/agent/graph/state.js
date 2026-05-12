@@ -56,6 +56,8 @@ const ExecChatGraphState = Annotation.Root({
   // mode 是路由决策的唯一真值源：chat_only | tool_action | deny
   mode: Annotation({ reducer: (x, y) => y ?? x, default: () => "chat_only" }),
   intent: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  prevIntent: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  prevEntities: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
 
   entities: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
   entities_raw: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),

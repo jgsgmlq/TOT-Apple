@@ -124,6 +124,9 @@
       return '';
     });
 
+    // 压缩多余空行：3+ 连续换行 → 最多保留一个空行（2 个换行）
+    raw = raw.replace(/\n{3,}/g, '\n\n');
+
     return {
       cleanMarkdown: raw.trim(),
       charts,
@@ -142,11 +145,13 @@
 
 <style lang="less" scoped>
   .markdown-renderer {
-    line-height: 1.7;
+    line-height: 1.6;
     word-break: break-word;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
       Arial, sans-serif;
-    color: #334155; /* Modern, softer dark gray for less eye strain */
+    color: #1d1d1f;
+    font-size: 15px;
+    padding: 4px 0;
 
     .reasoning-box {
       margin-bottom: 16px;
@@ -206,41 +211,56 @@
     }
 
     .markdown-body {
-      font-size: 15px;
+      :deep(hr) {
+        margin: 0.3em 0;
+        border: none;
+        border-top: 1px solid #e5e7eb;
+      }
+
+      :deep(h1), :deep(h2), :deep(h3), :deep(h4) {
+        margin-top: 0.4em;
+        margin-bottom: 0.15em;
+        font-weight: 600;
+        color: #0f172a;
+        line-height: 1.3;
+        &:first-child { margin-top: 0; }
+      }
+      :deep(h1) { font-size: 1.3em; }
+      :deep(h2) { font-size: 1.15em; }
+      :deep(h3) { font-size: 1.05em; }
 
       :deep(p) {
         margin-top: 0;
-        margin-bottom: 1em;
+        margin-bottom: 0.3em;
+        &:last-child { margin-bottom: 0; }
+        &:empty { display: none; }
+      }
 
-        &:last-child {
-          margin-bottom: 0;
-        }
+      // 段落紧跟列表/表格 → 标题与内容紧贴
+      :deep(p:has(+ ul)), :deep(p:has(+ ol)), :deep(p:has(+ table)) {
+        margin-bottom: 0.05em;
       }
 
       :deep(strong) {
         font-weight: 600;
-        color: #0f172a; /* Darker bold text for contrast */
+        color: #0f172a;
       }
 
-      /* Lists */
       :deep(ul),
       :deep(ol) {
         margin-top: 0;
-        margin-bottom: 1em;
+        margin-bottom: 0.3em;
         padding-left: 24px;
-
-        li {
-          margin-bottom: 0.25em;
-          &::marker {
-            color: #94a3b8; /* Softer bullet points */
-          }
-        }
+      }
+      :deep(li) {
+        margin-bottom: 0.15em;
+        line-height: 1.5;
+        &::marker { color: #94a3b8; }
       }
 
-      /* Blockquotes */
       :deep(blockquote) {
-        margin: 1em 0;
-        padding: 12px 16px;
+        margin: 0.6em 0;
+        padding: 10px 14px;
         color: #475569;
         background: #f8fafc;
         border-left: 4px solid #e2e8f0;
@@ -251,20 +271,19 @@
         }
       }
 
-      /* Inline Code & Code Blocks */
       :deep(code) {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
           'Courier New', monospace;
         font-size: 0.875em;
         padding: 0.2em 0.4em;
         background-color: #f1f5f9;
-        color: #ef4444; /* Standard subtle red for inline code */
+        color: #dc2626;
         border-radius: 4px;
       }
 
       :deep(pre) {
-        margin: 1em 0;
-        padding: 16px;
+        margin: 0.6em 0;
+        padding: 14px;
         background-color: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 8px;
@@ -273,31 +292,26 @@
         code {
           background-color: transparent;
           padding: 0;
-          color: #334155; /* Reset color inside pre */
+          color: #334155;
           font-size: 0.85em;
         }
       }
 
-      /* Tables */
       :deep(table) {
         width: 100%;
-        margin: 1.5em 0;
+        margin: 0.6em 0;
         border-collapse: separate;
         border-spacing: 0;
         border-radius: 8px;
         overflow: hidden;
         border: 1px solid #e2e8f0;
+        font-size: 0.95em;
 
         th,
         td {
-          padding: 10px 16px;
+          padding: 10px 14px;
           text-align: left;
-          border-bottom: 1px solid #e2e8f0;
-          border-right: 1px solid #e2e8f0;
-
-          &:last-child {
-            border-right: none;
-          }
+          border-bottom: 1px solid #f1f5f9;
         }
 
         tr:last-child td {
@@ -307,31 +321,29 @@
         th {
           background-color: #f8fafc;
           font-weight: 600;
-          color: #1e293b;
+          color: #475569;
+          font-size: 0.9em;
         }
 
         tbody tr {
           background-color: #ffffff;
           &:nth-child(even) {
-            background-color: #fcfcfd;
+            background-color: #fafbfc;
           }
         }
       }
     }
 
     .exec-charts {
-      margin: 20px 0;
+      margin: 8px 0;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 8px;
     }
 
     .exec-chart-item {
-      background: #ffffff;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-      border: 1px solid #f1f5f9;
+      width: 100%;
+      min-height: 300px;
     }
 
     .exec-follow {

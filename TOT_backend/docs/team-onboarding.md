@@ -15,13 +15,14 @@
 | Mac Studio Tailscale IP      | `100.65.95.128`（问管理员获取，执行 `tailscale ip -4`）                                    |
 | 后端端口                         | `3000`                                                                          |
 | 前端开发端口                       | `8001`                                                                          |
+| 生产环境 URL                     | `http://gctrainingdashboard.corp.apple.com`（内网）                                  |
 | Git 仓库                       | GitHub（问管理员要链接）                                                                 |
-| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）                                            |
+| 稳定 / 集成分支                    | `dev_joint`（Mac Studio PM2、日常 PR 目标）；大型功能分支（如 `Echat2.0`）完成后合并回 `dev_joint` |
 | 后端日常调试                       | **各人本机** `TOT_backend/server` +本机 `database.db`；Mac Studio PM2 仅表示 **已部署的集成实例** |
-| Mac Studio 仓库根路径 `REPO_ROOT` | **（待管理员补充）** — 见下说明                                                             |
+| Mac Studio 仓库根路径 `REPO_ROOT` | `/Users/skylerwang/Desktop/MVP`                                                             |
 
 
-**关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。下文命令里出现 `$REPO_ROOT` 时，请替换为管理员提供的真实绝对路径，或在终端先执行 `export REPO_ROOT='/实际路径'` 再复制命令。Cursor 里若已用「打开文件夹」选中该根目录，内置终端的当前目录即为 `REPO_ROOT`，此时可直接 `cd TOT_frontend` 等相对路径操作。
+**关于 `REPO_ROOT`：** 表示 Mac Studio 上本仓库克隆后的**根目录**（内含 `TOT_frontend/`、`TOT_backend/` 等）。该值已填入上表，下文命令里出现 `$REPO_ROOT` 时请直接替换为上表中的路径，或在终端先执行 `export REPO_ROOT='/Users/skylerwang/Desktop/MVP'` 再复制命令。若路径发生变化（如 Mac Studio 重装或仓库迁移），请管理员同步更新此表。
 
 ---
 
@@ -191,7 +192,7 @@ ssh mac-studio
 1. 打开 Cursor → 左侧 Extensions 图标 → 搜索 `Remote - SSH` → Install
 2. 按 `Cmd+Shift+P` → 输入 `Remote-SSH: Connect to Host` → 选 `mac-studio`
 3. 第一次连接会在 Mac Studio 安装 VS Code Server，等待约 1 分钟
-4. 连接成功后：`File → Open Folder` → 选择 `**REPO_ROOT**`（仓库根目录，路径由管理员提供；须包含 `TOT_frontend`、`TOT_backend`）
+4. 连接成功后：`File → Open Folder` → 选择 **REPO_ROOT**（`/Users/skylerwang/Desktop/MVP`，内含 `TOT_frontend`、`TOT_backend`）
 
 连接后，你在 **Mac Studio 的文件系统**上编辑（适合前端在远程跑 Vite、或需要统一环境时）。**后端日常开发**仍推荐在本机克隆中进行（见 Step 6），不必为改后端而长期 SSH 占用 Mac Studio。
 
@@ -240,20 +241,39 @@ ssh mac-studio
 ### 本机首次运行后端
 
 1. 安装 **Node.js ≥ 18**（与 `TOT_backend/server/package.json` 中 `engines` 一致）。
-2. 克隆仓库并进入服务端目录（路径按你的本机习惯，不必等于 Mac Studio 的 `REPO_ROOT`）：
+2. 克隆仓库并进入服务端目录（路径按你的本机习惯，不必等于 Mac Studio 的 `REPO_ROOT`）。
+3. 配置环境变量（**必做**，否则 LLM 调用失败）：
 
 ```bash
 cd path/to/your/MVP/TOT_backend/server
+cp .env.example .env
+# 编辑 .env，至少填入 OPENAI_API_KEY（DeepSeek API Key）
+```
+
+4. 安装依赖并启动：
+
+```bash
 npm install
 npm run dev
 # 默认监听 http://127.0.0.1:3000（仅占用你本机）
 ```
 
-1. 首次需要与文档一致的账号与演示数据时，在同一目录执行：
+5. 首次需要与文档一致的账号与演示数据时，在同一目录执行：
 
 ```bash
 node db/seed.js
+# 或 npm run seed
 ```
+
+   Seed 完成后会打印所有测试账号：
+
+   | 账号 | 密码 | 角色 | 说明 |
+   |------|------|------|------|
+   | `central` | `Train2026!` | central | 总部看板 |
+   | `executive` | `Train2026!` | executive | Executive Chat — 全国 |
+   | `executive_mono` | `Train2026!` | executive | Executive Chat — Monobrand 渠道总监 |
+   | `admin` | `Admin2026!` | admin | 系统管理 |
+   | `emp_1` ~ `emp_N` | `Train2026!` | employee | 门店员工（数量取决于 seed 门店数） |
 
 1. 自测 API：例如 `curl http://127.0.0.1:3000/api/v1/...`（登录示例见 Step 1-B）。
 
@@ -346,16 +366,133 @@ PORT=3001 npm run dev
 
 1. **必须占用 `3000`**（少用）：需与团队打招呼后执行 `pm2 stop tot-api`，结束后由管理员或操作人立即 `pm2 start tot-api`（以本机 PM2 配置为准）。
 
+### Mac Studio 生产环境架构
+
+集成环境通过 **nginx** 反向代理对外提供服务：
+
+```
+http://gctrainingdashboard.corp.apple.com (:80)
+              │
+     ┌── nginx ──────────┐
+     │                   │
+  / → TOT_frontend/dist/  /api/* → tot-api (:3000, PM2)
+                          /ws/*  → tot-api (:3000, WebSocket)
+```
+
+| 组件 | 管理方式 | 端口 | 配置文件 |
+|------|---------|------|---------|
+| 后端 `tot-api` | PM2 | `3000` | `ecosystem.config.js` |
+| 前端静态文件 | `/opt/homebrew/var/www/tot/`（nginx serve） | — | 构建后由 `deploy.sh` 同步 |
+| nginx | launchd（`com.nginx.tot`） | `80` | `/opt/homebrew/etc/nginx/servers/gctrainingdashboard.conf` |
+
 ### 部署（更新唯一共享实例）
 
-PR 合并进 `dev_joint` 后，由管理员在 **Mac Studio** 的仓库根目录执行（拉代码、安装依赖、`pm2 reload` 等以 `scripts/deploy.sh` 为准）：
+PR 合并进 `dev_joint` 后，由管理员在 **Mac Studio** 上执行一条命令即可：
 
 ```bash
 cd "$REPO_ROOT"
 bash scripts/deploy.sh
 ```
 
+`deploy.sh` 共 6 步，任何一步失败会立即停止：
+
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| 1/6 | `git pull origin dev_joint` | 拉取最新代码 |
+| 2/6 | `npm install`（后端） | 更新后端依赖 |
+| 3/6 | `pnpm install && pnpm run build`（前端） | 安装前端依赖 + 打包到 `dist/` |
+| 4/6 | `sudo rsync` | 同步 `dist/` → `/opt/homebrew/var/www/tot/`（nginx web root） |
+| 5/6 | `pm2 reload` | 零停机重载后端 |
+| 6/6 | `sudo nginx -s reload` | 重载 nginx 读取最新文件 |
+
+**仅更新后端**（前端未改时，跳过构建以节省时间）：
+
+```bash
+cd "$REPO_ROOT"
+git pull origin dev_joint
+cd TOT_backend/server && npm install
+pm2 reload ecosystem.config.js --env development
+```
+
+**仅更新前端**：
+
+```bash
+cd "$REPO_ROOT"
+git pull origin dev_joint
+cd TOT_frontend && pnpm install && pnpm run build
+sudo nginx -s reload
+```
+
 个人日常无需登录 Mac Studio 即可开发；合并后由上述流程更新集成环境。
+
+### 环境变量配置
+
+后端启动需要以下环境变量。项目加载顺序：先仓库根目录 `.env`，再 `TOT_backend/.env`（仅补全未定义键）。
+
+**本地开发最小配置**（在 `TOT_backend/.env` 中设置）：
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `OPENAI_API_KEY` | LLM API Key（DeepSeek 兼容 OpenAI 格式） | `sk-...` |
+| `OPENAI_BASE_URL` | LLM API 地址 | `https://api.deepseek.com/v1` |
+| `MODEL_NAME` | 默认模型 | `deepseek-chat` |
+| `REDIS_URL` | Redis 连接串（chat session 持久化；可选，缺失时降级为内存存储） | `redis://127.0.0.1:6379` |
+
+**可选变量**：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `DEBUG_AI_LOG` | 记录 AI 输入输出到 `server/logs/ai_debug.log` | `false` |
+| `LANGFUSE_ENABLED` | 开启 Langfuse LLM 可观测性追踪 | `false` |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse 公钥 | — |
+| `LANGFUSE_SECRET_KEY` | Langfuse 密钥 | — |
+| `LANGFUSE_BASEURL` | Langfuse 服务地址 | `https://cloud.langfuse.com` |
+| `PORT` | 后端监听端口 | `3000` |
+
+参考模板：`TOT_backend/.env.example`。
+
+### Agent 架构概览（后端开发者必读）
+
+后端包含基于 LangGraph 的 AI Agent 系统，用于 Executive Chat 和 Dashboard 智能分析。关键目录与文件：
+
+```
+TOT_backend/server/
+├── agent/graph/           # LangGraph agent 图定义
+│   ├── graph.js           # 图构建入口（节点 + 边 + 路由）
+│   ├── nodes.js           # Agent 节点实现（LLM 调用、工具执行等）
+│   ├── state.js           # Agent 状态注解（Annotation）
+│   ├── intents.js         # 用户意图定义与匹配
+│   ├── decisionRules.js   # 集中化的决策规则
+│   ├── routingPolicy.js   # 图内路由策略
+│   ├── toolRetriever.js   # 工具检索与选择
+│   ├── toolCallUtils.js   # 工具调用辅助函数
+│   ├── renderers.js       # 前端渲染器（图表/卡片）
+│   ├── dsmlFilter.js      # DSML 响应过滤
+│   ├── sanitize.js        # 输出清理/脱敏
+│   └── hitlPayloadBuilder.js  # Human-in-the-loop 负载构建
+├── services/
+│   ├── chatService.js          # Executive Chat 核心服务
+│   ├── chatSessionStateService.js  # Chat session 状态管理
+│   ├── chatAgentRunner.js      # Agent 运行器
+│   ├── chatIntentService.js    # 意图识别服务
+│   ├── chatMemoryService.js    # 对话记忆管理
+│   ├── chatToolsService.js     # 工具调用编排
+│   ├── chatAnswerService.js    # 最终回答生成
+│   ├── dashboardAgentService.js    # Dashboard Agent 服务
+│   └── dashboardQueryCore.js       # Dashboard 查询核心
+└── routes/
+    ├── chat.js             # /api/v1/chat 路由
+    └── dashboardAgent.js   # Dashboard Agent 路由
+```
+
+**核心概念**：
+
+- **Agent Graph**（LangGraph）：有状态的多节点图，每个节点代表一个处理步骤（意图识别 → 工具检索 → 工具执行 → 回答生成），节点间通过路由策略流转。
+- **Chat Session**：每次对话由 Redis 持久化 session 状态，支持多轮上下文和 Human-in-the-loop 中断。
+- **Tool Calling**：Agent 可调用内部工具（如 `searchEntities` 查询门店/员工数据）和外部 API。
+- **Langfuse Tracing**：可选开启，追踪每次 LLM 调用的输入/输出、延迟和 token 消耗。
+
+首次接触建议从 `agent/graph/graph.js` 和 `services/chatService.js` 开始阅读。
 
 ---
 
@@ -452,9 +589,9 @@ tailscale funnel status
 
 - 该模式使用构建后的静态产物，减少开发模式下 HMR/开发客户端带来的移动端不稳定因素。
 - 将 `tailscale funnel status` 输出的公网地址发给演示设备，建议直接访问：
-  - `https://skylermac-studio.tail660e40.ts.net/hq`
-  - `https://skylermac-studio.tail660e40.ts.net/employee`
-  - `https://skylermac-studio.tail660e40.ts.net/executive`
+  - `https://<机器名>.<tailnet>.ts.net/hq`
+  - `https://<机器名>.<tailnet>.ts.net/employee`
+  - `https://<机器名>.<tailnet>.ts.net/executive`
 - 演示结束执行 `tailscale funnel reset` 关闭公网入口。
 
 **关闭 Funnel**（演示结束后建议执行，减少暴露面）：
@@ -483,22 +620,22 @@ tailscale funnel status
 
 ```
 dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
-  ├── feature/be-<描述>   ← 后端功能分支
-  ├── feature/fe-<描述>   ← 前端功能分支
+  ├── Echat2.0            ← 大型功能分支（例：Executive Chat 2.0）
+  ├── feature/<主题>      ← 中小型功能分支
   └── fix/<描述>          ← 缺陷修复分支
 ```
 
 **命名约定：**
 
 
-| 类型     | 格式                | 示例                       |
-| ------ | ----------------- | ------------------------ |
-| 后端功能   | `feature/be-<描述>` | `feature/be-ws-nudge`    |
-| 前端功能   | `feature/fe-<描述>` | `feature/fe-employee-ws` |
-| Bug 修复 | `fix/<描述>`        | `fix/ws-reconnect`       |
+| 类型 | 格式 | 示例 |
+|------|------|------|
+| 大型功能（跨多周） | `<FeatureName><Version>` | `Echat2.0`、`Echat-3.0` |
+| 中小功能 | `feature/<描述>` | `feature/EChat`、`feature/MyPal` |
+| Bug 修复 | `fix/<描述>` | `fix/ws-reconnect` |
 
 
-也可使用 `feature/<主题>`（如 `feature/Echat`），仍建议 **PR 目标分支选 `dev_joint`**。
+**PR 目标分支始终选 `dev_joint`**。大型功能分支（如 `Echat2.0`）在完成后通过 PR 合并回 `dev_joint`，再由 `deploy.sh` 部署到 Mac Studio。
 
 ---
 
@@ -507,17 +644,33 @@ dev_joint                 ← 稳定集成分支（Mac Studio PM2 部署源）
 ```bash
 # === 在 Mac Studio 上执行 ===
 
+# 一键部署（完整更新）
+bash "$REPO_ROOT/scripts/deploy.sh"
+
+# 仅后端更新
+cd "$REPO_ROOT" && git pull origin dev_joint
+cd TOT_backend/server && npm install
+pm2 reload ecosystem.config.js --env development
+
+# 仅前端更新
+cd "$REPO_ROOT/TOT_frontend" && git pull origin dev_joint
+pnpm install && pnpm run build
+sudo nginx -s reload
+
 # 查看后端运行状态
 pm2 status
 
-# 查看实时日志
+# 查看后端实时日志
 pm2 logs tot-api
 
 # 重启后端（不停机）
 pm2 reload tot-api
 
-# 部署最新代码（在 REPO_ROOT 下或替换路径）
-bash "$REPO_ROOT/scripts/deploy.sh"
+# nginx 操作
+sudo nginx -s reload          # 重载配置（不停机）
+sudo nginx -t                 # 检查配置语法
+tail /tmp/nginx-tot-gc.access.log   # 查看访问日志
+tail /tmp/nginx-tot-gc.error.log    # 查看错误日志
 
 # 获取 Mac Studio 的 Tailscale IP
 tailscale ip -4
@@ -530,15 +683,21 @@ cat ~/.ssh/authorized_keys
 
 # 本机跑后端（日常调试；路径换成你的克隆目录）
 cd /path/to/MVP/TOT_backend/server
+cp .env.example .env        # 首次：从模板创建环境变量文件，填入 LLM API Key 等必填项
 npm install
 npm run dev
-# 首次需要演示数据：node db/seed.js
+# 首次需要演示数据：npm run seed
 
 # SSH 连接 Mac Studio（可选）
 ssh mac-studio
 
 # 测试后端是否可访问
 curl http://100.65.95.128:3000/api/v1/auth/login \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"username":"central","password":"Train2026!"}'
+
+# 测试本机后端
+curl http://127.0.0.1:3000/api/v1/auth/login \
   -X POST -H "Content-Type: application/json" \
   -d '{"username":"central","password":"Train2026!"}'
 ```

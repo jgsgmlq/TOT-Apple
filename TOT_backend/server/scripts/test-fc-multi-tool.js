@@ -41,7 +41,7 @@ chatSessionStateService.addRecord = (sessionId, record /*, scope */) => {
   cacheWrites.push({ sessionId, record });
 };
 
-const { fc_ExecuteTool, fc_MergeToolResults } = require('../agent/graph/nodes');
+const { fc_ExecuteTool, fc_MergeToolResults } = require('../agent/graph/nodes/fcExecute');
 
 let passed = 0;
 let failed = 0;

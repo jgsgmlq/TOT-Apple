@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'getRegionDetailData',
-      description: '按区域下钻查询培训进度，包括区域汇总与门店表现排行',
+      description: '按区域/大区下钻查询培训进度，包括区域汇总与各门店表现排行、明细、详情。支持华东/华南/华北/西南/东北等大区。用户问"华东区怎么样""各门店完成率"时使用。',
       parameters: {
         type: 'object',
         required: ['region'],

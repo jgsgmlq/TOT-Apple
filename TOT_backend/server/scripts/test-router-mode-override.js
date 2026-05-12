@@ -1,4 +1,5 @@
-const { contextAnalyzerRouter } = require('../agent/graph/nodes');
+const { contextAnalyzerRouter } = require('../agent/graph/nodes/routerNode');
+const modelFactory = require('../agent/graph/modelFactory');
 
 async function test() {
   const mockState = {
@@ -7,10 +8,9 @@ async function test() {
   };
 
   // Mock getRouterModel to simulate the bad LLM response
-  const nodesModule = require('../agent/graph/nodes');
-  const oldGetRouterModel = nodesModule.getRouterModel;
+  const oldGetRouterModel = modelFactory.getRouterModel;
   
-  nodesModule.getRouterModel = () => ({
+  modelFactory.getRouterModel = () => ({
     invoke: async () => ({
       content: JSON.stringify({
         mode: "chat_only",
@@ -26,6 +26,6 @@ async function test() {
   const res = await contextAnalyzerRouter(mockState);
   console.log("Final mode:", res.mode); // Should be "tool_action"
   
-  nodesModule.getRouterModel = oldGetRouterModel;
+  modelFactory.getRouterModel = oldGetRouterModel;
 }
 test();

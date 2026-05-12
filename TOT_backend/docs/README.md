@@ -1,7 +1,7 @@
 # MVP 项目文档中心
 
-**最后更新:** 2026-04-30  
-**文档版本:** 1.3  
+**最后更新:** 2026-05-11  
+**文档版本:** 1.4  
 **适用于:** AI、开发者、测试、产品
 
 **产品需求口径：** 以 [`product/PRODUCT_REQUIREMENTS.md`](product/PRODUCT_REQUIREMENTS.md) 为准（版本与日期以该文件头部为准）。
@@ -33,6 +33,8 @@
 6. [`backend/02-SERVICES.md`](backend/02-SERVICES.md) — 服务层与实现对照  
 7. [`tests/QUICK_START.md`](tests/QUICK_START.md) — 启动与验证  
 8. [`specs/11-EXECUTIVE-CHAT-REQUEST-FLOW.md`](specs/11-EXECUTIVE-CHAT-REQUEST-FLOW.md) — Executive Chat 单条消息服务端流程（路由 → Agent → 工具 → 落库，与代码对照）  
+9. [`plans/2026-05-11-agent-refactor-plan.md`](plans/2026-05-11-agent-refactor-plan.md) — Agent 改进计划 (v3, P0 已落地)  
+10. [`internal/EXECUTIVE-CHAT-CODE-MAP.md`](internal/EXECUTIVE-CHAT-CODE-MAP.md) — 代码与状态图对照（含 eval 使用说明）  
 
 ---
 
@@ -63,6 +65,8 @@
 - Executive Chat 代码导读 / 状态图对照：[`internal/EXECUTIVE-CHAT-CODE-MAP.md`](internal/EXECUTIVE-CHAT-CODE-MAP.md)  
 - Executive Chat To-Be 状态图逐状态修复计划：[`plans/2026-04-30-executive-chat-to-be-state-audit-fix-plan.md`](plans/2026-04-30-executive-chat-to-be-state-audit-fix-plan.md)  
 - Executive Chat Post-Audit 专项修复计划：[`plans/2026-04-30-executive-chat-post-audit-fix-plan.md`](plans/2026-04-30-executive-chat-post-audit-fix-plan.md)  
+- Executive Chat Agent 改进计划 (P0/P1/P2)：[`plans/2026-05-11-agent-refactor-plan.md`](plans/2026-05-11-agent-refactor-plan.md)  
+- Executive Chat Eval 评估体系：[`../server/agent/eval/`](../server/agent/eval/) — 30 条单元用例 + baseline/compare 脚本  
 - 归档：[`archive/index.md`](archive/index.md)
 
 ---

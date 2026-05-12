@@ -227,7 +227,7 @@ function buildExampleQuestions() {
 }
 
 // ─── createSession ────────────────────────────────────────────────────────────
-function createSession(userId, reqUser) {
+function createSession(userId, reqUser, ipAddress) {
   const user = db.get('SELECT id, executive_regions, executive_rtm FROM users WHERE id = ?', [userId]);
   if (!user) throw Object.assign(new Error('User not found'), { status: 404, code: 'CHAT_002' });
 
@@ -238,9 +238,9 @@ function createSession(userId, reqUser) {
   const now = formatNowSqliteLocal();
 
   db.run(
-    `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, created_at, last_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, userId, regionScope.type, regionScope.regions ? JSON.stringify(regionScope.regions) : null, regionScope.rtm || null, now, now]
+    `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, ip_address, created_at, last_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [sessionId, userId, regionScope.type, regionScope.regions ? JSON.stringify(regionScope.regions) : null, regionScope.rtm || null, ipAddress || null, now, now]
   );
 
   return { sessionId, contextId: sessionId, exampleQuestions: buildExampleQuestions() };
@@ -318,18 +318,71 @@ async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {
   }
 }
 
-/** 辅助：从数据库加载并格式化历史记录，传给 Agent 引擎 */
+// ─── Shared SSE context factory ──────────────────────────────────────────────────
+// Extracts the boilerplate (writeSseHeaders / createSseSender / keepalive /
+// AbortController / req.on('close') / counters) shared by sendMessageStreamLangGraph,
+// resumeMessageStreamLangGraph, and regenerateLastAssistantStreamLangGraph.
+// Returns a context object; callers build their own sseEmitter and error handling.
+
+function createSseContext(req, res, trace, extra = {}) {
+  writeSseHeaders(res);
+  const send = createSseSender(res);
+  const stopKeepalive = startSseKeepalive(res);
+  const abortController = new AbortController();
+
+  const sseSpan = trace.span({
+    name: 'SSE_Stream',
+    input: extra.spanInput || { sessionId: extra.sessionId },
+  });
+
+  const counters = { deltaCount: 0, deltaBytes: 0, reasoningCount: 0, toolStartCount: 0 };
+  const clientAborted = { value: false };
+
+  req.on('close', () => {
+    if (res.headersSent) {
+      clientAborted.value = true;
+      abortController.abort();
+    }
+  });
+
+  const wrappedSend = (event, payload) => send(event, payload);
+
+  return { send, wrappedSend, abortController, stopKeepalive, sseSpan, counters, clientAborted };
+}
+
+/**
+ * Shared abort-error handler. Returns true if the error was a client abort and has
+ * been fully handled (span closed, trace updated). Returns false for real errors
+ * that the caller still needs to handle.
+ */
+function handleSseClientAbort(err, ctx, { trace, sessionId, loggerTag }) {
+  const abortDiagnostics = buildStreamAbortDiagnostics(err, null, null, ctx.abortController.signal, ctx.clientAborted.value);
+  if (isLikelyClientAbortError(err, ctx.abortController.signal, ctx.clientAborted.value)) {
+    logger.info(loggerTag, { sessionId, ...abortDiagnostics });
+    endSpan(ctx.sseSpan, {
+      output: null,
+      level: 'WARNING',
+      metadata: { status: 'aborted', ...ctx.counters },
+    });
+    if (trace && trace !== NOOP_TRACE) {
+      trace.update({ output: null, metadata: { status: 'aborted', reason: 'client_abort' } });
+    }
+    return true;
+  }
+  return false;
+}
 function loadFormattedHistory(sessionId, trace = null) {
   const loadSpan = trace && typeof trace.span === 'function'
     ? trace.span({ name: 'Load_History', input: { sessionId } })
     : null;
   const t0 = Date.now();
   try {
+    const limit = Number(process.env.CHAT_HISTORY_MAX_ROWS || 100);
     const rows = db.all(
-      `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages 
-       WHERE session_id = ? 
-       ORDER BY created_at ASC, rowid ASC LIMIT 10`,
-      [sessionId]
+      `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages
+       WHERE session_id = ?
+       ORDER BY created_at ASC, rowid ASC LIMIT ?`,
+      [sessionId, limit]
     );
     const formatted = rows.map((r) => ({
       role: r.role,
@@ -520,56 +573,39 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     entryKind: 'resumeMessageStreamLangGraph',
   });
 
-  writeSseHeaders(res);
-  const send = createSseSender(res);
-  startSseKeepalive(res);
-  const abortController = new AbortController();
-
-  const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, resumePayload } });
-  let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
+  const sseCtx = createSseContext(req, res, trace, { sessionId, spanInput: { sessionId, resumePayload } });
   const startMs = Date.now();
-  
-  const wrappedSend = (event, payload) => send(event, payload);
-  let sseClientAborted = false;
-  req.on('close', () => {
-    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
-    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
-    if (res.headersSent) {
-      sseClientAborted = true;
-      abortController.abort();
-    }
-  });
 
   const sseEmitter = {
     handleLLMNewToken: (token, info = {}) => {
       const phase = info.isReasoning ? 'reasoning' : 'content';
-      if (phase === 'reasoning') sseReasoningCount += 1;
+      if (phase === 'reasoning') sseCtx.counters.reasoningCount += 1;
       if (typeof token === 'string' && token) {
-        sseDeltaCount += 1;
-        sseDeltaBytes += token.length;
+        sseCtx.counters.deltaCount += 1;
+        sseCtx.counters.deltaBytes += token.length;
       }
-      wrappedSend('delta', { text: token, phase });
+      sseCtx.wrappedSend('delta', { text: token, phase });
     },
     handleToolStart: (toolInfo) => {
-      sseToolStartCount += 1;
-      wrappedSend('delta', { text: toolInfo?.name || '', phase: 'tool_start', toolName: toolInfo?.name });
+      sseCtx.counters.toolStartCount += 1;
+      sseCtx.wrappedSend('delta', { text: toolInfo?.name || '', phase: 'tool_start', toolName: toolInfo?.name });
     },
     handleToolEnd: (result) => {
-      wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+      sseCtx.wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
     },
     handleError: (message) => {
-      wrappedSend('error', { message, code: 'CHAT_500' });
+      sseCtx.wrappedSend('error', { message, code: 'CHAT_500' });
     }
   };
 
   try {
     const sqliteDb = getDb();
     const checkpointer = new SqliteSaver(sqliteDb);
-    
-    const app = buildGraph().compile({ checkpointer }); 
+
+    const app = buildGraph().compile({ checkpointer });
 
     const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
-    
+
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
        trace.update({
          name: `ExecutiveChat-LangGraph-[${currentDeveloper}]`,
@@ -581,16 +617,16 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
       configurable: {
         thread_id: threadId,
         sseEmitter,
-        traceId: trace ? trace.id : undefined 
+        traceId: trace ? trace.id : undefined
       },
       recursionLimit: 60,
-      signal: abortController.signal
+      signal: sseCtx.abortController.signal
     };
 
     // T1: 这里不再是传递 inputState 重新开始，而是使用 Command/Command 形式向状态机发送 resume 值
     // 传递 null 作为 inputState 代表我们继续图里已有的执行
     const finalState = await app.invoke(
-      new (require("@langchain/langgraph").Command)({ resume: resumePayload }), 
+      new (require("@langchain/langgraph").Command)({ resume: resumePayload }),
       thread
     );
 
@@ -598,12 +634,12 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     if (interruptPayload) {
       const responseTime = Date.now() - startMs;
       const timestamp = formatNowSqliteLocal();
-      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
-      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
+      sseCtx.wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+      sseCtx.wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
       res.end();
       return { interrupted: true, interruptPayload };
     }
-    
+
     const finalMarkdown = finalState.reply_markdown || finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content;
     const assistMsgId = finalState.finalMessageId || nanoid();
 
@@ -635,37 +671,30 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     const timestamp = formatNowSqliteLocal();
     const donePayload = buildSseFinalPayload({ ...result, messageId: assistMsgId }, sessionId, req.requestId, responseTime, timestamp);
 
-    endSpan(sseSpan, { output: 'success' });
-    
-    wrappedSend('done', donePayload);
+    endSpan(sseCtx.sseSpan, { output: 'success' });
+
+    sseCtx.wrappedSend('done', donePayload);
     res.end();
     return result;
 
   } catch (err) {
-    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, abortController.signal, sseClientAborted);
-    if (isLikelyClientAbortError(err, abortController.signal, sseClientAborted)) {
-      logger.info('chat_stream_langgraph_aborted', { sessionId, ...abortDiagnostics });
-      endSpan(sseSpan, {
-        output: null,
-        level: 'WARNING',
-        metadata: { status: 'aborted', deltaCount: sseDeltaCount, deltaBytes: sseDeltaBytes, reasoningCount: sseReasoningCount }
-      });
-      if (trace && trace !== NOOP_TRACE) trace.update({ output: null, metadata: { status: 'aborted', reason: 'client_abort' } });
+    if (handleSseClientAbort(err, sseCtx, { trace, sessionId, loggerTag: 'chat_stream_langgraph_aborted' })) {
       return;
     }
-    
+
+    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, sseCtx.abortController.signal, sseCtx.clientAborted.value);
     logger.error('chat_langgraph_resume_error', {
       sessionId,
       error: err.stack,
       ...abortDiagnostics,
     });
-    endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
+    endSpan(sseCtx.sseSpan, { level: 'ERROR', statusMessage: err.message });
     if (res.headersSent) {
-      try { wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
+      try { sseCtx.wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
       try { res.end(); } catch (_) {}
       err._sseResponseSent = true;
     } else {
-      wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+      sseCtx.wrappedSend('error', buildSseErrorPayload('Agent LangGraph 唤醒出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
     }
     throw err;
   }
@@ -708,53 +737,36 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
   }
 
-  writeSseHeaders(res);
-  const send = createSseSender(res);
-  const stopKeepalive = startSseKeepalive(res);
-  const abortController = new AbortController();
-
-  const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId } });
-  let sseDeltaCount = 0, sseDeltaBytes = 0, sseReasoningCount = 0, sseToolStartCount = 0;
+  const sseCtx = createSseContext(req, res, trace, { sessionId });
   const startMs = Date.now();
-  
-  const wrappedSend = (event, payload) => send(event, payload);
-  let sseClientAborted = false;
-  req.on('close', () => {
-    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
-    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
-    if (res.headersSent) {
-      sseClientAborted = true;
-      abortController.abort();
-    }
-  });
 
   const sseEmitter = {
     handleLLMNewToken: (token, info = {}) => {
       const phase = info.isReasoning ? 'reasoning' : 'content';
-      if (phase === 'reasoning') sseReasoningCount += 1;
+      if (phase === 'reasoning') sseCtx.counters.reasoningCount += 1;
       if (typeof token === 'string' && token) {
-        sseDeltaCount += 1;
-        sseDeltaBytes += token.length;
+        sseCtx.counters.deltaCount += 1;
+        sseCtx.counters.deltaBytes += token.length;
       }
-      wrappedSend('delta', { text: token, phase });
+      sseCtx.wrappedSend('delta', { text: token, phase });
     },
     handleToolStart: (toolInfo) => {
-      sseToolStartCount += 1;
-      wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
+      sseCtx.counters.toolStartCount += 1;
+      sseCtx.wrappedSend('delta', { text: '', phase: 'tool_start', toolName: toolInfo.name });
     },
     handleToolEnd: (result) => {
-      wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+      sseCtx.wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
     }
   };
 
   try {
     const sqliteDb = getDb();
     const checkpointer = new SqliteSaver(sqliteDb);
-    
-    const app = buildGraph().compile({ checkpointer }); 
+
+    const app = buildGraph().compile({ checkpointer });
 
     const currentDeveloper = process.env.USER || process.env.LOGNAME || "unknown_dev";
-    
+
     if (trace && typeof trace.update === 'function' && trace !== NOOP_TRACE) {
        trace.update({
          name: `ExecutiveChat-LangGraph-[${currentDeveloper}]`,
@@ -765,28 +777,38 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     const historyRows = loadFormattedHistory(sessionId, trace);
     const historyMessages = historyToLangChainMessages(historyRows);
 
+    const lastAssistant = db.get(
+      `SELECT intent_type, entities_json FROM chat_messages
+       WHERE session_id = ? AND role = 'assistant'
+       ORDER BY created_at DESC LIMIT 1`,
+      [sessionId]
+    );
+
+    let prevEntities = {};
+    if (lastAssistant?.entities_json) {
+      try { prevEntities = JSON.parse(lastAssistant.entities_json); } catch {}
+    }
+
     const inputState = {
       userMessage,
       sessionId,
       userId: session.user_id.toString(),
       regionScope,
-      messages: historyMessages
+      messages: historyMessages,
+      prevIntent: lastAssistant?.intent_type || '',
+      prevEntities
     };
 
     const threadId = `${sessionId}:${nanoid()}`;
     const thread = {
       configurable: {
-        // 每次请求一个独立 thread_id，避免复用上一轮 checkpoint 把 fc_super_step_count
-        // 等中间状态带进来导致 fc_CheckSteps 直接判超限、跳过 fc_LlmToolCallStep。
-        // 历史对话上下文已经由 loadContext/loadFormattedHistory 从 chat_messages 表重建，
-        // 不依赖 LangGraph checkpoint 续接。resume 路径由前端回传 threadId 精确命中。
         thread_id: threadId,
         sseEmitter,
         // 将外层建好的 root TraceId 注入，好让子节点（Router 和 FC模型）生成的 Span 都挂在这棵树下
         traceId: trace ? trace.id : undefined
       },
       recursionLimit: 60,
-      signal: abortController.signal
+      signal: sseCtx.abortController.signal
     };
 
     const finalState = await app.invoke(inputState, thread);
@@ -795,12 +817,12 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     if (interruptPayload) {
       const responseTime = Date.now() - startMs;
       const timestamp = formatNowSqliteLocal();
-      wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
-      wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
+      sseCtx.wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+      sseCtx.wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
       res.end();
       return { interrupted: true, interruptPayload };
     }
-    
+
     const finalMarkdown = finalState.reply_markdown || finalState.finalResponse || finalState.messages[finalState.messages.length - 1]?.content;
     const assistMsgId = finalState.finalMessageId || nanoid();
 
@@ -826,14 +848,14 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       _safetyCheck: finalState.safety,
       markdownContent: finalMarkdown,
       replyContent: null,
-      _toolMeta: { toolCalls: [] } 
+      _toolMeta: { toolCalls: [] }
     };
 
     const responseTime = Date.now() - startMs;
 
-    endSpan(sseSpan, { output: 'success' });
-    
-    wrappedSend('done', {
+    endSpan(sseCtx.sseSpan, { output: 'success' });
+
+    sseCtx.wrappedSend('done', {
       code: 200,
       message: 'success',
       data: {
@@ -849,33 +871,11 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     return result;
 
   } catch (err) {
-    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, abortController.signal, sseClientAborted);
-    if (isLikelyClientAbortError(err, abortController.signal, sseClientAborted)) {
-      logger.info('chat_stream_langgraph_aborted', { sessionId, ...abortDiagnostics });
-      endSpan(sseSpan, {
-        output: null,
-        level: 'WARNING',
-        metadata: {
-          status: 'aborted',
-          deltaCount: sseDeltaCount,
-          deltaBytes: sseDeltaBytes,
-          reasoningCount: sseReasoningCount,
-        },
-      });
-      if (trace && trace !== NOOP_TRACE) {
-        trace.update({
-          output: null,
-          metadata: { status: 'aborted', reason: 'client_abort' },
-        });
-      }
+    if (handleSseClientAbort(err, sseCtx, { trace, sessionId, loggerTag: 'chat_stream_langgraph_aborted' })) {
       // Abort 路径也要 throw，否则上层（如 regenerate wrapper）的 catch 不会触发，
       // 导致 restoreOldMessage 跳过、旧消息永久丢失、用户再点重新生成会 400。
-      // 同时必须先发 event:error 再 res.end()——否则前端 fetch 会拿到空 body 200，
-      // streamSsePostJson 的 reader.read() 立刻 done，onError/onComplete 都没机会调，
-      // 上层 promise 永远 pending，UI 转圈卡死。发了 event:error 前端 onError 才能触发，
-      // handleRegenerate 的 catch 才能 toast 失败 + 解锁 isRegenerating。
       try {
-        wrappedSend('error', buildSseErrorPayload('请求被中断', 'CHAT_ABORT', 499, req.requestId));
+        sseCtx.wrappedSend('error', buildSseErrorPayload('请求被中断', 'CHAT_ABORT', 499, req.requestId));
       } catch (_) {}
       try { res.end(); } catch (_) {}
       err._sseResponseSent = true;
@@ -883,171 +883,23 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       throw err;
     }
 
+    const abortDiagnostics = buildStreamAbortDiagnostics(err, req, res, sseCtx.abortController.signal, sseCtx.clientAborted.value);
     logger.error('chat_langgraph_stream_error', {
       sessionId,
       error: err.stack,
       ...abortDiagnostics,
     });
-    endSpan(sseSpan, { level: 'ERROR', statusMessage: err.message });
-    // SSE 已发 headers 时，先把 SSE error 事件写出去并 res.end()，再 throw 让上层（如 regenerate
-    // wrapper 的 catch）做兜底（如 restoreOldMessage）。在 err 上打 _sseResponseSent 标记，
-    // 路由层 error middleware 看到这个标记就不要再 res.status(500).json(...) 了，
-    // 否则会触发 ERR_HTTP_HEADERS_SENT，前端拿到的就是 500 而非干净的 SSE error。
+    endSpan(sseCtx.sseSpan, { level: 'ERROR', statusMessage: err.message });
     if (res.headersSent) {
-      try { wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
+      try { sseCtx.wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId)); } catch (_) {}
       try { res.end(); } catch (_) {}
       err._sseResponseSent = true;
     } else {
-      wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
+      sseCtx.wrappedSend('error', buildSseErrorPayload('Agent LangGraph 执行出错', err.code || 'CHAT_500', err.status || 500, req.requestId));
     }
     throw err;
   }
 }
-async function sendMessageStream(sessionId, userMessage, userId, req, res) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
-  if (!session) {
-    res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
-    return;
-  }
-  if (Number(session.user_id) !== Number(userId)) {
-    res.status(403).json({ code: 403, message: '无权访问此会话', errorCode: 'CHAT_004', requestId: req.requestId });
-    return;
-  }
-
-  const regionScope = {
-    type: session.role_scope,
-    regions: parseSessionRegionsStored(session.regions, sessionId),
-    rtm: session.rtm || null,
-    userRoles: req?.user?.roles || ['executive']
-  };
-
-  if (!req?.user?.roles || !Array.isArray(req?.user?.roles) || req.user.roles.length === 0) {
-    logger.warn('auth_roles_missing', { userId, reqUrl: req.originalUrl, usingFallback: 'executive' });
-  }
-
-  const trace = createAgentTrace({
-    sessionId,
-    userId: session.user_id,
-    userMessage,
-    scopeType: regionScope.type,
-    agentMode: AGENT_MODE,
-    entryKind: 'sendMessageStream',
-  });
-
-  await handleIncomingMessage(sessionId, userMessage, userId, req.body, trace);
-  const history = loadFormattedHistory(sessionId, trace);
-
-  writeSseHeaders(res);
-  const send = createSseSender(res);
-  const abortController = new AbortController();
-
-  // §4 SSE_Stream span：覆盖整条 SSE 流存活期，metadata 聚合 delta / phase 统计。
-  const sseSpan = trace.span({
-    name: 'SSE_Stream',
-    input: { sessionId },
-  });
-  const sseT0 = Date.now();
-  let sseDeltaCount = 0;
-  let sseDeltaBytes = 0;
-  let sseReasoningCount = 0;
-  let sseToolStartCount = 0;
-  let sseClientAborted = false;
-
-  // 联动客户端断开
-  req.on('close', () => {
-    // 仅当 SSE 流已建立（headers 已发送）时才视为用户主动中止。
-    // 发送前就 close 通常是浏览器 DOM 重绘 / 连接复用导致，不是用户中断。
-    if (res.headersSent) {
-      sseClientAborted = true;
-      abortController.abort();
-    }
-  });
-
-  const wrappedSend = (event, payload) => send(event, payload);
-
-  const startMs = Date.now();
-  let result;
-  try {
-    // Emergency fix: keep production behavior on legacy chatAgentRunner.
-    result = await chatAgentRunner.run(userMessage, history, regionScope, {
-      sessionId,
-      userId: session.user_id,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          wrappedSend('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-            toolName:
-              phase === 'tool_start' || phase === 'tool_end'
-                ? meta?.text || undefined
-                : undefined,
-          });
-        },
-      },
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      logger.info('chat_stream_aborted', { sessionId });
-      endSpan(sseSpan, {
-        output: null,
-        level: 'WARNING',
-        metadata: {
-          status: 'aborted',
-          clientAborted: sseClientAborted,
-          deltaCount: sseDeltaCount,
-          deltaBytes: sseDeltaBytes,
-          reasoningCount: sseReasoningCount,
-          toolStartCount: sseToolStartCount,
-          durationMs: Date.now() - sseT0,
-        },
-      });
-      trace.update({
-        output: null,
-        metadata: { status: 'aborted', reason: 'client_abort' },
-      });
-      return;
-    }
-    endSpan(sseSpan, {
-      output: null,
-      level: 'ERROR',
-      statusMessage: err.message,
-      metadata: {
-        status: 'error',
-        deltaCount: sseDeltaCount,
-        deltaBytes: sseDeltaBytes,
-        durationMs: Date.now() - sseT0,
-      },
-    });
-    trace.update({
-      output: maskPII(err.message || String(err)),
-      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
-    });
-    send('error', { message: err.message || '处理失败', code: err.code || 'CHAT_500', status: err.status || 500 });
-    res.end();
-    return;
-  }
-
-  const responseTime = Date.now() - startMs;
-  const now = formatNowSqliteLocal();
-  const assistMsgId = nanoid();
-  const finalContent = storageContentFromAgentResult(result);
-  const toolCallsStr = result._toolMeta?.toolCalls ? JSON.stringify(result._toolMeta.toolCalls) : null;
-
-  logger.info('chat_turn', {
-    sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
-    toolName: result._toolMeta?.toolName, msgId: assistMsgId, stream: true,  });
-}
-
 // ─── getHistory ───────────────────────────────────────────────────────────────
 function getHistory(sessionId, pageNum, pageSize) {
   const offset = (pageNum - 1) * pageSize;
@@ -1237,393 +1089,7 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
   }
 }
 
-// ─── regenerateLastAssistantStream ────────────────────────────────────────────
-async function regenerateLastAssistantStream(sessionId, messageId, userId, req, res) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
-  if (!session) {
-    res.status(404).json({ code: 404, message: 'Session not found', errorCode: 'CHAT_003' });
-    return;
-  }
-  if (Number(session.user_id) !== Number(userId)) {
-    res.status(403).json({ code: 403, message: 'Forbidden', errorCode: 'CHAT_004' });
-    return;
-  }
 
-  const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
-  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
-    res.status(400).json({ code: 400, message: 'Can only regenerate the last assistant message', errorCode: 'CHAT_008' });
-    return;
-  }
-
-  // §5.9：先建 trace，让 Load_History / SSE_Stream / Persist_Assistant_Message 都挂在同一棵树。
-  const trace = createAgentTrace({
-    sessionId,
-    userId,
-    userMessage: '<regenerate placeholder>',
-    scopeType: session.role_scope,
-    agentMode: AGENT_MODE,
-    entryKind: 'regenerateStream',
-    tags: ['regenerate'],
-  });
-
-  const chronological = loadFormattedHistory(sessionId, trace);
-  if (chronological.length < 2) {
-    trace.update({
-      output: null,
-      metadata: { status: 'bad_request', reason: 'not_enough_history' },
-    });
-    res.status(400).json({ code: 400, message: 'Not enough history to regenerate', errorCode: 'CHAT_008' });
-    return;
-  }
-
-  const lastTurn = chronological[chronological.length - 1];
-  const prevTurn = chronological[chronological.length - 2];
-  if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
-    trace.update({
-      output: null,
-      metadata: { status: 'bad_request', reason: 'unexpected_history_shape' },
-    });
-    res.status(400).json({ code: 400, message: 'Expected user message before assistant message', errorCode: 'CHAT_008' });
-    return;
-  }
-
-  const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
-  if (!userPrompt.trim()) {
-    trace.update({
-      output: null,
-      metadata: { status: 'bad_request', reason: 'empty_user_prompt' },
-    });
-    res.status(400).json({ code: 400, message: 'User message is empty', errorCode: 'CHAT_008' });
-    return;
-  }
-
-  // 实际 userMessage 已可知，回填给 trace（保留原 entryKind/tags）
-  trace.update({ input: maskPII(preview(userPrompt)) });
-
-  const prior = chronological.slice(0, -2);
-  const history = prior
-    .filter((m) => m.role !== 'tool')
-    .map((m) => ({
-      role: m.role,
-      content: m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
-    }));
-
-  if (!req?.user?.roles || !Array.isArray(req?.user?.roles) || req.user.roles.length === 0) {
-    logger.warn('auth_roles_missing', { userId, reqUrl: req?.originalUrl, usingFallback: 'executive' });
-  }
-
-  writeSseHeaders(res);
-  const send = createSseSender(res);
-  const abortController = new AbortController();
-
-  const sseSpan = trace.span({ name: 'SSE_Stream', input: { sessionId, kind: 'regenerate' } });
-  const sseT0 = Date.now();
-  let sseDeltaCount = 0;
-  let sseDeltaBytes = 0;
-  let sseReasoningCount = 0;
-  let sseToolStartCount = 0;
-  let sseClientAborted = false;
-
-  req.on('close', () => {
-    logger.info('client_aborted_stream_regenerate', { sessionId });
-    sseClientAborted = true;
-    abortController.abort();
-  });
-
-  const startMs = Date.now();
-  let result;
-  try {
-    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
-      sessionId,
-      userId,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          send('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-            toolName:
-              phase === 'tool_start' || phase === 'tool_end'
-                ? meta?.text || undefined
-                : undefined,
-          });
-        },
-      },
-    });
-
-    const responseTime = Date.now() - startMs;
-    const now = formatNowSqliteLocal();
-    const newAssistMsgId = nanoid();
-    const finalContent = storageContentFromAgentResult(result);
-
-    const persistSpan = trace.span({
-      name: 'Persist_Assistant_Message',
-      input: { sessionId, newAssistMsgId, replacedMessageId: messageId, intentType: result._intentType ?? null },
-    });
-    const persistT0 = Date.now();
-    try {
-      db.transaction(() => {
-        db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
-        db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-        db.run(
-          'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-        );
-        db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-      });
-      endSpan(persistSpan, {
-        output: 'ok',
-        metadata: {
-          replaced: true,
-          contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
-          durationMs: Date.now() - persistT0,
-        },
-      });
-    } catch (err) {
-      endSpan(persistSpan, {
-        output: null,
-        level: 'ERROR',
-        statusMessage: err.message,
-        metadata: { durationMs: Date.now() - persistT0 },
-      });
-      throw err;
-    }
-
-    logger.info('chat_turn_regenerate_stream', {
-      sessionId, userId, intentType: result._intentType, responseTimeMs: responseTime, msgId: newAssistMsgId,
-    });
-
-    endSpan(sseSpan, {
-      output: 'done',
-      metadata: {
-        status: 'ok',
-        deltaCount: sseDeltaCount,
-        deltaBytes: sseDeltaBytes,
-        reasoningCount: sseReasoningCount,
-        toolStartCount: sseToolStartCount,
-        durationMs: Date.now() - sseT0,
-        msgId: newAssistMsgId,
-      },
-    });
-    trace.update({
-      output: maskPII(preview(finalContent)),
-      metadata: {
-        status: 'ok',
-        intentType: result._intentType || null,
-        intentResolvedBy: result._intentResolvedBy || null,
-        toolName: result._toolMeta?.toolName || null,
-        iterations: result._toolMeta?.iterations || null,
-        responseTimeMs: responseTime,
-        msgId: newAssistMsgId,
-        stream: true,
-      },
-    });
-
-    const timestamp = formatNowSqliteLocal();
-    const donePayload = buildSseFinalPayload({ ...result, messageId: newAssistMsgId }, sessionId, req.requestId, responseTime, timestamp);
-
-    send('done', donePayload);
-    res.end();
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      logger.info('chat_stream_regenerate_aborted', { sessionId });
-      endSpan(sseSpan, {
-        output: null,
-        level: 'WARNING',
-        metadata: {
-          status: 'aborted',
-          clientAborted: sseClientAborted,
-          deltaCount: sseDeltaCount,
-          deltaBytes: sseDeltaBytes,
-          durationMs: Date.now() - sseT0,
-        },
-      });
-      trace.update({
-        output: null,
-        metadata: { status: 'aborted', reason: 'client_abort' },
-      });
-      return;
-    }
-    endSpan(sseSpan, {
-      output: null,
-      level: 'ERROR',
-      statusMessage: err.message,
-      metadata: { status: 'error', durationMs: Date.now() - sseT0 },
-    });
-    trace.update({
-      output: maskPII(err.message || String(err)),
-      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
-    });
-    logger.error('regenerate_agent_stream_failed', { sessionId, error: err.message, stack: err.stack });
-    send('error', buildSseErrorPayload(err.message || '处理失败', err.code || 'CHAT_500', err.status || 500, req.requestId));
-    res.end();
-  }
-}
-
-// ─── regenerateLastAssistant ──────────────────────────────────────────────────
-async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
-  if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
-  if (Number(session.user_id) !== Number(userId)) {
-    throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
-  }
-
-  const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
-  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
-    throw Object.assign(new Error('Can only regenerate the last assistant message'), { status: 400, code: 'CHAT_008' });
-  }
-
-  const regionScope = { type: session.role_scope, regions: parseSessionRegionsStored(session.regions, sessionId), rtm: session.rtm || null, userRoles: req?.user?.roles || ['executive'] };
-  if (!req?.user?.roles || !Array.isArray(req?.user?.roles) || req.user.roles.length === 0) {
-    logger.warn('auth_roles_missing', { userId, reqUrl: req.originalUrl, usingFallback: 'executive' });
-  }
-
-  // 先建 trace 让 Load_History / Persist 挂上去
-  const trace = createAgentTrace({
-    sessionId,
-    userId,
-    userMessage: '<regenerate placeholder>',
-    scopeType: session.role_scope,
-    agentMode: AGENT_MODE,
-    entryKind: 'regenerate',
-    tags: ['regenerate'],
-  });
-
-  // 与 sendMessageStream 一致：全量 ASC 历史（含 tool 行），再截取待重算的一轮 user+assistant
-  const chronological = loadFormattedHistory(sessionId, trace);
-  if (chronological.length < 2) {
-    trace.update({ metadata: { status: 'bad_request', reason: 'not_enough_history' } });
-    throw Object.assign(new Error('Not enough history to regenerate'), { status: 400, code: 'CHAT_008' });
-  }
-  const lastTurn = chronological[chronological.length - 1];
-  const prevTurn = chronological[chronological.length - 2];
-  if (lastTurn.role !== 'assistant' || prevTurn.role !== 'user') {
-    trace.update({ metadata: { status: 'bad_request', reason: 'unexpected_history_shape' } });
-    throw Object.assign(new Error('Expected user message before assistant message'), { status: 400, code: 'CHAT_008' });
-  }
-  const userPrompt = typeof prevTurn.content === 'string' ? prevTurn.content : '';
-  if (!userPrompt.trim()) {
-    trace.update({ metadata: { status: 'bad_request', reason: 'empty_user_prompt' } });
-    throw Object.assign(new Error('User message is empty'), { status: 400, code: 'CHAT_008' });
-  }
-
-  trace.update({ input: maskPII(preview(userPrompt)) });
-
-  const prior = chronological.slice(0, -2);
-  // DeepSeek/OpenAI 要求 tool 角色消息携带 tool_call_id；runFunctionCalling 仅转发 content，会触发 400。
-  // 歧义澄清等场景下库内可能存在 tool 行，这里在重生成上下文中省略（保留 user/assistant 与压缩后的正文）。
-  const history = prior
-    .filter((m) => m.role !== 'tool')
-    .map((m) => ({
-      role: m.role,
-      content:
-        m.role === 'assistant' ? compressAssistantContent(m.content) : (m.content ?? ''),
-    }));
-
-  if (!req?.user?.roles || !Array.isArray(req?.user?.roles) || req.user.roles.length === 0) {
-    logger.warn('auth_roles_missing', { userId, reqUrl: req?.originalUrl, usingFallback: 'executive' });
-  }
-
-  const startMs = Date.now();
-  let result;
-  try {
-    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
-      sessionId,
-      userId,
-      trace,
-    });
-  } catch (err) {
-    trace.update({
-      output: maskPII(err.message || String(err)),
-      metadata: { status: 'error', errorCode: err.code || 'CHAT_500' },
-    });
-    logger.error('regenerate_agent_failed', {
-      sessionId,
-      messageId,
-      error: err.message,
-      stack: err.stack,
-    });
-    throw err;
-  }
-  const responseTime = Date.now() - startMs;
-  const now = formatNowSqliteLocal();
-  const newAssistMsgId = nanoid();
-  const finalContent = storageContentFromAgentResult(result);
-
-  logger.info('chat_turn', {
-    sessionId, userId, intentType: result._intentType, agentMode: AGENT_MODE, responseTimeMs: responseTime,
-    toolName: result._toolMeta?.toolName, msgId: newAssistMsgId,
-  });
-
-  // 替换最后一条 assistant：先删旧消息（及反馈），再插入新行，避免多次「重新生成」堆叠多条 assistant 导致 pop 错位与 500
-  const persistSpan = trace.span({
-    name: 'Persist_Assistant_Message',
-    input: { sessionId, newAssistMsgId, replacedMessageId: messageId, intentType: result._intentType ?? null },
-  });
-  const persistT0 = Date.now();
-  try {
-    db.transaction(() => {
-      db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
-      const del = db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-      if (!del.changes) {
-        throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
-      }
-      db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [newAssistMsgId, sessionId, 'assistant', finalContent, result._intentType ?? null, now]
-      );
-      db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
-    });
-    endSpan(persistSpan, {
-      output: 'ok',
-      metadata: {
-        replaced: true,
-        contentBytes: typeof finalContent === 'string' ? finalContent.length : 0,
-        durationMs: Date.now() - persistT0,
-      },
-    });
-  } catch (err) {
-    endSpan(persistSpan, {
-      output: null,
-      level: 'ERROR',
-      statusMessage: err.message,
-      metadata: { durationMs: Date.now() - persistT0 },
-    });
-    throw err;
-  }
-
-  trace.update({
-    output: maskPII(preview(finalContent)),
-    metadata: {
-      status: 'ok',
-      intentType: result._intentType || null,
-      intentResolvedBy: result._intentResolvedBy || null,
-      toolName: result._toolMeta?.toolName || null,
-      iterations: result._toolMeta?.iterations || null,
-      responseTimeMs: responseTime,
-      msgId: newAssistMsgId,
-    },
-  });
-
-  const payload = buildExecutiveMessageApiData(result);
-  return {
-    messageId: newAssistMsgId,
-    replyContent: payload.replyContent,
-    markdownContent: payload.markdownContent,
-    responseTime,
-    contextId: sessionId,
-    timestamp: now,
-  };
-}
 
 function deleteSessionById(sessionId) {
   const database = getDb();
@@ -1636,4 +1102,4 @@ function deleteSessionById(sessionId) {
   chatSessionStateService.clearSession(sessionId);
 }
 
-module.exports = { createSession, sendMessage, sendMessageStream, sendMessageStreamLangGraph, resumeMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistant, regenerateLastAssistantStream, regenerateLastAssistantStreamLangGraph };
+module.exports = { createSession, sendMessage, sendMessageStreamLangGraph, resumeMessageStreamLangGraph, getHistory, deleteSessionById, setMessageFeedback, regenerateLastAssistantStreamLangGraph };

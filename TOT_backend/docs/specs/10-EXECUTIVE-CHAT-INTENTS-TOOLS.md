@@ -1,11 +1,11 @@
 # Executive Chat 意图与工具实现说明（As-Is）
 
-**最后更新：** 2026-04-28  
+**最后更新：** 2026-05-11  
 **状态：** Current  
-**适用范围：** `TOT_backend/server/services/chatIntentService.js`、`chatAgentRunner.js`、`chatToolsService.js`、`server/chat_tools/*`
+**适用范围：** `TOT_backend/server/services/chatToolsService.js`、`server/chat_tools/*`、`server/agent/graph/nodes.js`（INTENT_TOOL_MAP）、`server/agent/graph/intents.js`（alias）
 
 > 约定：`09-EXECUTIVE-CHAT.md` 对意图与工具仅保留摘要列表；本文件作为意图/工具实现与扩展流程的详细说明正本。  
-> 当前运行链路以 `chatService -> chatAgentRunner` 为准；LangGraph 迁移内容见 `docs/plans/`，不在本文件混写目标态节点细节。
+> 当前运行链路以 LangGraph（`chatService.sendMessageStreamLangGraph` → `graph.js` → `nodes.js`）为准。Router 使用 `response_format: json_object` 强制输出有效 JSON，entity 提取已扩展为 5 维（metric/region/store/task/rtm）。
 
 ---
 
