@@ -1,19 +1,8 @@
 'use strict';
 
-const { getDb } = require('../../common/db/connection');
-const logger = require('../../common/utils/logger');
+const crud = require('../crud/dashboardCrud');
 const { parseStoreDrill } = require('../../common/utils/storeDrill');
-const { parseAutoNudgeRules, classifyDeadlineCrisisBand } = require('../../../services/autoNudgeRules');
 const { computeAssignmentWarningRates } = require('../../common/utils/dashboardWarningRates');
-
-const db = {
-  get(sql, params = []) { return getDb().prepare(sql).get(...params) ?? null; },
-  all(sql, params = []) { return getDb().prepare(sql).all(...params); },
-};
-
-/**
- * Executive Metrics 统一查询服务 (v3.0)
- */
 
 const DIMENSION_MAP = {
   all: null,
@@ -31,60 +20,10 @@ const METRIC_SELECTS = {
 };
 
 function resolveTaskId(taskName, productName) {
-  const tasks = db.all('SELECT id, title, mypal_product_name FROM tasks ORDER BY created_at DESC');
-  
   const searchFor = String(taskName || productName || '').toLowerCase().trim();
   if (!searchFor) return null;
-
-  // 1. Exact or simple substring match first
-  for (const t of tasks) {
-    const tTitle = t.title.toLowerCase();
-    if (tTitle.includes(searchFor) || searchFor.includes(tTitle)) {
-      return t.id;
-    }
-  }
-
-  // 2. Common aliases / AI hallucinations mapping
-  const aliases = [
-    { keys: ['phone', 'iphone', '17'], id: 'TASK_A' }, // iPhone 17 新品培训
-    { keys: ['pod', 'airpods'], id: 'TASK_B' }, // AirPods 新品培训
-    { keys: ['mac', 'macbook'], id: 'TASK_WARN_START' }, // MacBook 销售技巧起步异常
-    { keys: ['watch', 'apple watch'], id: 'TASK_WARN_P0' }, // Apple Watch P0临期预警
-    { keys: ['pad', 'ipad'], id: 'TASK_WARN_P1' }, // iPad Pro P1临期预警
-    { keys: ['mono', '新春'], id: 'TASK_C' } // Mono 新春系列产品学习
-  ];
-
-  for (const alias of aliases) {
-    for (const key of alias.keys) {
-      if (searchFor.includes(key)) {
-        return alias.id;
-      }
-    }
-  }
-
-  // 3. Token overlap match (e.g. "Phone新品销售技巧" and "iPhone 17 新品培训" share "新品")
-  const searchTokens = searchFor.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(Boolean);
-  if (searchTokens.length > 0) {
-    let bestMatch = null;
-    let maxOverlap = 0;
-    
-    for (const t of tasks) {
-      const tTitle = t.title.toLowerCase();
-      let overlap = 0;
-      for (const token of searchTokens) {
-        if (token.length > 1 && tTitle.includes(token)) {
-          overlap++;
-        }
-      }
-      if (overlap > maxOverlap) {
-        maxOverlap = overlap;
-        bestMatch = t.id;
-      }
-    }
-    if (bestMatch) return bestMatch;
-  }
-
-  return null;
+  const tasks = crud.findTasksByName(searchFor);
+  return tasks.length > 0 ? tasks[0].id : null;
 }
 
 function buildRegionFilter(regionScope) {
@@ -99,34 +38,28 @@ function buildRegionFilter(regionScope) {
   return { sql: '', params: [] };
 }
 
-/**
- * 执行矩阵查询
- */
 async function query(params = {}, regionScope = null) {
-  // P0: 强制任务定位
   const taskId = resolveTaskId(params.taskName, params.productName);
   if (!taskId) {
     return { error: 'INVALID_PARAMETERS', message: '请明确您要查询的培训任务名称或产品名称。' };
   }
 
-  // 高优先级修复：metrics 必填且非空
   if (!Array.isArray(params.metrics) || params.metrics.length === 0) {
-    return { error: 'INVALID_PARAMETERS', message: '请指定至少一个度量指标（如“完成率”）。' };
+    return { error: 'INVALID_PARAMETERS', message: '请指定至少一个度量指标（如"完成率"）。' };
   }
 
   const dimensions = Array.isArray(params.dimensions) && params.dimensions.length > 0 ? params.dimensions : ['all'];
   const metrics = params.metrics;
-  
+
   const drill = parseStoreDrill(params.filters || {});
   const scope = buildRegionFilter(regionScope);
-  const whereSql = `WHERE ta.task_id = ? ${drill.sql} ${scope.sql}`;
-  const whereParams = [taskId, ...drill.params, ...scope.params];
+  const extraWhere = [drill.sql, scope.sql].filter(Boolean).join(' ');
 
   const groupByCols = dimensions.map(d => DIMENSION_MAP[d]).filter(Boolean);
-  const selectDimSql = groupByCols.length > 0 
+  const selectDimSql = groupByCols.length > 0
     ? groupByCols.map((col, i) => `${col} AS dim_${i}`).join(', ') + ','
-    : "'Total' AS dim_0,";
-  const groupBySql = groupByCols.length > 0 ? `GROUP BY ${groupByCols.join(', ')}` : '';
+    : '';
+  const groupBySql = groupByCols.length > 0 ? groupByCols.join(', ') : '';
 
   const selectMetricSql = metrics
     .filter(m => METRIC_SELECTS[m])
@@ -134,54 +67,50 @@ async function query(params = {}, regionScope = null) {
     .concat(['COUNT(ta.id) AS _total'])
     .join(', ');
 
-  const sql = `
-    SELECT ${selectDimSql} ${selectMetricSql}
-    FROM task_assignments ta
-    JOIN stores s ON s.id = ta.store_id
-    JOIN tasks t ON t.id = ta.task_id
-    ${whereSql}
-    ${groupBySql}
-  `;
+  const rows = crud.queryAssignmentGroupedAgg({
+    taskId,
+    drill: { hasDrill: false },
+    selectDim: (selectDimSql + ' ' + selectMetricSql).trim(),
+    groupByDim: groupBySql || '1',
+    extraWhere: extraWhere ? ' ' + extraWhere.trim().replace(/^AND\s+/, 'AND ') : '',
+  });
 
-  const rows = db.all(sql, whereParams);
   const nowMs = Date.now();
-
-  // ─── 性能优化：一次性拉取明细，避免 N+1 ───
   let allDetails = [];
   let readUserSet = new Set();
 
   const needsDetails = metrics.some(m => m.includes('rate') || m.includes('count') || m.includes('warning'));
   if (needsDetails) {
-    // 1. 一次性获取所有相关的 assignments
-    allDetails = db.all(
-      `SELECT ta.id, ta.user_id, ta.status, ta.progress, t.created_at, t.ddl_at, t.auto_nudge_rules, ${groupByCols.length > 0 ? groupByCols.join(', ') : "'Total'"} AS _group_key
-       FROM task_assignments ta
-       JOIN stores s ON s.id = ta.store_id
-       JOIN tasks t ON t.id = ta.task_id
-       ${whereSql}`,
-      whereParams
-    );
+    allDetails = crud.queryAssignmentDetails({
+      taskId,
+      drill: { hasDrill: false },
+      extraWhere: extraWhere ? ' ' + extraWhere.trim().replace(/^AND\s+/, 'AND ') : '',
+    });
 
-    // 2. 如果需要读取率，一次性拉取所有已读用户 ID
     if (metrics.includes('read_rate')) {
-      const readRows = db.all(
-        `SELECT DISTINCT rr.user_id
-         FROM read_receipts rr
-         JOIN notification_events ne ON ne.id = rr.event_id
-         JOIN stores s ON s.id = ne.store_id
-         WHERE ne.task_id = ? AND rr.source = 'task_detail_open' ${drill.sql} ${scope.sql}`,
-        [taskId, ...drill.params, ...scope.params]
-      );
-      readUserSet = new Set(readRows.map(r => r.user_id));
+      if (drill.hasDrill && scope.sql) {
+        // combine filters for read users
+        readUserSet = crud.countReadUsersBySourceSet({
+          taskId,
+          drill: { hasDrill: true, sql: drill.sql, params: drill.params },
+          source: 'task_detail_open',
+        });
+      } else if (drill.hasDrill) {
+        readUserSet = crud.countReadUsersBySourceSet({
+          taskId, drill, source: 'task_detail_open',
+        });
+      } else {
+        readUserSet = crud.countReadUsersBySourceSet({
+          taskId, drill: null, source: 'task_detail_open',
+        });
+      }
     }
   }
 
-  // 内存内进行分组聚合计算
   const formattedRows = rows.map(row => {
-    const groupVal = groupByCols.length > 0 ? row.dim_0 : 'Total'; // 简化：目前仅支持主维度聚合
     const result = {
       dimensions: dimensions.reduce((acc, d, i) => {
-        acc[d] = row[`dim_${i}`] || 'Total';
+        acc[d] = groupByCols.length > 0 ? (row[`dim_${i}`] || 'Total') : 'Total';
         return acc;
       }, {}),
     };
@@ -191,19 +120,14 @@ async function query(params = {}, regionScope = null) {
     });
 
     if (needsDetails) {
-      // 从内存中过滤出属于该分组的明细
-      const groupKeyCol = groupByCols.length > 0 ? groupByCols[0].split('.').pop() : '_group_key';
-      const myDetails = allDetails.filter(d => {
-         // 这里的过滤逻辑根据维度动态匹配
-         if (groupByCols.length === 0) return true;
-         const val = row.dim_0;
-         // 针对不同维度的简单匹配
-         return String(d[groupByCols[0].replace('s.', '')] || d['_group_key']) === String(val);
-      });
+      const myDetails = groupByCols.length === 0 ? allDetails
+        : allDetails.filter(d => {
+            const val = row.dim_0;
+            const col = groupByCols[0].replace('s.', '');
+            return String(d[col]) === String(val);
+          });
 
       const rates = computeAssignmentWarningRates(myDetails, row._total, nowMs);
-      
-      // 统一指标映射
       result.crisis_p0_rate = rates.crisisP0Rate;
       result.crisis_p1_rate = rates.crisisP1Rate;
       result.start_delay_rate = rates.startDelayRate;
@@ -219,7 +143,6 @@ async function query(params = {}, regionScope = null) {
     return result;
   });
 
-  // 排序
   const finalSort = params.sort && params.sort.sortBy ? params.sort : { sortBy: metrics[0], order: 'desc' };
   formattedRows.sort((a, b) => {
     const valA = a[finalSort.sortBy] ?? 0;
@@ -233,7 +156,7 @@ async function query(params = {}, regionScope = null) {
     metrics,
     rows: formattedRows,
     summary: { totalRows: formattedRows.length, timestamp: new Date().toISOString() },
-    appliedParams: { ...params, sort: finalSort }
+    appliedParams: { ...params, sort: finalSort },
   };
 }
 

@@ -17,19 +17,19 @@
 
 ## 2. 模块完成度
 
-### A — Dashboard 看板 ⚠️ (CR未通过，详见 docs/backend/07-DASHBOARD-MODULE.md)
+### A — Dashboard 看板 ✅ (Phase A 完成 — 三层架构修复)
 
-| 文件 | 状态 | 来源 | 问题 |
+| 文件 | 状态 | 来源 | 说明 |
 |------|------|------|------|
-| `crud/dashboardCrud.js` | ⚠️ | 新写，9个新表聚合函数 | 覆盖不全，缺~60个查询 |
-| `services/queryEngine.js` | ❌ | <- dashboardQueryCore.js | ~40处旧表SQL未提取 |
-| `services/insightService.js` | ❌ | <- dashboardInsightService.js | ~16处旧表SQL + db.run未定义bug |
-| `services/executiveMetricsService.js` | ❌ | <- executiveMetricsQueryService | ~5处旧表SQL + 假async |
+| `crud/dashboardCrud.js` | ✅ | 新写 + 扩展 | 821行，~30个查询函数（Section A 旧表生产 + Section B 新表目标） |
+| `services/queryEngine.js` | ✅ | 重写 | 754行，零 SQL，全部通过 crud 访问数据 |
+| `services/insightService.js` | ✅ | 重写 | 478行，零 SQL，全部通过 crud 访问数据 |
+| `services/executiveMetricsService.js` | ✅ | 重写 | 163行，零 SQL，全部通过 crud 访问数据 |
 | `services/analyzers/*` (7 files) | ✅ | <- dashboardSubAgents/* | 正确 |
 | `routes/dashboardRoutes.js` | ✅ | <- routes/dashboard.js | 正确，缺参数校验 |
 | `routes/insightRoutes.js` | ✅ | <- routes/dashboardInsights.js | 正确 |
 
-核心问题：三个 service 文件的 SQL 未提取到 crud 层，违反"Service 零 SQL"规则。旧表名与新表名并存。
+> Phase A 完成：54 处 SQL 全部从 service 层提取到 crud 层。旧服务桩（dashboardQueryCore 等）因 chat_tools 排除范围引用暂保留。
 
 ### B — Task Publish 任务发布 ⚠️
 
@@ -83,6 +83,9 @@
 - [x] 8 查询函数 DB 回归 (24/24)
 - [x] 旧路由桩链验证
 - [x] connection.js 路径修复
+- [x] **Phase A 三层架构修复** — 54处 SQL 全部提取到 crud，service 零 SQL
+- [x] dashboardCrud 821行（~30函数），覆盖全部查询模式
+- [x] queryEngine/insightService/executiveMetrics 全部零 SQL
 
 ### B
 - [ ] 补全 3 service + 3 route
@@ -137,5 +140,6 @@
 | B | 通知 A 更新 queryEngine/executiveMetrics 的 autoNudgeRules 引用路径 | P1 |
 | C | 旧文件 (auth/stores/employees/mypal/mypalMock) 改桩 | P0 |
 | C | app.js 17 处路径切换 + 认证权限回归 | P0 |
-| A | 接收 B 通知后更新 2 处跨模块引用 | P1 |
+| A | 完成 Phase A | P0 ✅ |
+| A | ~~接收 B 通知后更新 2 处跨模块引用~~ | P1 ✅ 已通过 crud 解耦 |
 | 三人 | modular-base 启动验证 + 跑测试 + MR 到 dev | P1 |

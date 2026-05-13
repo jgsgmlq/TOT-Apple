@@ -1,7 +1,7 @@
 'use strict';
 
 const { nanoid } = require('nanoid');
-const { getDb } = require('../../common/db/connection');
+const crud = require('../crud/dashboardCrud');
 const { formatLocalDateYYYYMMDD } = require('../../common/utils/ddlAt');
 const { parseStoreDrill } = require('../../common/utils/storeDrill');
 const { generateTextDeepSeekStream } = require('../../common/utils/ai');
@@ -9,25 +9,13 @@ const { writeSseHeaders, createSseSender } = require('../../common/utils/sseResp
 const { createError } = require('../../common/middleware/errorHandler');
 const { computeAssignmentWarningRates } = require('../../common/utils/dashboardWarningRates');
 
-const db = {
-  get(sql, params = []) { return getDb().prepare(sql).get(...params) ?? null; },
-  all(sql, params = []) { return getDb().prepare(sql).all(...params); },
-};
 const MODULE_TYPES = [
-  'north_star',
-  'completion_weekly',
-  'completion_daily',
-  'channel_north_star',
-  'funnel_alerts',
-  'conversion_funnel',
+  'north_star', 'completion_weekly', 'completion_daily',
+  'channel_north_star', 'funnel_alerts', 'conversion_funnel',
 ];
 const INSIGHT_TYPES = [
-  'north_star',
-  'completion_weekly',
-  'completion_daily',
-  'channel_north_star',
-  'funnel_alerts',
-  'conversion_funnel',
+  'north_star', 'completion_weekly', 'completion_daily',
+  'channel_north_star', 'funnel_alerts', 'conversion_funnel',
 ];
 
 function normalizeQuery(body) {
@@ -52,51 +40,25 @@ function toMedian(nums) {
   return Number(arr[mid].toFixed(2));
 }
 
-function taScope(taskId, drill) {
-  const taConditions = ['1=1'];
-  const taParams = [];
-  if (taskId) {
-    taConditions.push('ta.task_id = ?');
-    taParams.push(taskId);
-  }
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const allParams = [...taParams, ...drill.params];
-  return { taConditions, joinStore, storeWhere, allParams };
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// Facts builders（数据通过 crud 获取，本层只做业务拼装）
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function buildNorthStarFacts(body) {
   const taskId = body.taskId || null;
   const drill = parseStoreDrill(normalizeQuery(body));
-  const { taConditions, joinStore, storeWhere, allParams } = taScope(taskId, drill);
 
-  const base = db.get(
-    `SELECT
-       COUNT(*) AS total,
-       SUM(CASE WHEN ta.status = 'pending' THEN 1 ELSE 0 END) AS not_started_count,
-       SUM(CASE WHEN ta.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
-       SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-       SUM(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL
-             AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS on_time_count,
-       AVG(CASE WHEN ta.status = 'completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL
-             THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 END) AS avg_hours,
-       SUM(CASE WHEN ta.status != 'completed' AND datetime('now', 'localtime') > datetime(t.ddl_at) THEN 1 ELSE 0 END) AS overdue
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-    allParams
-  );
-
-  const total = base.total || 0;
-  const notStarted = base.not_started_count || 0;
-  const inProgress = base.in_progress_count || 0;
-  const completed = base.completed_count || 0;
-  const onTime = base.on_time_count || 0;
+  const base = crud.queryAssignmentBaseAgg({ taskId, drill });
+  const total = base ? base.total || 0 : 0;
+  const notStarted = base ? base.pending_count || 0 : 0;
+  const inProgress = base ? base.in_progress_count || 0 : 0;
+  const completed = base ? base.completed_count || 0 : 0;
+  const onTime = base ? base.completed_on_time_count || 0 : 0;
   const completionRate = toPct(completed, total);
   const onTimeRate = toPct(onTime, total);
-  const avgH = base.avg_hours != null ? Number(base.avg_hours.toFixed(1)) : 0;
-  const task = taskId ? db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]) : null;
+  const avgH = base && base.avg_completion_time_hours != null ? Number(base.avg_completion_time_hours.toFixed(1)) : 0;
+  const task = taskId ? crud.getTaskById(taskId) : null;
+  const overdue = crud.countOverdueAssignments({ taskId, drill });
 
   return {
     scope: taskId ? `taskId=${taskId}` : '全任务汇总',
@@ -107,7 +69,7 @@ function buildNorthStarFacts(body) {
     notStartedCount: notStarted,
     inProgressCount: inProgress,
     completedCount: completed,
-    overdueCount: base.overdue || 0,
+    overdueCount: overdue,
     completionRate,
     onTimeRate,
     avgCompletionHours: avgH,
@@ -118,82 +80,19 @@ function buildFunnelFacts(body) {
   const baseFacts = buildNorthStarFacts(body);
   const taskId = body.taskId || null;
   const drill = parseStoreDrill(normalizeQuery(body));
-  const { taConditions, joinStore, storeWhere, allParams } = taScope(taskId, drill);
   const total = baseFacts.totalCount;
 
-  let push = 0;
-  let reads = 0;
-  if (drill.hasDrill && taskId) {
-    const pr = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS c FROM notification_events ne
-       JOIN stores s ON s.id = ne.store_id
-       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
-      [taskId, ...drill.params]
-    );
-    push = pr && pr.c ? pr.c : 0;
-    
-    const rr = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS c FROM read_receipts rr
-       JOIN notification_events ne ON ne.id = rr.event_id
-       JOIN stores s ON s.id = ne.store_id
-       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned' ${drill.sql}`,
-      [taskId, ...drill.params]
-    );
-    reads = rr && rr.c ? rr.c : 0;
-  } else if (taskId) {
-    const pr = db.get(
-      `SELECT COUNT(DISTINCT ne.target_user_id) AS c FROM notification_events ne
-       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'`,
-      [taskId]
-    );
-    push = pr && pr.c ? pr.c : 0;
-    
-    const rr = db.get(
-      `SELECT COUNT(DISTINCT rr.user_id) AS c FROM read_receipts rr
-       JOIN notification_events ne ON ne.id = rr.event_id
-       WHERE ne.task_id = ? AND ne.event_type = 'task_assigned'`,
-      [taskId]
-    );
-    reads = rr && rr.c ? rr.c : 0;
-  }
-
-  const reachRow = db.get(
-    `SELECT COUNT(ta.id) AS reached_count
-     FROM task_assignments ta
-     JOIN users u ON ta.user_id = u.employee_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}
-       AND (
-         (u.last_login_at IS NOT NULL AND u.last_login_at >= ta.created_at)
-         OR ta.received_at IS NOT NULL
-       )`,
-    allParams
-  );
-
-  const nudgeRow = db.get(
-    `SELECT
-       COUNT(ta.id) AS total_nudged,
-       SUM(CASE WHEN ta.started_at IS NOT NULL OR ta.status = 'completed' THEN 1 ELSE 0 END) AS converted_nudged
-     FROM task_assignments ta
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere} AND ta.nudge_count > 0`,
-    allParams
-  );
-
-  const assignRateRows = db.all(
-    `SELECT ta.status, ta.progress, t.created_at, t.ddl_at, t.auto_nudge_rules
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     ${joinStore}
-     WHERE ${taConditions.join(' AND ')} ${storeWhere}`,
-    allParams
-  );
-  const wr = computeAssignmentWarningRates(assignRateRows, total, Date.now());
+  const push = crud.countPushUsers({ taskId, drill });
+  const reads = crud.countReadUsers({ taskId, drill, source: 'task_detail_open' });
+  const reachedCount = crud.countReachedAssignments({ taskId, drill });
+  const nudgeRow = crud.queryNudgeStats({ taskId, drill });
+  const assignRows = crud.queryAssignmentDetails({ taskId, drill });
+  const wr = computeAssignmentWarningRates(assignRows, total, Date.now());
 
   return {
     ...baseFacts,
     totalAssignments: total,
-    taskReachRate: toPct((reachRow && reachRow.reached_count) || 0, total),
+    taskReachRate: toPct(reachedCount, total),
     taskReadRate: toPct(reads, total),
     nudgeConversionRate: toPct(
       (nudgeRow && nudgeRow.converted_nudged) || 0,
@@ -211,36 +110,23 @@ function buildWeeklyCompletionFacts(body) {
   const taskId = body.taskId;
   if (!taskId) throw createError(400, 'completion_weekly 需要 taskId', 'INSIGHT_001');
   const drill = parseStoreDrill(normalizeQuery(body));
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const task = db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]);
+  const task = crud.getTaskById(taskId);
   if (!task) throw createError(404, '任务不存在', 'TASK_002');
-  const totalRow = db.get(
-    `SELECT COUNT(*) AS total FROM task_assignments ta ${joinStore}
-     WHERE ta.task_id = ? ${storeWhere}`,
-    [taskId, ...drill.params]
-  );
-  const rows = db.all(
-    `SELECT date(ta.completed_at) AS k, COUNT(ta.id) AS n
-     FROM task_assignments ta ${joinStore}
-     WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL ${storeWhere}
-     GROUP BY date(ta.completed_at) ORDER BY date(ta.completed_at) ASC`,
-    [taskId, ...drill.params]
-  );
+  const total = crud.queryAssignmentScopeCount({ taskId, drill });
+  const rows = crud.queryDailyCompletions({ taskId, drill, completedAtExpr: 'ta.completed_at' });
   const latestRows = rows.slice(-7);
   let cumulative = 0;
   const progressData = latestRows.map((r, idx) => {
-    cumulative += r.n || 0;
+    cumulative += r.new_completed || 0;
     return {
       day: `第${idx + 1}天`,
-      new_completions: r.n || 0,
+      new_completions: r.new_completed || 0,
       cumulative_completions: cumulative,
     };
   });
   return {
-    taskName: task.title,
-    taskId,
-    totalUsers: (totalRow && totalRow.total) || 0,
+    taskName: task.title, taskId,
+    totalUsers: total,
     currentDay: progressData.length,
     drill: drill.hasDrill ? normalizeQuery(body) : null,
     progressData,
@@ -252,25 +138,12 @@ function buildDailyCompletionFacts(body) {
   if (!taskId) throw createError(400, 'completion_daily 需要 taskId', 'INSIGHT_001');
   const targetDate = body.date || formatLocalDateYYYYMMDD();
   const drill = parseStoreDrill(normalizeQuery(body));
-  const joinStore = drill.hasDrill ? 'JOIN stores s ON s.id = ta.store_id' : '';
-  const storeWhere = drill.hasDrill ? drill.sql : '';
-  const task = db.get('SELECT id, title FROM tasks WHERE id = ?', [taskId]);
+  const task = crud.getTaskById(taskId);
   if (!task) throw createError(404, '任务不存在', 'TASK_002');
-  const totalRow = db.get(
-    `SELECT COUNT(*) AS total FROM task_assignments ta ${joinStore}
-     WHERE ta.task_id = ? ${storeWhere}`,
-    [taskId, ...drill.params]
-  );
-  const rows = db.all(
-    `SELECT strftime('%H', ta.completed_at) AS hour_key, COUNT(ta.id) AS n
-     FROM task_assignments ta ${joinStore}
-     WHERE ta.task_id = ? AND ta.status = 'completed' AND ta.completed_at IS NOT NULL
-       AND date(ta.completed_at) = ? ${storeWhere}
-     GROUP BY strftime('%H', ta.completed_at) ORDER BY strftime('%H', ta.completed_at) ASC`,
-    [taskId, targetDate, ...drill.params]
-  );
+  const total = crud.queryAssignmentScopeCount({ taskId, drill });
+  const rows = crud.queryHourlyCompletions({ taskId, drill, date: targetDate, completedAtExpr: 'ta.completed_at' });
   const byHour = {};
-  for (const r of rows) byHour[Number(r.hour_key)] = r.n || 0;
+  for (const r of rows) byHour[Number(r.time_key)] = r.new_completed || 0;
 
   let cumulative = 0;
   const progressData = [];
@@ -286,9 +159,8 @@ function buildDailyCompletionFacts(body) {
   }
 
   return {
-    taskName: task.title,
-    taskId,
-    totalUsers: (totalRow && totalRow.total) || 0,
+    taskName: task.title, taskId,
+    totalUsers: total,
     targetDate,
     drill: drill.hasDrill ? normalizeQuery(body) : null,
     intradayProgressData: progressData,
@@ -300,64 +172,15 @@ function buildHeatmapRankFacts(body) {
   if (!taskId) throw createError(400, 'heatmap_rank 模块需要 taskId', 'INSIGHT_001');
   const drill = parseStoreDrill(normalizeQuery(body));
   const rtmLevel = (body.rtmLevel || 'rtm').toLowerCase();
-  const heatParams = [taskId, ...drill.params];
+  const { selectDim, groupByDim } = crud.buildDimensionSelect(rtmLevel, 'dim');
 
-  const level = rtmLevel;
-  let selectDim;
-  let groupByDim;
-  if (level === 'store') {
-    selectDim = 'MAX(s.name) AS dim';
-    groupByDim = 's.id';
-  } else if (level === 'dealer' || level === 'dealer_name' || level === 'dealername') {
-    selectDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'(未知)\') AS dim';
-    groupByDim = 'COALESCE(NULLIF(TRIM(s.dealer_name), \'\'), \'\')';
-  } else {
-    const colMap = {
-      rtm: 's.rtm',
-      region: 's.region',
-      format: 's.format',
-      subrtm: 's.rtm',
-    };
-    const col = colMap[level] || 's.rtm';
-    selectDim = `${col} AS dim`;
-    groupByDim = col;
-  }
+  const heatRows = crud.queryAssignmentGroupedAgg({
+    taskId, drill, selectDim, groupByDim,
+    orderBy: 'ORDER BY rate DESC',
+  });
 
-  const heatRows = db.all(
-    `SELECT ${selectDim},
-            COUNT(ta.id) AS assignment_count,
-            ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 1) AS rate
-     FROM task_assignments ta
-     JOIN stores s ON s.id = ta.store_id
-     JOIN tasks t ON t.id = ta.task_id
-     WHERE ta.task_id = ? ${drill.sql}
-     GROUP BY ${groupByDim}
-     ORDER BY rate DESC`,
-    heatParams
-  );
-
-  const rankTop = db.all(
-    `SELECT s.id AS store_id, s.name AS store_name,
-            ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 1) AS rate,
-            COUNT(ta.id) AS n
-     FROM task_assignments ta JOIN stores s ON s.id = ta.store_id
-     WHERE ta.task_id = ? ${drill.sql}
-     GROUP BY ta.store_id
-     ORDER BY rate DESC, s.id ASC LIMIT 3`,
-    heatParams
-  );
-
-  const rankBottom = db.all(
-    `SELECT s.id AS store_id, s.name AS store_name,
-            ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 1) AS rate,
-            COUNT(ta.id) AS n
-     FROM task_assignments ta JOIN stores s ON s.id = ta.store_id
-     WHERE ta.task_id = ? ${drill.sql}
-     GROUP BY ta.store_id
-     HAVING rate < 100
-     ORDER BY rate ASC, s.id ASC LIMIT 3`,
-    heatParams
-  );
+  const rankTop = crud.queryStoreRank({ taskId, drill, order: 'DESC', limit: 3 });
+  const rankBottom = crud.queryStoreRank({ taskId, drill, order: 'ASC', limit: 3 });
 
   return {
     taskId,
@@ -366,19 +189,15 @@ function buildHeatmapRankFacts(body) {
     heatmapBuckets: heatRows.map((r) => ({
       name: r.dim || '(未知)',
       assignmentCount: r.assignment_count,
-      completionRate: r.rate,
+      completionRate: r.completion_rate,
     })),
     topStores: rankTop.map((r) => ({
-      storeId: r.store_id,
-      storeName: r.store_name,
-      completionRate: r.rate,
-      assignmentCount: r.n,
+      storeId: r.store_id, storeName: r.store_name,
+      completionRate: r.rate, assignmentCount: r.n,
     })),
     bottomStores: rankBottom.map((r) => ({
-      storeId: r.store_id,
-      storeName: r.store_name,
-      completionRate: r.rate,
-      assignmentCount: r.n,
+      storeId: r.store_id, storeName: r.store_name,
+      completionRate: r.rate, assignmentCount: r.n,
     })),
   };
 }
@@ -386,30 +205,9 @@ function buildHeatmapRankFacts(body) {
 function buildWarningStatsFacts(body) {
   const taskId = body.taskId || null;
   const drill = parseStoreDrill(normalizeQuery(body));
-  const conditions = ['1=1'];
-  const params = [];
-  if (taskId) {
-    conditions.push('ta.task_id = ?');
-    params.push(taskId);
-  }
-  if (drill.hasDrill) {
-    conditions.push(drill.sql.replace(/^\s*AND\s+/, ''));
-    params.push(...drill.params);
-  }
-  const whereClause = conditions.join(' AND ');
 
-  const aggregateSql = `
-    SELECT ta.task_id, ta.store_id, s.name AS store_name, t.ddl_at,
-      COUNT(ta.id) AS total_count,
-      ROUND(100.0 * SUM(CASE WHEN ta.status='completed' THEN 1 ELSE 0 END) / COUNT(ta.id), 2) AS completion_rate
-    FROM task_assignments ta
-    JOIN stores s ON s.id = ta.store_id
-    JOIN tasks t ON t.id = ta.task_id
-    WHERE ${whereClause}
-    GROUP BY ta.store_id, ta.task_id
-    HAVING completion_rate < 80
-  `;
-  const subRows = db.all(aggregateSql, params);
+  const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const subRows = crud.queryWarningAggregate({ taskId, drill, level: 'store', nowIso });
   let p1 = 0;
   let p2 = 0;
   const ddlNow = new Date();
@@ -440,20 +238,7 @@ function buildChannelNorthStarFacts(body) {
   const taskId = body.taskId;
   if (!taskId) throw createError(400, 'channel_north_star 需要 taskId', 'INSIGHT_001');
   const drill = parseStoreDrill(normalizeQuery(body));
-  const channelRows = db.all(
-    `SELECT
-       s.rtm AS channel,
-       COUNT(ta.id) AS total_count,
-       SUM(CASE WHEN ta.status='completed' AND ta.completed_at <= t.ddl_at THEN 1 ELSE 0 END) AS on_time_count,
-       AVG(CASE WHEN ta.status='completed' AND ta.completed_at IS NOT NULL AND t.created_at IS NOT NULL
-                THEN (julianday(ta.completed_at) - julianday(t.created_at)) * 24 * 60 END) AS avg_minutes
-     FROM task_assignments ta
-     JOIN stores s ON s.id = ta.store_id
-     JOIN tasks t ON t.id = ta.task_id
-     WHERE ta.task_id = ? ${drill.sql}
-     GROUP BY s.rtm`,
-    [taskId, ...drill.params]
-  );
+  const channelRows = crud.queryChannelStats({ taskId, drill });
 
   const channels = ['Multibrand', 'Monobrand', 'Enterprise', 'Education', 'Carrier'];
   const channelData = {};
@@ -479,18 +264,16 @@ function buildChannelNorthStarFacts(body) {
     taskId,
     drill: drill.hasDrill ? normalizeQuery(body) : null,
     overall_statistics: {
-      completion_rate: {
-        mean: `${meanRate.toFixed(1)}%`,
-        median: `${toMedian(rates).toFixed(1)}%`,
-      },
-      completion_time_minutes: {
-        mean: meanMin,
-        median: toMedian(mins),
-      },
+      completion_rate: { mean: `${meanRate.toFixed(1)}%`, median: `${toMedian(rates).toFixed(1)}%` },
+      completion_time_minutes: { mean: meanMin, median: toMedian(mins) },
     },
     channel_data: channelData,
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Insight generation & persistence
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function resolveInsightType(body) {
   const raw = (body.insightType || '').trim();
@@ -509,7 +292,7 @@ function buildPromptByInsightType(insightType, facts) {
   if (insightType === 'north_star') {
     return {
       system: '你是资深零售培训运营专家。只基于输入数据输出客观洞察；禁止建议、禁止行动方案、禁止编造数据。',
-      user: `请围绕“按时完成率、人均完成耗时”输出结构化洞察，150字以内，含少量 emoji。\n数据：${JSON.stringify(facts, null, 2)}`,
+      user: `请围绕"按时完成率、人均完成耗时"输出结构化洞察，150字以内，含少量 emoji。\n数据：${JSON.stringify(facts, null, 2)}`,
       options: { maxTokens: 500, temperature: 0.25 },
     };
   }
@@ -544,7 +327,6 @@ function buildPromptByInsightType(insightType, facts) {
       options: { maxTokens: 1200, temperature: 0.2 },
     };
   }
-
   if (insightType === 'conversion_funnel') {
     return {
       system: '你是资深零售漏斗转化分析师。只分析漏斗各层级转化率（推送->阅读->在学->完课），禁止建议、禁止评估催办预警。',
@@ -552,7 +334,6 @@ function buildPromptByInsightType(insightType, facts) {
       options: { maxTokens: 800, temperature: 0.2 },
     };
   }
-
   return {
     system: '你是资深零售预警与催办数据分析师。只基于输入数据输出客观洞察与归因，禁止建议，聚焦逾期、各级预警率及催办有效性转化率。',
     user: `请严格按结构输出：\n### 🚨 预警健康度洞察\n### 🔔 催办有效性与深度归因\n数据：${JSON.stringify(facts, null, 2)}`,
@@ -560,7 +341,6 @@ function buildPromptByInsightType(insightType, facts) {
   };
 }
 
-/** 深度思考：为 true 时使用 `deepseek-reasoner`，否则 `deepseek-chat`。 */
 function parseReasoningFlag(body) {
   const v = body && body.reasoning;
   return v === true || v === 'true' || v === 1;
@@ -569,11 +349,9 @@ function parseReasoningFlag(body) {
 function prepareInsightContext(body) {
   const insightType = resolveInsightType(body);
   if (!insightType) {
-    throw createError(
-      400,
+    throw createError(400,
       `insightType 必填且为: ${INSIGHT_TYPES.join(', ')}（或使用旧 module 兼容入参）`,
-      'INSIGHT_002'
-    );
+      'INSIGHT_002');
   }
   const reasoning = parseReasoningFlag(body);
   const llmModel = reasoning ? 'deepseek-reasoner' : 'deepseek-chat';
@@ -590,55 +368,27 @@ function prepareInsightContext(body) {
   const taskId = body.taskId || null;
   const q = normalizeQuery(body);
   const extra = {
-    insightType,
-    trendType: body.trendType,
-    date: body.date,
-    rtmLevel: body.rtmLevel,
-    reasoning,
-    model: llmModel,
+    insightType, trendType: body.trendType, date: body.date,
+    rtmLevel: body.rtmLevel, reasoning, model: llmModel,
   };
   return { insightType, module, facts, promptPack, taskId, q, extra, reasoning, llmModel };
 }
 
 function persistInsightRecord(id, module, taskId, q, extra, content, facts, userId) {
   try {
-    db.run(
-      `INSERT INTO dashboard_insights (
-         id, module_type, task_id, filter_rtm, filter_format, filter_dealer_name, filter_store_id,
-         extra_params_json, content, context_json, up_count, down_count, created_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`,
-      [
-        id,
-        module,
-        taskId,
-        q.rtm || null,
-        q.format || null,
-        q.dealerName || null,
-        q.storeId || null,
-        JSON.stringify(extra),
-        content,
-        JSON.stringify(facts),
-        userId,
-      ]
-    );
+    crud.insertInsight({
+      id, moduleType: module, taskId,
+      rtm: q.rtm, format: q.format, dealerName: q.dealerName, storeId: q.storeId,
+      extraParams: extra, content, facts, userId,
+    });
   } catch (e) {
-    if (e && (e.code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || e.code === 'SQLITE_CONSTRAINT')) {
+    if (e && e.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
       throw createError(400, 'taskId 或 storeId 等外键不存在', 'INSIGHT_004');
     }
     throw e;
   }
 }
 
-/**
- * 生成洞察：固定 **SSE**（`event: delta` 推送增量；`event: done` 为 `{ code, message, data, requestId }`，与原先 JSON 成功响应一致）。
- * 请求体 **`reasoning: true`** 时使用 **`deepseek-reasoner`**（深度思考），否则 **`deepseek-chat`**。
- * 仅使用 DeepSeek 流式接口（需 DEEPSEEK_API_KEY）；不走 Gemini 回退。
- *
- * @param {object} body
- * @param {number} userId
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- */
 async function createInsight(body, userId, req, res) {
   const ctx = prepareInsightContext(body);
 
@@ -664,10 +414,7 @@ async function createInsight(body, userId, req, res) {
     );
   } catch (err) {
     console.error('[dashboardInsight] stream failed:', err.message);
-    send('error', {
-      message: err.message || '智能洞察流式生成失败',
-      code: 'INSIGHT_503',
-    });
+    send('error', { message: err.message || '智能洞察流式生成失败', code: 'INSIGHT_503' });
     res.end();
     return;
   }
@@ -683,38 +430,25 @@ async function createInsight(body, userId, req, res) {
   try {
     persistInsightRecord(id, ctx.module, ctx.taskId, ctx.q, ctx.extra, full, ctx.facts, userId);
   } catch (e) {
-    const msg = e.message || 'persist failed';
-    const code = e.errorCode || 'INSIGHT_004';
-    send('error', { message: msg, code });
+    send('error', { message: e.message || 'persist failed', code: e.errorCode || 'INSIGHT_004' });
     res.end();
     return;
   }
 
-  const createdAt = db.get('SELECT created_at AS t FROM dashboard_insights WHERE id = ?', [id]).t;
+  const createdAt = crud.getInsightCreatedAt(id);
   send('done', {
-    code: 200,
-    message: 'success',
+    code: 200, message: 'success',
     data: {
-      insightId: id,
-      insightType: ctx.insightType,
-      module: ctx.module,
-      taskId: ctx.taskId,
-      filters: ctx.q,
-      content: full,
-      createdAt,
+      insightId: id, insightType: ctx.insightType, module: ctx.module,
+      taskId: ctx.taskId, filters: ctx.q, content: full, createdAt,
       voteSummary: { up: 0, down: 0 },
-      model: ctx.llmModel,
-      reasoning: ctx.reasoning,
+      model: ctx.llmModel, reasoning: ctx.reasoning,
     },
     requestId: req.requestId,
   });
   res.end();
 }
 
-/**
- * 累加/减少汇总计数，不记录投票人。
- * body: { vote: 'up'|'down', action?: 'add'|'remove' }；兼容旧入参 vote 为纯字符串。
- */
 function recordVote(insightId, body) {
   const raw = typeof body === 'string' ? { vote: body } : body || {};
   const voteStr = String(raw.vote || '').trim();
@@ -723,36 +457,17 @@ function recordVote(insightId, body) {
   if (voteStr !== 'up' && voteStr !== 'down') {
     throw createError(400, 'vote 必须为 up 或 down', 'INSIGHT_003');
   }
-  const row = db.get('SELECT id FROM dashboard_insights WHERE id = ?', [insightId]);
+  const row = crud.getInsightById(insightId);
   if (!row) throw createError(404, '洞察不存在', 'INSIGHT_404');
 
   if (voteStr === 'up') {
-    if (action === 'add') {
-      db.run('UPDATE dashboard_insights SET up_count = up_count + 1 WHERE id = ?', [insightId]);
-    } else {
-      db.run(
-        'UPDATE dashboard_insights SET up_count = up_count - 1 WHERE id = ? AND up_count > 0',
-        [insightId]
-      );
-    }
-  } else if (action === 'add') {
-    db.run('UPDATE dashboard_insights SET down_count = down_count + 1 WHERE id = ?', [insightId]);
+    action === 'add' ? crud.incrementInsightVote(insightId, 'up') : crud.decrementInsightVote(insightId, 'up');
   } else {
-    db.run(
-      'UPDATE dashboard_insights SET down_count = down_count - 1 WHERE id = ? AND down_count > 0',
-      [insightId]
-    );
+    action === 'add' ? crud.incrementInsightVote(insightId, 'down') : crud.decrementInsightVote(insightId, 'down');
   }
 
-  const after = db.get(
-    'SELECT up_count AS up, down_count AS down FROM dashboard_insights WHERE id = ?',
-    [insightId]
-  );
-  return {
-    insightId,
-    up: after.up || 0,
-    down: after.down || 0,
-  };
+  const after = crud.getInsightVotes(insightId);
+  return { insightId, up: after.up || 0, down: after.down || 0 };
 }
 
 module.exports = {
