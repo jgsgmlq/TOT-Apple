@@ -60,7 +60,7 @@ async function callMyPalApi(endpoint, params) {
   }
 
   var ts = String(Date.now());
-  var nonce = require('crypto').randomBytes(16).toString('hex');
+  var nonce = crypto.randomBytes(16).toString('hex');
   var publicParams = { app_id: config.appId, timestamp: ts, nonce: nonce };
   var allParams = Object.assign({}, publicParams, params);
   allParams.sign = signParams(allParams, config.appSecret);
@@ -91,7 +91,7 @@ async function callMyPalApi(endpoint, params) {
     };
   } catch (err) {
     var durationMs = Date.now() - startMs;
-    throw { message: err.message, durationMs: durationMs, url: url };
+    var e = new Error(err.message); e.status = 502; e.durationMs = durationMs; throw e;
   } finally {
     clearTimeout(timer);
   }

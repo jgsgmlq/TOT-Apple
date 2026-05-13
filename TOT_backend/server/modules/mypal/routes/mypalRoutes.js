@@ -7,7 +7,6 @@ var { success } = require('../../common/responseHelper');
 
 var router = express.Router();
 
-// ─── POST /api/v1/mypal/sync ──────────────────────────────────
 router.post('/sync', authenticate, requireRole(['central', 'admin']), async function(req, res, next) {
   try {
     if (!mypalService.isMypalEnabled()) {
@@ -15,7 +14,12 @@ router.post('/sync', authenticate, requireRole(['central', 'admin']), async func
       err.status = 503;
       throw err;
     }
-    var queryDate = req.body && req.body.queryDate ? String(req.body.queryDate).trim() : undefined;
+    var queryDate = req.body && req.body.queryDate ? String(req.body.queryDate).trim() : '';
+    if (!queryDate) {
+      var e = new Error('queryDate 不能为空');
+      e.status = 400;
+      throw e;
+    }
     var summary = await mypalService.syncLearningProgress(queryDate);
     res.json(success(summary));
   } catch (err) {
@@ -23,7 +27,6 @@ router.post('/sync', authenticate, requireRole(['central', 'admin']), async func
   }
 });
 
-// ─── GET /api/v1/mypal/status ─────────────────────────────────
 router.get('/status', authenticate, requireRole(['central', 'admin']), function(req, res, next) {
   try {
     var queryDate = req.query.queryDate || undefined;
@@ -34,7 +37,6 @@ router.get('/status', authenticate, requireRole(['central', 'admin']), function(
   }
 });
 
-// ─── GET /api/v1/mypal/audit/:syncDataId ──────────────────────
 router.get('/audit/:syncDataId', authenticate, requireRole(['central', 'admin']), function(req, res, next) {
   try {
     var logs = mypalService.getSyncAuditLogs(req.params.syncDataId);

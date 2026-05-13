@@ -74,13 +74,6 @@ function deleteAccount(id) {
   return r.changes > 0;
 }
 
-function verifyPassword(emailId, password) {
-  var r = getDb().prepare(
-    'SELECT account_id, email_id, account_name, account_role, user_enabled_indicator ' +
-    'FROM account WHERE email_id = ? AND login_password = ?'
-  ).get(emailId, password);
-  return r ?? null;
-}
 
 module.exports = {
   getAccountById: getAccountById,
@@ -91,6 +84,5 @@ module.exports = {
   updateAccount: updateAccount,
   updateLastLogin: updateLastLogin,
   updateFirstLogin: updateFirstLogin,
-  deleteAccount: deleteAccount,
-  verifyPassword: verifyPassword,
+  deleteAccount: deleteAccount
 };
