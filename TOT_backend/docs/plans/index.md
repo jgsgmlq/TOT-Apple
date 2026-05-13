@@ -55,7 +55,11 @@
 | WebSocket | `../backend/04-WEBSOCKET.md` | WS 架构 |
 | Agent 框架 | `../backend/05-AGENT-FRAMEWORK.md` | Agent 框架文档 |
 | MyPal 集成 | `../backend/06-MYPAL-INTEGRATION.md` | MyPal 对接 |
-| 看板模块审计 | `../backend/07-DASHBOARD-MODULE.md` | 当前 modules/dashboard/ 代码质量审计 |
+| 模块架构规范 | `../backend/08-MODULE-ARCHITECTURE.md` | 三层契约、模块拓扑、跨模块通信规则 |
+| Service 层文档 | `../backend/09-MODULE-SERVICES.md` | 新模块结构下的 Service 完整清单 |
+| 看板模块审计 | `../backend/07-DASHBOARD-MODULE.md` | Dashboard 模块代码质量审计 |
+| Task Publish 审计 | `../backend/10-TASK-PUBLISH-MODULE.md` | Task Publish 模块代码质量审计 |
+| Admin 审计 | `../backend/11-ADMIN-MODULE.md` | Admin + MyPal 模块代码质量审计 |
 | 前端-总部 | `../frontend/01-CENTRAL.md` | 总部看板前端 |
 | EChat 代码地图 | `../internal/EXECUTIVE-CHAT-CODE-MAP.md` | Agent 源文件职责 |
 | 技术债 | `../internal/TECH-DEBT.md` | 已知问题 |
@@ -90,12 +94,16 @@
 ## 7. 快速链接速查
 
 ```
-方案：     docs/plans/2026-05-12-modularization-plan.md
-进度：     docs/plans/2026-05-13-modularization-progress.md
-Agent：    docs/plans/2026-05-11-agent-refactor-plan.md
-规范：     docs/CODING-STANDARDS.md
-CLAUDE：   CLAUDE.md
-新人：     docs/team-onboarding.md
-ER图：     docs/er-diagram-graphviz.svg
-归档索引： docs/archive/index.md
+方案：      docs/plans/2026-05-12-modularization-plan.md
+进度：      docs/plans/2026-05-13-modularization-progress.md
+Agent：     docs/plans/2026-05-11-agent-refactor-plan.md
+规范：      docs/CODING-STANDARDS.md
+架构规范：  docs/backend/08-MODULE-ARCHITECTURE.md
+服务清单：  docs/backend/09-MODULE-SERVICES.md
+Task审计：  docs/backend/10-TASK-PUBLISH-MODULE.md
+Admin审计： docs/backend/11-ADMIN-MODULE.md
+CLAUDE：    CLAUDE.md
+新人：      docs/team-onboarding.md
+ER图：      docs/er-diagram-graphviz.svg
+归档索引：  docs/archive/index.md
 ```

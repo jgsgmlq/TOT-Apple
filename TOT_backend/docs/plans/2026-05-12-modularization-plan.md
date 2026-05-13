@@ -747,6 +747,10 @@ ws/*（2文件，平移至 modules/common/ws/）
 | 后端服务 | `docs/backend/02-SERVICES.md` | 引用的服务文件已部分迁移到 modules/ |
 | 数据库 | `docs/backend/03-DATABASE.md` | 旧表名，新 schema 见 `er-diagram-graphviz.svg` |
 | 看板模块审计 | `docs/backend/07-DASHBOARD-MODULE.md` | 技术审计报告，记录当前 `modules/dashboard/` 代码质量 |
+| 模块架构规范 | `docs/backend/08-MODULE-ARCHITECTURE.md` | 三层契约、模块拓扑、跨模块通信、基础设施 |
+| Service 层文档 | `docs/backend/09-MODULE-SERVICES.md` | 新模块结构下的 15 个服务完整清单 |
+| Task Publish 审计 | `docs/backend/10-TASK-PUBLISH-MODULE.md` | B 模块合规检查、缺失文件、修复步骤 |
+| Admin 审计 | `docs/backend/11-ADMIN-MODULE.md` | C 模块合规检查、改桩清单、app.js 切换步骤 |
 | 新人上手 | `docs/team-onboarding.md` | 环境搭建 + 分支规范，持续更新 |
 | 技术债 | `docs/internal/TECH-DEBT.md` | 已知问题清单 |
 | 文档总索引 | `docs/README.md` | 所有文档的目录 |
