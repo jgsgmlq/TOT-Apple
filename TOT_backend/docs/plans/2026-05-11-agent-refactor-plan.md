@@ -5,6 +5,28 @@
 
 ---
 
+## 快速导航：相关文档索引
+
+| 文档 | 路径 | 何时查看 |
+|------|------|----------|
+| **模块化重构总方案** | `docs/plans/2026-05-12-modularization-plan.md` | 理解哪些文件被排除不动（agent/ chat_tools/ prompts/ chatService 等） |
+| **模块化进度追踪** | `docs/plans/2026-05-13-modularization-progress.md` | 了解三人分工进度，确认 Agent 改动不影响对方模块 |
+| **编码规范** | `docs/CODING-STANDARDS.md` | 新增代码遵守三层架构、命名、错误码规则 |
+| **EChat 需求规格** | `docs/specs/09-EXECUTIVE-CHAT.md` | 理解意图分类、工具调用、回复格式的业务需求 |
+| **EChat Intent/Tools** | `docs/specs/10-EXECUTIVE-CHAT-INTENTS-TOOLS.md` | Router 的 intent 枚举 + 工具映射的权威定义 |
+| **EChat 请求流程** | `docs/specs/11-EXECUTIVE-CHAT-REQUEST-FLOW.md` | LangGraph 状态流转、节点执行顺序 |
+| **Agent 架构** | `docs/specs/12-AGENT-ARCHITECTURE.md` | Agent 框架的整体设计 |
+| **EChat 代码地图** | `docs/internal/EXECUTIVE-CHAT-CODE-MAP.md` | 各源文件的职责和依赖关系 |
+| **EChat Agent 工程简报** | `docs/internal/EXECUTIVE-CHAT-AGENT-ENGINEERING-BRIEF.md` | 工程决策记录 |
+| **项目 AI 指令** | `CLAUDE.md` | 数据库同步操作、requireRole 等全局约定 |
+| **技术债清单** | `docs/internal/TECH-DEBT.md` | 已知问题，避免重复造轮子 |
+| **EChat 测试用例** | `docs/tests/EXECUTIVE-CHAT-TEST-QUERIES.md` | 手动测试参考查询 |
+| **EChat 测试指南** | `docs/tests/EXECUTIVE-CHAT-TESTING.md` | 测试环境搭建和流程 |
+
+> 阅读顺序建议：先看本文件了解改动范围 → 遇到不熟悉的术语查上表对应文档 → 改代码时参考编码规范。
+
+---
+
 ## 涉及文件总览
 
 ### P0 代码修改
