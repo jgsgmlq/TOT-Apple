@@ -45,7 +45,9 @@
 | `routes/reminderRoutes.js` | ❌ 待写 | <- routes/nudge.js + notifications.js |
 | `routes/campaignRoutes.js` | ❌ 待写 | 新页面 |
 
-待迁移旧文件（仍为完整代码）：tasks.js(726行), assignments.js(679行), notifications.js(284行), nudge.js(285行)
+待迁移旧文件（仍为完整代码）：tasks.js(726行), assignments.js(679行), notifications.js(284行), nudge.js(285行), autoNudge.js(230行), autoNudgeRules.js(48行)
+
+> ⚠️ `autoNudgeRules.js` 仍被 A 的 `queryEngine.js` 和 `executiveMetricsService.js` 引用。B 迁移后需更新 A 的 import 路径为 `../task-publish/services/reminderService`。
 
 ### C — Admin 管理员端 ✅
 
@@ -88,7 +90,7 @@
 
 ### C
 - [ ] 5 个旧文件改桩
-- [ ] `app.js` require 路径切换 (14处)
+- [ ] `app.js` require 路径切换 (17处)
 - [ ] 认证 + 权限回归
 
 ### 三人联合
@@ -97,7 +99,7 @@
 
 ---
 
-## 4. app.js 待切换引用（C 负责）
+## 4. app.js 待切换引用（C 负责，共 17 处）
 
 ```
 ./middleware/requestId     → ./modules/common/middleware/requestId
@@ -108,15 +110,19 @@
 ./routes/stores           → ./modules/admin/routes/storeRoutes
 ./routes/employees        → ./modules/admin/routes/learnerRoutes
 ./routes/mypal            → ./modules/mypal/routes/mypalRoutes
+./routes/mypalMock        → ./modules/mypal/routes/mypalRoutes（mock 逻辑已内聚）
 ./routes/tasks            → ./modules/task-publish/routes/taskRoutes
 ./routes/assignments      → ./modules/task-publish/routes/queueRoutes
 ./routes/notifications    → ./modules/task-publish/routes/reminderRoutes
 ./routes/nudge            → ./modules/task-publish/routes/reminderRoutes
+./jobs/autoNudgeScheduler → ./modules/task-publish/services/reminderService（调度逻辑合并）
 ./utils/tracer            → ./modules/common/utils/tracer
 ./utils/logger            → ./modules/common/utils/logger
+./routes/dashboard        → ./modules/dashboard/routes/dashboardRoutes
+./routes/dashboardInsights → ./modules/dashboard/routes/insightRoutes
 ```
 
-排除（不动）：chat, asr, mypalMock, dashboardAgent
+排除（不动）：chat, asr, dashboardAgent, dashboardAgentScheduler
 
 ---
 
@@ -124,7 +130,11 @@
 
 | 谁 | 行动 | 优先级 |
 |-----|------|--------|
-| B | 补全 task-publish 模块剩余文件 | P0 |
-| B | 旧文件改桩 | P1 |
-| C | 旧文件改桩 + app.js 路径切换 | P0 |
-| 三人 | modular-base 联合回归 + MR 到 dev | P1 |
+| B | 补全 3 service + 3 route | P0 |
+| B | autoNudge.js / autoNudgeRules.js 迁移到 reminderService | P0 |
+| B | 旧文件 (tasks/assignments/nudge/notifications/autoNudge/autoNudgeRules) 改桩 | P1 |
+| B | 通知 A 更新 queryEngine/executiveMetrics 的 autoNudgeRules 引用路径 | P1 |
+| C | 旧文件 (auth/stores/employees/mypal/mypalMock) 改桩 | P0 |
+| C | app.js 17 处路径切换 + 认证权限回归 | P0 |
+| A | 接收 B 通知后更新 2 处跨模块引用 | P1 |
+| 三人 | modular-base 启动验证 + 跑测试 + MR 到 dev | P1 |
