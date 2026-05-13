@@ -4,8 +4,8 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, '..', 'database.db');
-const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
+const DB_PATH = path.join(__dirname, "..", "..", "..", "database.db");
+const SCHEMA_PATH = path.join(__dirname, "..", "..", "..", "db", "schema.sql");
 
 let _db;
 
