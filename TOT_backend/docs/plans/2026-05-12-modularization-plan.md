@@ -704,3 +704,66 @@ middleware/*（4文件，平移至 modules/common/middleware/）
 utils/*（12文件，平移至 modules/common/utils/）
 ws/*（2文件，平移至 modules/common/ws/）
 ```
+
+
+---
+
+## 11. 附录：相关文档索引
+
+> 用途：帮助 AI 和新成员快速定位文档，区分模块化重构前后的新旧文档。
+
+### 11.1 模块化重构文档（新 — 当前有效）
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| **重构总方案**（本文件） | `docs/plans/2026-05-12-modularization-plan.md` | 整体架构、模块划分、执行计划 |
+| **进度追踪** | `docs/plans/2026-05-13-modularization-progress.md` | 三人完成度、Phase 2 待办、app.js 切换清单 |
+| **编码规范** | `docs/CODING-STANDARDS.md` | 三层架构、命名、响应格式、错误码 |
+| **Agent 重构** | `docs/plans/2026-05-11-agent-refactor-plan.md` | Agent 框架重构计划（并行工作） |
+| **CLAUDE.md** | `CLAUDE.md` | 项目级 AI 助手指令（含模块化进度指针） |
+
+### 11.2 产品/系统规格（旧 — 参考）
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| 数据模型 | `docs/specs/01-DATA-MODEL.md` | 旧表结构（模块化重构中正在替换） |
+| API 规范 | `docs/specs/04-API-SPEC.md` | 接口定义 |
+| 通知/催办 | `docs/specs/05-NOTIFICATION-NUDGE.md` | 催办逻辑说明 |
+| 看板 KPI | `docs/specs/06-DASHBOARD-KPI.md` | 指标口径定义 |
+| 权限模型 | `docs/specs/08-PERMISSION-MODEL.md` | 角色权限矩阵 |
+| Executive Chat | `docs/specs/09-EXECUTIVE-CHAT.md` | EChat 需求说明 |
+| ER 图 | `docs/er-diagram-graphviz.svg` | 新数据库 schema 设计 |
+
+### 11.3 架构/内部文档（旧 — 可能过时）
+
+| 文档 | 路径 | 状态 |
+|------|------|------|
+| 后端路由 | `docs/backend/01-ROUTES.md` | ⚠️ 模块化重构后路径已变 |
+| 后端服务 | `docs/backend/02-SERVICES.md` | ⚠️ 部分已迁移到 modules/ |
+| 数据库 | `docs/backend/03-DATABASE.md` | ⚠️ 表名待更新 |
+| 看板模块 | `docs/backend/07-DASHBOARD-MODULE.md` | ⚠️ 已迁移到 modules/dashboard/ |
+| 新人上手 | `docs/team-onboarding.md` | 环境搭建 + 分支规范 |
+| 技术债 | `docs/internal/TECH-DEBT.md` | 已知问题清单 |
+| 文档总索引 | `docs/README.md` | 所有文档的目录 |
+
+### 11.4 归档（旧 — 不再维护）
+
+| 文档 | 路径 |
+|------|------|
+| 归档索引 | `docs/archive/index.md` |
+| 历史计划 (2026-03 ~ 2026-04) | `docs/archive/plans/` |
+| Superpowers 时期 | `docs/archive/superpowers/` |
+
+### 11.5 AI 使用指南
+
+当 AI 需要查找信息时的优先级：
+
+1. **先读当前有效的新文档**（§11.1）— 反映最新架构
+2. **再查产品规格**（§11.2）— 理解业务需求
+3. **最后参考旧架构文档**（§11.3）— 注意标注"可能过时"
+4. **不要使用归档文档**（§11.4）— 除非明确需要历史上下文
+
+区分新旧文档的方法：
+- 看路径：`docs/plans/2026-05-*` 为模块化重构时期文档
+- 看 `docs/archive/` 前缀：归档文档，不再适用
+- 看文件尾注：新文档会在末尾标注更新日期
