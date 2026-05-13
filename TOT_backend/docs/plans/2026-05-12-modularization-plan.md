@@ -734,15 +734,17 @@ ws/*（2文件，平移至 modules/common/ws/）
 | Executive Chat | `docs/specs/09-EXECUTIVE-CHAT.md` | EChat 需求说明 |
 | ER 图 | `docs/er-diagram-graphviz.svg` | 新数据库 schema 设计 |
 
-### 11.3 架构/内部文档（旧 — 可能过时）
+### 11.3 架构/技术文档（维护中 — 代码路径随重构变化）
+
+> 说明：这些文档仍在维护，但其中引用的代码路径可能已随模块化重构改变。状态栏标注了需要注意的差异，阅读时以实际代码路径为准。
 
 | 文档 | 路径 | 状态 |
 |------|------|------|
-| 后端路由 | `docs/backend/01-ROUTES.md` | ⚠️ 模块化重构后路径已变 |
-| 后端服务 | `docs/backend/02-SERVICES.md` | ⚠️ 部分已迁移到 modules/ |
-| 数据库 | `docs/backend/03-DATABASE.md` | ⚠️ 表名待更新 |
-| 看板模块 | `docs/backend/07-DASHBOARD-MODULE.md` | ⚠️ 已迁移到 modules/dashboard/ |
-| 新人上手 | `docs/team-onboarding.md` | 环境搭建 + 分支规范 |
+| 后端路由 | `docs/backend/01-ROUTES.md` | 引用的路由文件已部分迁移到 modules/ |
+| 后端服务 | `docs/backend/02-SERVICES.md` | 引用的服务文件已部分迁移到 modules/ |
+| 数据库 | `docs/backend/03-DATABASE.md` | 旧表名，新 schema 见 `er-diagram-graphviz.svg` |
+| 看板模块审计 | `docs/backend/07-DASHBOARD-MODULE.md` | 技术审计报告，记录当前 `modules/dashboard/` 代码质量 |
+| 新人上手 | `docs/team-onboarding.md` | 环境搭建 + 分支规范，持续更新 |
 | 技术债 | `docs/internal/TECH-DEBT.md` | 已知问题清单 |
 | 文档总索引 | `docs/README.md` | 所有文档的目录 |
 
@@ -760,10 +762,11 @@ ws/*（2文件，平移至 modules/common/ws/）
 
 1. **先读当前有效的新文档**（§11.1）— 反映最新架构
 2. **再查产品规格**（§11.2）— 理解业务需求
-3. **最后参考旧架构文档**（§11.3）— 注意标注"可能过时"
+3. **再参考架构/技术文档**（§11.3）— 仍在维护，但代码路径可能随重构变化
 4. **不要使用归档文档**（§11.4）— 除非明确需要历史上下文
 
-区分新旧文档的方法：
-- 看路径：`docs/plans/2026-05-*` 为模块化重构时期文档
-- 看 `docs/archive/` 前缀：归档文档，不再适用
-- 看文件尾注：新文档会在末尾标注更新日期
+区分文档时效的方法：
+- `docs/plans/2026-05-*`：模块化重构时期新建文档，当前权威
+- `docs/archive/`：归档文档，**不再适用**
+- `docs/backend/`、`docs/internal/`：参考文档，仍在维护但代码路径可能已变化，以实际代码为准
+- 看文件头部的日期和分支标注
