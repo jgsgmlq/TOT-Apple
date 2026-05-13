@@ -444,23 +444,190 @@ A 在写任何看板代码之前先搭好全项目骨架，B 和 C 直接在此�
 
 ---
 
-## 8. Git 分支
+## 8. 三人 GitHub 协作规范
+
+### 8.1 分支策略
 
 ```
-dev（当前分支）
-  └── modular-base           # A 创建 — Phase 0 框架
-        ├── modular-dashboard  # A — 看板
-        ├── modular-task      # B — 任务发布
-        └── modular-admin     # C — 管理员端
+origin/dev
+  └── origin/modular-base           # A 创建 — Phase 0 框架（三人共享基座）
+        ├── modular-dashboard        # A — 看板模块
+        ├── modular-task             # B — 任务发布模块
+        └── modular-admin            # C — 管理员端模块
               │
               ▼
-         modular-base  ← 三人合回
+         modular-base  ← 三人各自 PR 合回
               │
               ▼
-            dev  ← 最终 MR
+            dev  ← 最终 PR（MR）
 ```
 
-A 先建 `modular-base`（骨架 + connection.js + 样板 crud），B/C 各从 base 切分支，最终合回 base，再 MR 到 dev。
+**规则**：
+- 三人**只在自己的模块分支**上开发，不直接 push 到 `modular-base` 或 `dev`
+- 模块间引用只能调对方的 **crud 纯函数**，禁止改对方的文件
+- `modular-base` 是三人共享基座，改 `common/` 需要三人协商
+
+### 8.2 初始设置（一次性）
+
+```bash
+# A: 创建 modular-base 并推送
+git checkout dev
+git checkout -b modular-base
+# ... Phase 0 开发 ...
+git push -u origin modular-base
+
+# B: 从 modular-base 切出模块分支
+git fetch origin
+git checkout -b modular-task origin/modular-base
+git push -u origin modular-task
+
+# C: 从 modular-base 切出模块分支
+git fetch origin
+git checkout -b modular-admin origin/modular-base
+git push -u origin modular-admin
+```
+
+### 8.3 日常开发流程
+
+每人每天在自己的模块分支上工作：
+
+```bash
+# 1. 确保本地 modular-base 是最新的
+git fetch origin
+git checkout modular-base
+git pull origin modular-base
+
+# 2. 切回自己的模块分支，rebase 最新 base
+git checkout modular-task          # (B 的例子)
+git rebase modular-base
+
+# 3. 正常开发 + 提交
+# ... 写代码 ...
+git add <files>
+git commit -m "feat(task): 完成 xxx"
+
+# 4. 推送到远程（rebase 后需要 force）
+git push --force-with-lease origin modular-task
+```
+
+### 8.4 合并到 modular-base
+
+模块功能完成一个阶段后，通过 GitHub PR 合入：
+
+```bash
+# 1. 确保已 rebase 到最新 modular-base（见 §8.3 步骤1-2）
+
+# 2. 推送到远程
+git push --force-with-lease origin modular-task
+
+# 3. 在 GitHub 上创建 PR：modular-task → modular-base
+#    - 标题格式：feat(task): <简述>
+#    - 描述中 @ 另外两人做 code review
+#    - 确认 CI 通过
+
+# 4. 至少一人 Approve 后，点击 "Squash and Merge" 合入
+```
+
+**PR 合并策略**：使用 **Squash and Merge**，保持 `modular-base` 提交历史干净。
+
+### 8.5 Code Review 规则
+
+| 规则 | 说明 |
+|------|------|
+| 谁 review | 另两人至少一人 Approve |
+| 检查什么 | 跨模块引用是否正确（只调 crud）、旧文件是否改桩、SQL 是否集中 |
+| review 时限 | 24h 内完成，阻塞他人时需要主动通知 |
+| 审批后 | 由 PR 作者自己点击 Merge |
+
+### 8.6 冲突处理
+
+**常见冲突场景**：
+- 两人同时改了 `common/` 下的文件（如 errorCodes.js）
+- 三人各自新增模块目录，`modules/` 下的文件不会冲突
+
+**处理步骤**：
+```bash
+# 1. rebase modular-base 时出现冲突
+git rebase modular-base
+# CONFLICT ... 
+
+# 2. 解决冲突后继续
+git add <resolved-files>
+git rebase --continue
+
+# 3. 如果冲突复杂，通知相关人一起解决
+```
+
+**降低冲突的措施**：
+- 每日开始工作前先 rebase `modular-base`
+- 改 `common/` 文件前在群里说一声
+- 小步提交，频繁同步
+
+### 8.7 提交规范
+
+```
+<type>(<module>): <简短描述>
+
+<详细说明（可选）>
+```
+
+| type | 用途 |
+|------|------|
+| `feat` | 新功能/新文件 |
+| `fix` | 修复 bug |
+| `chore` | 维护性工作（改桩、路径修正） |
+| `docs` | 文档 |
+| `refactor` | 重构（不改功能） |
+
+示例：
+```
+feat(dashboard): queryEngine.js ← dashboardQueryCore.js
+fix(common): connection.js DB_PATH 修正
+chore(dashboard): routes/dashboard.js 改为 re-export 桩
+```
+
+### 8.8 Phase 收尾流程
+
+每个 Phase 结束时按以下顺序操作：
+
+```bash
+# 1. 各人将自己的模块分支提 PR → modular-base
+#    A: modular-dashboard → modular-base PR
+#    B: modular-task → modular-base PR
+#    C: modular-admin → modular-base PR
+
+# 2. 全部合入后，三人各自拉取最新
+git checkout modular-base
+git pull origin modular-base
+
+# 3. 三人联合回归验证
+
+# 4. modular-base → dev 最终 PR
+#    在 GitHub 上创建 PR：modular-base → dev
+#    标题：feat: Phase X 模块化重构
+```
+
+### 8.9 常用命令速查
+
+```bash
+# 查看各分支状态
+git log modular-base --oneline -5
+git log modular-task --oneline -5
+
+# 查看自己的分支领先 base 多少
+git rev-list --count modular-base..modular-task
+
+# 查看 base 上别人合入了什么
+git log modular-base --oneline --since="1 day ago"
+
+# 撤销本地提交（还没 push）
+git reset --soft HEAD~1
+
+# 暂存当前工作
+git stash
+git rebase modular-base
+git stash pop
+```
 
 ---
 
