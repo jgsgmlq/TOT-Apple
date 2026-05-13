@@ -2,8 +2,10 @@
 
 ## 项目背景速读
 
-TOT/Apple 培训任务管理系统，模块化重构进行中，见 docs/plans/2026-05-12-modularization-plan.md。
-详细进度见：`/Users/skyler/.claude/projects/-Users-skyler-Desktop-MVP-3-0-TOT-Apple/memory/project_progress.md`
+TOT/Apple 培训任务管理系统，模块化重构进行中。
+入口文档：`docs/plans/index.md`（AI 读此文件即可定位所有相关文档）。
+方案细节：`docs/plans/2026-05-12-modularization-plan.md`。
+进度追踪：`docs/plans/2026-05-13-modularization-progress.md`。
 
 ---
 

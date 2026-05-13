@@ -714,8 +714,11 @@ ws/*（2文件，平移至 modules/common/ws/）
 
 ### 11.1 模块化重构文档（新 — 当前有效）
 
+> **AI 入口**：`docs/plans/index.md` — 单文件导航，按任务类型指引阅读路径。
+
 | 文档 | 路径 | 用途 |
 |------|------|------|
+| **文档导航** | `docs/plans/index.md` | AI 入口，7 类任务的阅读路径 + 快速链接 |
 | **重构总方案**（本文件） | `docs/plans/2026-05-12-modularization-plan.md` | 整体架构、模块划分、执行计划 |
 | **进度追踪** | `docs/plans/2026-05-13-modularization-progress.md` | 三人完成度、Phase 2 待办、app.js 切换清单 |
 | **编码规范** | `docs/CODING-STANDARDS.md` | 三层架构、命名、响应格式、错误码 |

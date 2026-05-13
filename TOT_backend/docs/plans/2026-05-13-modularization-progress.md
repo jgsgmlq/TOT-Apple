@@ -1,6 +1,7 @@
 # 模块化重构进度追踪
 
-> 更新：2026-05-13 | 分支：modular-base | 计划：[2026-05-12-modularization-plan.md](./2026-05-12-modularization-plan.md)
+> 更新：2026-05-13 | 分支：modular-base
+> 计划：[2026-05-12-modularization-plan.md](./2026-05-12-modularization-plan.md) | AI 入口：[index.md](./index.md)
 
 ---
 
@@ -16,19 +17,19 @@
 
 ## 2. 模块完成度
 
-### A — Dashboard 看板 ✅
+### A — Dashboard 看板 ⚠️ (CR未通过，详见 docs/backend/07-DASHBOARD-MODULE.md)
 
-| 文件 | 状态 | 来源 |
-|------|------|------|
-| `crud/dashboardCrud.js` | ✅ | 新写，10 个新表聚合函数 |
-| `services/queryEngine.js` | ✅ | <- dashboardQueryCore.js (1208行) |
-| `services/insightService.js` | ✅ | <- dashboardInsightService.js (759行) |
-| `services/executiveMetricsService.js` | ✅ | <- executiveMetricsQueryService.js (235行) |
-| `services/analyzers/*` (7 files) | ✅ | <- dashboardSubAgents/* (762行) |
-| `routes/dashboardRoutes.js` | ✅ | <- routes/dashboard.js (90行) |
-| `routes/insightRoutes.js` | ✅ | <- routes/dashboardInsights.js (45行) |
+| 文件 | 状态 | 来源 | 问题 |
+|------|------|------|------|
+| `crud/dashboardCrud.js` | ⚠️ | 新写，9个新表聚合函数 | 覆盖不全，缺~60个查询 |
+| `services/queryEngine.js` | ❌ | <- dashboardQueryCore.js | ~40处旧表SQL未提取 |
+| `services/insightService.js` | ❌ | <- dashboardInsightService.js | ~16处旧表SQL + db.run未定义bug |
+| `services/executiveMetricsService.js` | ❌ | <- executiveMetricsQueryService | ~5处旧表SQL + 假async |
+| `services/analyzers/*` (7 files) | ✅ | <- dashboardSubAgents/* | 正确 |
+| `routes/dashboardRoutes.js` | ✅ | <- routes/dashboard.js | 正确，缺参数校验 |
+| `routes/insightRoutes.js` | ✅ | <- routes/dashboardInsights.js | 正确 |
 
-旧文件全部改为 re-export 桩，Chat/Agent 兼容。8 个查询函数真实 DB 回归 24/24 通过。
+核心问题：三个 service 文件的 SQL 未提取到 crud 层，违反"Service 零 SQL"规则。旧表名与新表名并存。
 
 ### B — Task Publish 任务发布 ⚠️
 

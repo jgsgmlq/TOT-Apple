@@ -25,7 +25,8 @@
 
 用于快速建立上下文，**不改变**各角色在下方「按用途查找文档」中的推荐顺序。
 
-1. [`product/PROJECT_OVERVIEW.md`](product/PROJECT_OVERVIEW.md) — 项目与仓库入口  
+1. [`plans/index.md`](plans/index.md) — **AI 文档导航入口**（模块化重构进行中时优先读）  
+2. [`product/PROJECT_OVERVIEW.md`](product/PROJECT_OVERVIEW.md) — 项目与仓库入口  
 2. [`specs/00-OVERVIEW.md`](specs/00-OVERVIEW.md) — Spec 总览  
 3. [`specs/01-DATA-MODEL.md`](specs/01-DATA-MODEL.md) — 数据模型  
 4. [`specs/04-API-SPEC.md`](specs/04-API-SPEC.md) — REST / WebSocket 约定  
