@@ -360,6 +360,33 @@ function deleteCampaign(id) {
   return r.changes > 0;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 批量删除（供 taskService 事务使用）
+// ═══════════════════════════════════════════════════════════════
+
+function deleteQueuesByTask(taskPublishId) {
+  return getDb().prepare('DELETE FROM learner_task_queue WHERE task_publish_id = ?').run(taskPublishId).changes;
+}
+
+function deleteRemindersByTask(taskPublishId) {
+  return getDb().prepare('DELETE FROM learner_task_reminder WHERE task_publish_id = ?').run(taskPublishId).changes;
+}
+
+function deleteReminderLogsByTask(taskPublishId) {
+  return getDb().prepare('DELETE FROM task_reminder_log WHERE task_publish_id = ?').run(taskPublishId).changes;
+}
+
+function deleteTaskCascade(taskPublishId) {
+  const db = getDb();
+  return db.transaction(() => {
+    deleteRemindersByTask(taskPublishId);
+    deleteReminderLogsByTask(taskPublishId);
+    deleteQueuesByTask(taskPublishId);
+    deleteAudienceRulesByTask(taskPublishId);
+    deleteTask(taskPublishId);
+  })();
+}
+
 module.exports = {
   // task_publish
   getTaskById, getTaskList, getTaskPage, createTask, updateTask, deleteTask, countTasks,
@@ -367,10 +394,13 @@ module.exports = {
   getAudienceRules, createAudienceRule, deleteAudienceRule, deleteAudienceRulesByTask,
   // learner_task_queue
   getQueueById, getQueueList, getQueuePage, countQueue, createQueue, updateQueue, deleteQueue, batchCreateQueue,
+  deleteQueuesByTask,
   // learner_task_reminder
-  getReminderList, createReminder,
+  getReminderList, createReminder, deleteRemindersByTask,
   // task_reminder_log
-  getReminderLogList, getReminderLogStats, createReminderLog,
+  getReminderLogList, getReminderLogStats, createReminderLog, deleteReminderLogsByTask,
   // campaign_activity
   getCampaignById, getCampaignList, createCampaign, updateCampaign, deleteCampaign,
+  // cascade
+  deleteTaskCascade,
 };
