@@ -172,4 +172,13 @@ const buildGraph = () => {
   return workflow;
 };
 
-module.exports = { buildGraph };
+module.exports = {
+  buildGraph,
+  routeAfterRouter,
+  routeAfterFcCheckSteps,
+  routeAfterFcLlm,
+  routeAfterCheckDuplicate,
+  routeAfterValidateParams,
+  routeAfterMerge,
+  routeAfterHumanInTheLoop,
+};

@@ -48,7 +48,7 @@ const contextAnalyzerRouter = async (state, config) => {
     const invokeConfig = { signal: config?.signal };
     const structuredModel = routerModel.withStructuredOutput(RouterOutput, {
       name: "router_output",
-      method: "json_mode",
+      method: "jsonMode",
     });
     const parsed = await structuredModel.invoke(messages, invokeConfig);
     console.log(`[Router] 解析结果:`, parsed);
