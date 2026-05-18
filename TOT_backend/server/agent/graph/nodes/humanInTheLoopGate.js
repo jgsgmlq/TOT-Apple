@@ -25,6 +25,7 @@ const humanInTheLoopGate = async (state) => {
   }
   const normalized = userResponse?.resumePayload || userResponse?.resume_payload || userResponse?.value || userResponse;
   const resumeType = normalized?.resume_type
+    || normalized?.type
     || (normalized?.selected_option_id?.startsWith('clarify_') ? 'intent_shift' : 'slot_fill');
   const isIntentShift = resumeType === 'intent_shift';
   const isCancel = resumeType === 'cancel';
@@ -54,7 +55,7 @@ const humanInTheLoopGate = async (state) => {
     const cancelMessages = (state.pending_tool_calls || []).map(tc =>
       makeToolMessage(
         { id: tc.id || 'unknown', name: tc.name || 'clarify_intent' },
-        { error: 'User cancelled this operation due to intent shift.' }
+        JSON.stringify({ error: 'User cancelled this operation due to intent shift.' })
       )
     );
     return {
