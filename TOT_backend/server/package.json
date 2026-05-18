@@ -15,7 +15,8 @@
     "test:region-drilldown": "node scripts/test-region-drilldown.js",
     "test:chat-redis": "node scripts/test-chat-session-redis.js",
     "test:fc-e2e": "node scripts/test-fc-e2e.js",
-    "test:fc-stream-splitter": "node scripts/test-fc-stream-splitter.js"
+    "test:fc-stream-splitter": "node scripts/test-fc-stream-splitter.js",
+    "test": "jest"
   },
   "dependencies": {
     "@e2b/code-interpreter": "^2.4.0",
@@ -36,5 +37,8 @@
     "nanoid": "^3.3.7",
     "ws": "^8.16.0",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2"
   }
 }

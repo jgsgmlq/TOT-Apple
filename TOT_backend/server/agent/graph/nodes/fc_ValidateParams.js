@@ -6,7 +6,7 @@ const { endSpan } = require('../../../utils/tracer');
 const chatToolsService = require('../../../services/chatToolsService');
 const RoutingPolicy = require('../routingPolicy');
 const decisionRules = require('../decisionRules');
-const { db } = require('../../db');
+const { db } = require('../../../db');
 
 // T3 阶段二：真实的参数校验
 // 因为我们无法穷举所有工具的 schema，实际业务中应该读取 toolModule.schema.function.parameters

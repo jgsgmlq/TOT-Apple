@@ -1,11 +1,11 @@
 'use strict';
 
 const { nanoid } = require('nanoid');
-const { db } = require('../../db');
-const { formatNowSqliteLocal } = require('../../utils/ddlAt');
+const { db } = require('../../../db');
+const { formatNowSqliteLocal } = require('../../../utils/ddlAt');
 const { startNodeSpan } = require('../shared/spanHelper');
 const { endSpan, getClient } = require('../../../utils/tracer');
-const { memoryQueueProducer } = require('../queue/bullMqProducer');
+const { memoryQueueProducer } = require('../../queue/bullMqProducer');
 
 const persistAndEmit = async (state, config) => {
   const span = startNodeSpan(state, 'PersistAndEmit', { sessionId: state.sessionId, intent: state.intent });

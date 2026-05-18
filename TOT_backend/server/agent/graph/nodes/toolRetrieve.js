@@ -14,7 +14,7 @@ const INTENT_TOOL_MAP = Object.freeze({
   project_status:  ["getTaskListData", "getOverviewData", "queryExecutiveMetrics", "searchEntities"],
   warning_query:   ["getWarningsData", "queryExecutiveMetrics", "getStoreDetailData", "searchEntities"],
   drill_down:      ["getRegionDetailData", "getStoreDetailData", "queryExecutiveMetrics", "searchEntities"],
-  analytics_query: ["runAnalytics", "queryExecutiveMetrics", "fetchRawDataset", "executeCode", "searchEntities"],
+  analytics_query: ["runAnalytics", "queryExecutiveMetrics", "fetchRawDataset", "searchEntities"],
 });
 
 // Router LLM 偶尔会输出 spec 文档里的别名（task_status/store_warning/...）或常见错别字，
