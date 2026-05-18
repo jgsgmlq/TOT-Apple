@@ -1,12 +1,12 @@
 'use strict';
 
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
-const { ChatOpenAI } = require("@langchain/openai");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
 const { renderToolResultsMarkdown } = require('../renderers');
+const { fcModel } = require('../llm');
 
 const sanitizeUserFacingMarkdown = (content) => {
   const text = typeof content === 'string' ? content : '';
@@ -30,14 +30,7 @@ const sanitizeUserFacingMarkdown = (content) => {
   return '我已完成查询并提取了核心数据。若需更精确结果，可指定时间范围、大区或门店，我会继续为您细化。';
 };
 
-const getFcModel = () => new ChatOpenAI({
-  modelName: "deepseek-chat",
-  apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY,
-  configuration: { baseURL: process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1" },
-  temperature: 0.1,
-  maxTokens: 2048,
-  streaming: true
-});
+const getFcModel = () => fcModel;
 
 const finalResponseStep = async (state, config) => {
   let response = state.reply_markdown || state.finalResponse || "";

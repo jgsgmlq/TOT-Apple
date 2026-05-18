@@ -1,25 +1,13 @@
 'use strict';
 
 const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
-const { ChatOpenAI } = require("@langchain/openai");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, promptHash, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
 const RoutingPolicy = require('../routingPolicy');
 const decisionRules = require('../decisionRules');
-
-// === 真实的 LLM 配置 (复用项目的 DeepSeek API Key) ===
-// 考虑到意图路由这种一次性、低延迟的操作，推荐配置较小或响应更快的模型。
-const getRouterModel = () => new ChatOpenAI({
-  modelName: "deepseek-chat", // 或者 deepseek-coder
-  apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY,
-  configuration: {
-    baseURL: process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1" // 兼容 OpenAI 接口规范的地址
-  },
-  temperature: 0.1,
-  maxTokens: 512
-});
+const { routerModel } = require('../llm');
 
 const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
@@ -54,7 +42,7 @@ const contextAnalyzerRouter = async (state, config) => {
   try {
     const invokeConfig = { signal: config?.signal };
 
-    const res = await getRouterModel().invoke(messages, invokeConfig);
+    const res = await routerModel.invoke(messages, invokeConfig);
     rawJson = res.content.trim();
 
     if (rawJson.startsWith('```json')) {

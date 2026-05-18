@@ -1,7 +1,6 @@
 'use strict';
 
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
-const { ChatOpenAI } = require("@langchain/openai");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
@@ -10,23 +9,9 @@ const promptRegistry = require('../../../prompts/registry');
 const RoutingPolicy = require('../routingPolicy');
 const { decideChart } = require('../decideChart');
 const { FALLBACK_TOOL_NAMES } = require('./toolRetrieve');
+const { fcModel } = require('../llm');
 
-const getFcModel = () => new ChatOpenAI({
-  modelName: "deepseek-chat",
-  apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY,
-  configuration: {
-    baseURL: process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1"
-  },
-  temperature: 0.1,
-  maxTokens: 2048,
-  // 必须 streaming:true + 调用方用 model.stream() 才会真流式（多 chunks）。
-  // 三种坑组合的隔离测试结论（server/scripts/test-fc-isolation.js）：
-  //   - streaming:true  + invoke()  → SDK 内 stream reader 死锁，30s timeout（B/D）
-  //   - streaming:false + .stream() → 只吐 1 个聚合 chunk，没有打字机效果（F）
-  //   - streaming:true  + .stream() → 18 chunks，~1s 完成，正常 ✓（G）
-  // 调用方在 fc_LlmToolCallStep 用 .stream() AsyncIterator，绝不要改成 .invoke()。
-  streaming: true
-});
+const getFcModel = () => fcModel;
 
 // 动态将 chatToolsService 中所有的 Schema 转换为 LangChain bindTools 可用的格式
 const getLlmWithTools = (candidateTools = null) => {
