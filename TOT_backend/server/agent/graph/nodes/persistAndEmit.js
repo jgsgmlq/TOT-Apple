@@ -42,10 +42,12 @@ const persistAndEmit = async (state, config) => {
         lf.trace({ id: config.configurable.traceId }).update({
           output: replyContent,
           metadata: {
-            selected_tier: state.selected_tier,
-            fc_steps_used: state.fc_super_step_count,
-            repair_attempts: state.fc_repair_attempts,
+            mode: state.mode,
             intent: state.intent,
+            fc_steps_used: state.fc_super_step_count,
+            escalate_count: state.escalate_count || 0,
+            extracted_task_ref: state.extracted_task_ref || null,
+            ambiguity: state.ambiguity_payload?.type || null,
             error_code: (replyContent && replyContent.includes("SYSTEM_ERROR")) ? "TOOL_PARAM_ERROR" : undefined
           }
         });

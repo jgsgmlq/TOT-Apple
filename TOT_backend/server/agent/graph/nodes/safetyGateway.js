@@ -3,7 +3,8 @@
 const { z } = require("zod");
 const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
 const { renderMemoryBlock } = require("../shared/memoryBlock");
-const { getClient, endGeneration, maskPII, preview, promptHash, NOOP_TRACE } = require("../../../utils/tracer");
+const { getClient, endGeneration, endSpan, maskPII, preview, promptHash, NOOP_TRACE } = require("../../../utils/tracer");
+const { startNodeSpan } = require("../shared/spanHelper");
 const promptRegistry = require("../../../prompts/registry");
 const { routerModel } = require("../llm");
 
@@ -36,6 +37,7 @@ function correctMode(parsed) {
 }
 
 async function safetyGateway(state, config) {
+  const span = startNodeSpan(state, 'SafetyGateway', { userMessage: (state.userMessage || '').slice(0, 80) });
   console.log(`[SafetyGateway] 分析用户消息: ${(state.userMessage || '').slice(0, 80)}`);
 
   const memoryBlock = renderMemoryBlock(state.memory_snippets);
@@ -73,11 +75,12 @@ async function safetyGateway(state, config) {
 
     endGeneration(gen, {
       output: maskPII(preview(JSON.stringify(parsed))),
-      model: "deepseek-chat",
+      usage: parsed.usage_metadata || null,
+      model: parsed.response_metadata?.model_name || "deepseek-chat",
       metadata: { mode, ambiguity: ambiguity?.type || null },
     });
 
-    return {
+    const result = {
       mode,
       extracted_task_ref: parsed.extracted.task_ref,
       extracted_org_ref: parsed.extracted.org_ref,
@@ -89,6 +92,8 @@ async function safetyGateway(state, config) {
         candidates: ambiguity.candidates || [],
       } : null,
     };
+    endSpan(span, { output: `mode=${mode}`, metadata: { mode, ambiguity: ambiguity?.type || null } });
+    return result;
   } catch (err) {
     console.error(`[SafetyGateway] 失败，降级为 tool:`, err.message);
     endGeneration(gen, {
@@ -97,6 +102,7 @@ async function safetyGateway(state, config) {
       statusMessage: err.message,
       model: "deepseek-chat",
     });
+    endSpan(span, { output: `fallback:tool`, level: "WARNING", metadata: { error: err.message } });
     return {
       mode: "tool",
       extracted_task_ref: null,

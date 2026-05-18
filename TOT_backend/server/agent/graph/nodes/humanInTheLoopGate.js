@@ -3,16 +3,26 @@
 const { AIMessage, HumanMessage, ToolMessage } = require("@langchain/core/messages");
 const { interrupt } = require("@langchain/langgraph");
 const { startNodeSpan } = require('../shared/spanHelper');
-const { endSpan } = require('../../../utils/tracer');
+const { endSpan, getClient, NOOP_TRACE } = require('../../../utils/tracer');
 const { makeToolMessage } = require('../toolCallUtils');
 
 const humanInTheLoopGate = async (state) => {
-  const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status });
+  const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status, reason: state.interrupt_payload?.reason || null });
   const payload = state.interrupt_payload;
   console.log(`[HITL] 图执行流挂起，等待客户端发送 resume。 payload:`, payload);
 
+  // Trace event: interrupt sent
+  if (span && span !== NOOP_TRACE) {
+    try { span.event({ name: 'HITL_Interrupt', input: payload?.reason, metadata: { type: payload?.type } }); } catch {}
+  }
+
   const userResponse = interrupt(payload);
   console.log(`[HITL] 已收到用户选择/确认:`, userResponse);
+
+  // Trace event: resume received
+  if (span && span !== NOOP_TRACE) {
+    try { span.event({ name: 'HITL_Resume', input: JSON.stringify(userResponse).slice(0, 200) }); } catch {}
+  }
   const normalized = userResponse?.resumePayload || userResponse?.resume_payload || userResponse?.value || userResponse;
   const resumeType = normalized?.resume_type
     || (normalized?.selected_option_id?.startsWith('clarify_') ? 'intent_shift' : 'slot_fill');

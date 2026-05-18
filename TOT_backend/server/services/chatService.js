@@ -607,10 +607,13 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
       trace.update({
         output: finalMarkdown,
         metadata: {
-          selected_tier: finalState.selected_tier,
-          fc_steps_used: finalState.fc_super_step_count,
-          repair_attempts: finalState.fc_repair_attempts,
+          mode: finalState.mode,
           intent: finalState.intent,
+          fc_steps_used: finalState.fc_super_step_count,
+          escalate_count: finalState.escalate_count || 0,
+          extracted_task_ref: finalState.extracted_task_ref || null,
+          extracted_org_ref: finalState.extracted_org_ref || null,
+          ambiguity: finalState.ambiguity_payload?.type || null,
           tool_names: toolNames,
           tool_call_count: toolCallCount,
         }
@@ -804,10 +807,13 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       trace.update({
         output: finalMarkdown,
         metadata: {
-          selected_tier: finalState.selected_tier,
-          fc_steps_used: finalState.fc_super_step_count,
-          repair_attempts: finalState.fc_repair_attempts,
+          mode: finalState.mode,
           intent: finalState.intent,
+          fc_steps_used: finalState.fc_super_step_count,
+          escalate_count: finalState.escalate_count || 0,
+          extracted_task_ref: finalState.extracted_task_ref || null,
+          extracted_org_ref: finalState.extracted_org_ref || null,
+          ambiguity: finalState.ambiguity_payload?.type || null,
           tool_names: toolNames,
           tool_call_count: toolCallCount,
         }

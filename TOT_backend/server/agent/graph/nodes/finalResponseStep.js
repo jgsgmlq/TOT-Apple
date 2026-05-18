@@ -3,7 +3,7 @@
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { renderMemoryBlock } = require('../shared/memoryBlock');
-const { getClient, endGeneration, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
+const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
 const { renderToolResultsMarkdown } = require('../renderers');
 const { fcModel } = require('../llm');
@@ -33,6 +33,7 @@ const sanitizeUserFacingMarkdown = (content) => {
 const getFcModel = () => fcModel;
 
 const finalResponseStep = async (state, config) => {
+  const span = startNodeSpan(state, 'FinalResponseStep', { mode: state.mode, intent: state.intent });
   let response = state.reply_markdown || state.finalResponse || "";
 
   if (!response) {
@@ -87,6 +88,7 @@ const finalResponseStep = async (state, config) => {
   }
 
   response = sanitizeUserFacingMarkdown(response);
+  endSpan(span, { output: preview(response), metadata: { responseBytes: response.length } });
   return { finalResponse: response, reply_markdown: response, messages: [new AIMessage({ content: response })] };
 };
 
