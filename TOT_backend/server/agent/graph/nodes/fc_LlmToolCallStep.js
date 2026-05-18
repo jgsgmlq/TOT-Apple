@@ -6,9 +6,7 @@ const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const chatToolsService = require('../../../services/chatToolsService');
 const promptRegistry = require('../../../prompts/registry');
-const RoutingPolicy = require('../routingPolicy');
 const { decideChart } = require('../decideChart');
-const { FALLBACK_TOOL_NAMES } = require('./toolRetrieve');
 const { fcModel } = require('../llm');
 
 const getFcModel = () => fcModel;
@@ -28,7 +26,7 @@ const getLlmWithTools = (candidateTools = null) => {
   }));
 
   if (finalTools.length === 0) {
-    finalTools = chatToolsService.getToolSchemasByNames(FALLBACK_TOOL_NAMES).map((schema) => ({
+    finalTools = chatToolsService.getToolSchemasByNames().map((schema) => ({
       type: "function",
       function: {
         name: schema.function.name,
@@ -47,12 +45,12 @@ const fc_LlmToolCallStep = async (state, config) => {
 
   const client = getClient();
   const fcGen = client && traceId
-    ? client.generation({ traceId, name: 'FC_LLM_Tool_Decision', model: 'deepseek-chat', input: maskPII(preview(state.userMessage)), metadata: { step: state.fc_super_step_count, tier: state.selected_tier } })
+    ? client.generation({ traceId, name: 'FC_LLM_Tool_Decision', model: 'deepseek-chat', input: maskPII(preview(state.userMessage)), metadata: { step: state.fc_super_step_count } })
     : NOOP_TRACE.generation({ name: 'FC_LLM_Tool_Decision' });
 
   // 1. 步数控制
   const currentStep = state.fc_super_step_count;
-  const maxSteps = RoutingPolicy.tiers[state.selected_tier]?.max_super_steps || 3;
+  const maxSteps = Number(process.env.MAX_FC_ROUNDS) || 3;
 
   // 2. 组装历史消息 (openAI 格式严苛：System -> Human -> [AI -> Tool]* )
   // 必须保证最后一条是 HumanMessage 或 ToolMessage
@@ -95,7 +93,6 @@ const fc_LlmToolCallStep = async (state, config) => {
 
   const systemPrompt = promptRegistry.get('fc_agent', {
     toolNamespace: state.tool_namespace,
-    selectedTier: state.selected_tier,
     maxSteps,
     currentStep,
     chartContext,
