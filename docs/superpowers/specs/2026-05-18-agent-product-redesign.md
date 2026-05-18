@@ -170,25 +170,36 @@ interface ToolResult {
 
 ## 6. FinalResponse 结构化输出
 
-### 6.1 输出格式
+### 6.1 设计原则
+
+- **继承前端已有布局**：当前前端 `executive/index.vue:274-354` 已有一套成熟的回复卡片排版，新格式是对它的渐进升级，不是重写
+- **支持渐进解析**：前端 `parseReplyContentProgressive()` 能从半截 JSON 提取已完整字段，新格式需保持流式友好
+- **字段名对齐**：尽量复用前端现有的 `ReplyContent` 字段名，减少前端改动量
+
+### 6.2 输出 JSON schema
 
 ```json
 {
   "type": "structured_response",
-  "data": {
-    "summary": "iPhone 17 新品培训整体完成率 85%...",
-    "metrics": [
-      { "label": "总人数", "value": 1200 },
-      { "label": "完成率", "value": "85%" }
+
+  "overview": "iPhone 17 新品培训整体完成率 85%，华东大区表现最优。华南区完成率 72% 需关注。",
+
+  "keyNumbers": [
+    { "label": "总人数", "value": 1200, "unit": "人" },
+    { "label": "完成率", "value": "85", "unit": "%" },
+    { "label": "P0 预警", "value": "12", "unit": "人" }
+  ],
+
+  "table": {
+    "title": "各区域完成率排名",
+    "columns": ["区域", "完成率", "P0人数", "P1人数"],
+    "rows": [
+      ["华东", "85%", 12, 45],
+      ["华南", "72%", 28, 67]
     ],
-    "table": {
-      "columns": ["区域", "完成率", "预警人数"],
-      "rows": [
-        ["华东", "85%", 12],
-        ["华南", "72%", 45]
-      ]
-    }
+    "highlight": { "column": "完成率", "top": 3, "bottom": 3 }
   },
+
   "charts": [
     {
       "type": "bar",
@@ -196,48 +207,85 @@ interface ToolResult {
       "option": { /* ECharts option */ }
     }
   ],
+
   "insights": [
     { "level": "warning", "text": "华南区完成率 72%，低于整体 13 个百分点" },
-    { "level": "info", "text": "华东区预警人数最少，催办效果显著" }
+    { "level": "warning", "text": "华南区 P0 人数 28 人，距截止只剩 24h" },
+    { "level": "info", "text": "华东区预警催办转化率 62%，催办效果显著" }
   ],
+
   "suggestions": [
     "查看华南区未完成人员名单",
     "对比上周同期完成率趋势"
-  ]
+  ],
+
+  "statisticsProvenance": {
+    "统计口径": "按任务发放覆盖的总人数为分母",
+    "数据截止": "2026-05-18 14:30",
+    "预警定义": "P0=距ddl 24h, P1=距ddl 48h, P2=距ddl 一半时间"
+  },
+
+  "forecastDisclaimer": null
 }
 ```
 
-### 6.2 FinalResponseStep 逻辑
+### 6.3 字段与前端对齐
+
+| 字段 | 旧 ReplyContent | 新格式 | 前端改动 |
+|------|----------------|--------|---------|
+| 摘要 | `overview` | `overview` | **无** |
+| 指标卡片 | `keyNumbers: {label,value,unit}[]` | `keyNumbers` | **无** |
+| 表格 | 无 | `table` ← **新增** | 加 `TableSection` 组件 |
+| 图表 | `visualizations` (裸数组) | `charts: {type,title,option}[]` | 改名 + 加 type/title |
+| 洞察 | `attentionPoints` (平铺 string[]) | `insights: {level,text}[]` | 原样可用 level 加图标 |
+| 追问 | `followUpSuggestions` | `suggestions` | 极小 |
+| 溯源 | `statisticsProvenance` | `statisticsProvenance` | **无** |
+| 免责 | `forecastDisclaimer` | `forecastDisclaimer` | **无** |
+
+### 6.4 排版层级（前端渲染顺序）
+
+借鉴当前前端 `executive/index.vue` 的卡片布局：
+
+```
+Section 1: thinking           ← 思考过程（可折叠，流式时实时显示）
+Section 2: overview           ← 顶部摘要段落（先给结论）
+Section 3: charts[]           ← 图表（对比/趋势/漏斗，AiChartRenderer）
+Section 4: keyNumbers[]       ← 指标卡片行（label/value/unit 键值对）
+Section 5: table              ← 表格块（排名/明细/名单，新增）
+Section 6: insights[]         ← 洞察列表（warning=红色警示, info=蓝色补充）
+Section 7: suggestions[]      ← 追问建议按钮（可点击直接发送）
+Section 8: statisticsProvenance ← 数据溯源（折叠展示）
+```
+
+### 6.5 FinalResponseStep 逻辑
 
 ```
 FC 循环结束 → toolResults
     │
     ▼
-如果 mode=deny / chat_only：直接生成文案
+如果 mode=deny：直接生成拒绝文案
+如果 mode=chat_only：调用闲聊 LLM 生成自然回复
     │
     ▼
 如果 mode=tool：
-  调用 FinalResponse LLM（不带工具，structured output）：
-    输入：原始问题 + toolResults
-    输出：JSON { data, charts, insights, suggestions }
+  调用 FinalResponse LLM（不带工具，withStructuredOutput）：
+    输入：原始问题 + toolResults + extracted 实体
+    输出：严格按 6.2 schema 的 JSON
     │
     ▼
-  前端收到 structured_response，分区域渲染：
-    data.summary   → 顶部摘要文字
-    data.metrics   → 指标卡片
-    data.table     → 表格组件
-    charts[].option → ECharts 图表
-    insights[]     → 洞察列表（带 warning/info 图标）
-    suggestions[]  → 追问建议按钮
+  落库 content 字段（JSON string），前端渲染分 8 个 section
 ```
 
-### 6.3 System Prompt 要点
+### 6.6 FinalResponse LLM System Prompt 要点
 
-- 严格输出上述 JSON schema，不要额外文字
-- metrics 提取 3-5 个最关键的 KPI
-- charts 只生成有意义的图表（对比/趋势/分布），不画无意义图
-- insights 区分 level: warning（需要关注）/ info（补充信息）
-- suggestions 给出 2-3 个自然的下一个问题
+- 严格输出指定 JSON schema，不要额外文字或 markdown 包裹
+- `overview`：1-3 句话给结论，先回答用户最关心的问题
+- `keyNumbers`：提取 3-6 个最关键的 KPI，label 中文简洁
+- `table`：有排名/对比/名单数据时使用，无则 null
+- `charts`：有意义的对比/趋势/分布才生成，不画无意义图
+- `insights`：每条带 `level`（warning=需要管理者关注, info=补充信息），避免空洞的泛泛而谈
+- `suggestions`：2-3 个自然的下一个问题，引导用户继续探索
+- `statisticsProvenance`：说明口径定义和截止时间，帮助用户理解数据
 
 ## 7. state.js 变更
 
