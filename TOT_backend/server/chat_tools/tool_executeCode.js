@@ -5,7 +5,13 @@
  * 代码解释器工具：支持在沙盒中运行 Python (Pandas/Matplotlib) 进行高阶数据分析。
  */
 
-const { Sandbox } = require('@e2b/code-interpreter');
+let Sandbox = null;
+try {
+  Sandbox = require('@e2b/code-interpreter').Sandbox;
+} catch {
+  // @e2b/code-interpreter is ESM-only in v2+; CommonJS require fails.
+  // The tool will gracefully return CONFIGURATION_ERROR at call time.
+}
 const logger = require('../utils/logger');
 
 const schema = {
@@ -47,12 +53,13 @@ const meta = {
 async function handler(args, regionScope) {
   const { code, description, dataRef } = args;
   
-  if (!process.env.E2B_API_KEY) {
-    logger.warn('e2b_api_key_missing', { tool: 'executeCode' });
+  if (!Sandbox || !process.env.E2B_API_KEY) {
+    const reason = !Sandbox ? '@e2b/code-interpreter 包未安装（ESM-only，CommonJS 不兼容）' : 'E2B_API_KEY 未配置';
+    logger.warn('e2b_unavailable', { tool: 'executeCode', reason });
     return {
       success: false,
       errorCode: 'CONFIGURATION_ERROR',
-      message: '系统未配置 E2B_API_KEY，无法启动代码沙盒。',
+      message: `代码沙盒不可用：${reason}`,
       appliedParams: args
     };
   }
