@@ -12,11 +12,8 @@ const { fcModel } = require('../llm');
 const getFcModel = () => fcModel;
 
 // 动态将 chatToolsService 中所有的 Schema 转换为 LangChain bindTools 可用的格式
-const getLlmWithTools = (candidateTools = null) => {
-  const wantedTools = Array.isArray(candidateTools) && candidateTools.length > 0
-    ? candidateTools
-    : chatToolsService.getRegisteredToolNames();
-  let finalTools = chatToolsService.getToolSchemasByNames(wantedTools).map((schema) => ({
+const getLlmWithTools = () => {
+  const finalTools = chatToolsService.getToolSchemasByNames().map((schema) => ({
     type: "function",
     function: {
       name: schema.function.name,
@@ -24,17 +21,6 @@ const getLlmWithTools = (candidateTools = null) => {
       parameters: schema.function.parameters
     }
   }));
-
-  if (finalTools.length === 0) {
-    finalTools = chatToolsService.getToolSchemasByNames().map((schema) => ({
-      type: "function",
-      function: {
-        name: schema.function.name,
-        description: schema.function.description,
-        parameters: schema.function.parameters
-      }
-    }));
-  }
 
   return finalTools.length > 0 ? getFcModel().bindTools(finalTools) : getFcModel();
 };
@@ -91,11 +77,17 @@ const fc_LlmToolCallStep = async (state, config) => {
     ? `\n\nAVAILABLE CHART DATA (you may include this in your response by writing an \`\`\`echarts code block — you can modify it freely):\n\`\`\`echarts\n${JSON.stringify(suggestedChart, null, 2)}\n\`\`\`\n`
     : '';
 
+  const entityBlock = [
+    state.extracted_task_ref ? `已知任务: ${state.extracted_task_ref}` : '',
+    state.extracted_org_ref ? `已知组织: ${state.extracted_org_ref} (${state.extracted_org_type || '未知类型'})` : '',
+    state.extracted_time_ref ? `已知时间: ${state.extracted_time_ref}` : '',
+  ].filter(Boolean).join('\n');
+
   const systemPrompt = promptRegistry.get('fc_agent', {
-    toolNamespace: state.tool_namespace,
     maxSteps,
     currentStep,
     chartContext,
+    entityBlock: entityBlock || '（无预提取实体）',
     memoryBlock: renderMemoryBlock(state.memory_snippets),
   });
 
@@ -115,14 +107,14 @@ const fc_LlmToolCallStep = async (state, config) => {
 
   // 4. 根据步数决定是否绑定工具
   const isOverCap = currentStep >= maxSteps;
-  const llm = isOverCap ? getFcModel() : getLlmWithTools(state.candidateTools);
+  const llm = isOverCap ? getFcModel() : getLlmWithTools();
   const signal = config?.signal;
 
   if (isOverCap) {
     messagesToSend.push(new SystemMessage("CRITICAL NOTICE: You have reached the maximum tool call budget. You MUST summarize the final answer based ONLY on the data already collected in the chat history. DO NOT request any more tools. DO NOT use JSON tool calls. DO NOT output any <｜｜DSML｜｜> tags. Just write a summary to the user."));
   }
 
-  console.log(`[fc_LlmToolCallStep] step=${currentStep}/${maxSteps} isOverCap=${isOverCap} candidateTools=${(state.candidateTools||[]).join(',')} → 调用 DeepSeek (stream)...`);
+  console.log(`[fc_LlmToolCallStep] step=${currentStep}/${maxSteps} isOverCap=${isOverCap} → 调用 DeepSeek (stream)...`);
   const fcInvokeT0 = Date.now();
   try {
     const FC_TIMEOUT_MS = Number(process.env.FC_LLM_TIMEOUT_MS || 60000);

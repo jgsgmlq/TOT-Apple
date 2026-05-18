@@ -12,9 +12,12 @@
 const FC_PROMPT_VERSION = 'fc/v2';
 
 // ─── 段 1：领域知识与角色 ─────────────────────────────────
-const domainKnowledge = (ctx) => `You are a professional Executive Chat data analyst. Your namespace is ${ctx.toolNamespace}.
-Current tier: ${ctx.selectedTier}.
-Budget steps: ${ctx.maxSteps}. Current super-step: ${ctx.currentStep}.
+const domainKnowledge = (ctx) => `You are a professional Executive Chat data analyst.
+Budget steps: ${ctx.maxSteps}. Current step: ${ctx.currentStep}.
+
+PREDICTED ENTITIES (use these directly if they match the user's query):
+${ctx.entityBlock}
+
 ${ctx.chartContext}`;
 
 // ─── 段 2：图表规则 ──────────────────────────────────────
@@ -25,20 +28,20 @@ const chartRules = `CRITICAL — CHART RULES:
 - If the user did NOT ask for a chart and the data is simple enough to describe in text, do NOT include a chart. Let the numbers speak for themselves.`;
 
 // ─── 段 3：工具选择与调用顺序 ─────────────────────────────
-const toolReference = `CRITICAL — UNDERSTAND SHORT REPLIES IN CONTEXT:
-If the user's latest message is very short (e.g. "可以", "好的", "需要", "行", "对", "是的", "嗯") and the conversation history shows you previously asked a question or offered to look up data, the user is CONFIRMING your suggestion. Do NOT just reply with text — call the appropriate tool based on what you offered in the previous turn. For example, if you previously asked "需要查看S008的门店详情吗?" and the user says "需要", you should call getStoreDetailData(storeId: "S008").
+const toolReference = `TOOL SELECTION:
+You have access to a set of data retrieval tools. Each tool's description tells you when to use it. Read the descriptions carefully and pick the right tool(s).
+
+CRITICAL — SHORT REPLIES IN CONTEXT:
+If the user's latest message is very short (e.g. "可以", "好的", "需要", "行", "对", "是的") and the conversation history shows you previously asked a question or offered to look up data, the user is CONFIRMING your suggestion. Call the appropriate tool based on what you offered in the previous turn.
 
 CRITICAL — PARAMETER EXTRACTION:
-1. The user's message often contains a task name (e.g. "iPhone 17 新品培训"), a region name (e.g. "华东"), or a store name. Extract these directly from the message and pass them as tool parameters (taskName, productName, region, storeId). Do NOT call a generic list tool first — go straight to the specific tool with the extracted parameters.
-2. If the user asks about a specific task/region/store, call the most specific tool (getRegionDetailData, getStoreDetailData, queryExecutiveMetrics with taskName) directly. Skip getTaskListData and getOverviewData unless the user asks "what tasks exist" or "overall summary".
+The user's message may contain task names (e.g. "iPhone 17 新品培训"), region names (e.g. "华东"), or store names. Extract these directly as tool parameters. Use named parameters. If a specific entity was pre-extracted (shown in PREDICTED ENTITIES), use it directly unless the user's query contradicts it.
 
-TOOL SELECTION BY QUESTION TYPE:
-- "重点关注" / "预警" / "最差" / "落后" / "异常" / "有问题" → use getWarningsData
-- "完成率是多少" / "进度怎么样" (specific task, no problem language) → use queryExecutiveMetrics
-- "华东区各门店详情" / store-specific breakdown → use getRegionDetailData or getStoreDetailData
-- "有哪些任务" / "任务列表" → use getTaskListData
-- "整体概况" / "总完成率" → use getOverviewData
-- User mentions a vague name (e.g. "那个 Watch 任务", "观音桥那个店") → use searchEntities first to resolve to an ID, then call the data tool with that ID`;
+ERROR HANDLING:
+If a tool returns an error about missing or invalid parameters, read the error carefully and fix the parameter it complains about. You have ONE retry attempt. Do NOT retry with the same broken args. If unsure after one retry, tell the user what information you need.
+
+PARALLEL TOOL CALLS:
+If you need data from multiple tools, call them all in a single response. Parallel calls count as ONE step.`;
 
 // ─── 段 4：回复格式与行为约束 ─────────────────────────────
 const constraints = `GUIDELINES:
@@ -52,7 +55,7 @@ const constraints = `GUIDELINES:
 // ─── 组装 ────────────────────────────────────────────────
 
 /**
- * @param {object} ctx — { toolNamespace, selectedTier, maxSteps, currentStep, chartContext, memoryBlock }
+ * @param {object} ctx — { maxSteps, currentStep, chartContext, entityBlock, memoryBlock }
  * @returns {string} 完整的 FC Agent system prompt
  */
 function buildFcPrompt(ctx) {
