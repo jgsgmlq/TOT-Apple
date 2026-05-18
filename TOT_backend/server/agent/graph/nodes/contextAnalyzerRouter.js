@@ -1,5 +1,6 @@
 'use strict';
 
+const { z } = require("zod");
 const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { renderMemoryBlock } = require('../shared/memoryBlock');
@@ -9,11 +10,17 @@ const RoutingPolicy = require('../routingPolicy');
 const decisionRules = require('../decisionRules');
 const { routerModel } = require('../llm');
 
+const RouterOutput = z.object({
+  mode: z.enum(["chat_only", "tool_action", "deny"]),
+  intent: z.string(),
+  entities: z.record(z.any()).optional().default({}),
+  entities_confidence: z.record(z.number()).optional().default({}),
+  complexity_score: z.number().optional(),
+  risk_flags: z.boolean().optional(),
+});
+
 const contextAnalyzerRouter = async (state, config) => {
   console.log(`[Router] 正在请求意图分类模型... 输入: ${state.userMessage}`);
-
-  // 如果是补槽恢复(slot_fill)，并且之前已经有了明确的意图和实体，可以考虑跳过重查
-  // 但对于意图变更(intent_shift)，必须强制重查。这里简化为每次 Router 都重查，以覆盖 intent_shift 的强制安全检查要求
 
   const memoryBlock = renderMemoryBlock(state.memory_snippets);
   const schemaDefinition = promptRegistry.get('router') + `\n\n${memoryBlock}`;
@@ -24,7 +31,6 @@ const contextAnalyzerRouter = async (state, config) => {
     ? client.generation({ traceId, name: 'Router_Intent_Classification', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { promptVersion: promptRegistry.version('router'), promptHash: promptHash(schemaDefinition) } })
     : NOOP_TRACE.generation({ name: 'Router_Intent_Classification' });
 
-  // 注入最近对话历史，让 Router 理解"可以""好的"等简短确认语的上下文
   const recentHistory = (state.messages || []).filter(m => {
     const t = m._getType ? m._getType() : (m.role || '');
     return t === 'human' || t === 'ai';
@@ -38,25 +44,18 @@ const contextAnalyzerRouter = async (state, config) => {
     new HumanMessage(state.userMessage)
   ];
 
-  let rawJson = "";
   try {
     const invokeConfig = { signal: config?.signal };
-
-    const res = await routerModel.invoke(messages, invokeConfig);
-    rawJson = res.content.trim();
-
-    if (rawJson.startsWith('```json')) {
-      rawJson = rawJson.replace(/^```json/, '').replace(/```$/, '').trim();
-    } else if (rawJson.startsWith('```')) {
-      rawJson = rawJson.replace(/^```/, '').replace(/```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(rawJson);
+    const structuredModel = routerModel.withStructuredOutput(RouterOutput, {
+      name: "router_output",
+      method: "json_mode",
+    });
+    const parsed = await structuredModel.invoke(messages, invokeConfig);
     console.log(`[Router] 解析结果:`, parsed);
 
     endGeneration(gen, {
-      output: maskPII(preview(rawJson)),
-      usage: res.usage_metadata || res.usage || null,
+      output: maskPII(preview(JSON.stringify(parsed))),
+      usage: parsed.usage_metadata || null,
       model: 'deepseek-chat',
       metadata: { mode: parsed.mode, intent: parsed.intent },
     });
@@ -79,9 +78,9 @@ const contextAnalyzerRouter = async (state, config) => {
       meta_fallback_count: state.meta_fallback_count
     };
   } catch (err) {
-    console.error(`[Router] 意图解析失败，降级为默认安全流转. Raw: ${rawJson}`, err);
+    console.error(`[Router] 意图解析失败，降级为默认安全流转.`, err);
     endGeneration(gen, {
-      output: maskPII(preview(rawJson || '')),
+      output: maskPII(preview(err.message)),
       level: 'ERROR',
       statusMessage: err.message,
       model: 'deepseek-chat',
