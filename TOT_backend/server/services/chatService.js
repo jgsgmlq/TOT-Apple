@@ -5,8 +5,7 @@ const { db, getDb }    = require('../db');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
 const logger = require('../utils/logger');
 const { compressAssistantContent } = require('../utils/chatHistoryCompress');
-const chatAgentRunner = require('./chatAgentRunner');
-const { AGENT_MODE } = chatAgentRunner;
+const AGENT_MODE = 'langgraph';
 const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, startSseKeepalive, createSseSender } = require('../utils/sseResponse');
@@ -408,11 +407,7 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
   const startMs = Date.now();
   let result;
   try {
-    result = await chatAgentRunner.run(userMessage, history, regionScope, {
-      sessionId,
-      userId: session.user_id,
-      trace,
-    });
+    throw new Error('sendMessage: use sendMessageStreamLangGraph instead');
   } catch (err) {
     trace.update({
       output: maskPII(err.message || String(err)),
@@ -968,33 +963,7 @@ async function sendMessageStream(sessionId, userMessage, userId, req, res) {
   const startMs = Date.now();
   let result;
   try {
-    // Emergency fix: keep production behavior on legacy chatAgentRunner.
-    result = await chatAgentRunner.run(userMessage, history, regionScope, {
-      sessionId,
-      userId: session.user_id,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          wrappedSend('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-            toolName:
-              phase === 'tool_start' || phase === 'tool_end'
-                ? meta?.text || undefined
-                : undefined,
-          });
-        },
-      },
-    });
+    throw new Error('sendMessageStream: use sendMessageStreamLangGraph instead');
   } catch (err) {
     if (err.name === 'AbortError') {
       logger.info('chat_stream_aborted', { sessionId });
@@ -1333,32 +1302,7 @@ async function regenerateLastAssistantStream(sessionId, messageId, userId, req, 
   const startMs = Date.now();
   let result;
   try {
-    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
-      sessionId,
-      userId,
-      signal: abortController.signal,
-      trace,
-      streamFormatCallbacks: {
-        onDelta: (text, meta) => {
-          const phase = meta?.phase || 'content';
-          if (phase === 'reasoning') sseReasoningCount += 1;
-          else if (phase === 'tool_start') sseToolStartCount += 1;
-          if (typeof text === 'string' && text) {
-            sseDeltaCount += 1;
-            sseDeltaBytes += text.length;
-          }
-          send('delta', {
-            text,
-            phase,
-            reasoningLevel: meta?.reasoningLevel || undefined,
-            toolName:
-              phase === 'tool_start' || phase === 'tool_end'
-                ? meta?.text || undefined
-                : undefined,
-          });
-        },
-      },
-    });
+    throw new Error('regenerateLastAssistantStream: use regenerateLastAssistantStreamLangGraph instead');
 
     const responseTime = Date.now() - startMs;
     const now = formatNowSqliteLocal();
@@ -1536,11 +1480,7 @@ async function regenerateLastAssistant(sessionId, messageId, userId, req = {}) {
   const startMs = Date.now();
   let result;
   try {
-    result = await chatAgentRunner.run(userPrompt, history, regionScope, {
-      sessionId,
-      userId,
-      trace,
-    });
+    throw new Error('regenerateLastAssistant: use regenerateLastAssistantStreamLangGraph instead');
   } catch (err) {
     trace.update({
       output: maskPII(err.message || String(err)),
