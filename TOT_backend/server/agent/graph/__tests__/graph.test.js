@@ -16,18 +16,16 @@ describe("Executive Chat Graph", () => {
     expect(typeof app.invoke).toBe("function");
   });
 
-  test("all 13 node modules load independently", () => {
+  test("all active node modules load independently", () => {
     const nodes = [
       "loadContext",
-      "contextAnalyzerRouter",
-      "toolRetrieve",
+      "safetyGateway",
       "fc_CheckSteps",
       "fc_LlmToolCallStep",
       "fc_CheckDuplicate",
-      "fc_ValidateParams",
-      "fc_ParamRepair",
       "fc_ExecuteTool",
       "fc_MergeToolResults",
+      "fc_Escalate",
       "humanInTheLoopGate",
       "finalResponseStep",
       "persistAndEmit",

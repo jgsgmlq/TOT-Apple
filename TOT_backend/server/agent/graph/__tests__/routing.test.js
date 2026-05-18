@@ -1,171 +1,89 @@
 'use strict';
 
 const {
-  routeAfterRouter,
+  routeAfterSafetyGateway,
   routeAfterFcCheckSteps,
   routeAfterFcLlm,
-  routeAfterValidateParams,
-  routeAfterMerge,
-  routeAfterHumanInTheLoop,
   routeAfterCheckDuplicate,
+  routeAfterExecute,
+  routeAfterMerge,
 } = require("../graph");
 
-// Mock message with _getType
 const aiMsg = (content, opts = {}) => ({
   _getType: () => "ai",
   content,
   tool_calls: opts.tool_calls || [],
   ...opts,
 });
-const toolMsg = (content) => ({
-  _getType: () => "tool",
-  content,
-});
 
-describe("Route functions (pure unit tests)", () => {
-  // ─── routeAfterRouter ──────────────────────────────────────
-
-  describe("routeAfterRouter", () => {
-    test("deny mode → deny (to FinalResponseStep)", () => {
-      expect(routeAfterRouter({ mode: "deny" })).toBe("deny");
+describe("Route functions (v2)", () => {
+  describe("routeAfterSafetyGateway", () => {
+    test("deny → FinalResponseStep", () => {
+      expect(routeAfterSafetyGateway({ mode: "deny" })).toBe("deny");
     });
-
-    test("chat_only + very short message (<5 chars) → chat_only", () => {
-      expect(routeAfterRouter({
-        mode: "chat_only",
-        userMessage: "你好",
-        messages: [],
-      })).toBe("chat_only");
+    test("chat → FinalResponseStep", () => {
+      expect(routeAfterSafetyGateway({ mode: "chat", ambiguity_payload: null })).toBe("chat");
     });
-
-    test("chat_only + medium message (5-9 chars) without data context → chat_only", () => {
-      expect(routeAfterRouter({
-        mode: "chat_only",
-        userMessage: "能帮我吗",
-        messages: [],
-      })).toBe("chat_only");
+    test("tool + ambiguity → HITL", () => {
+      expect(routeAfterSafetyGateway({
+        mode: "tool", ambiguity_payload: { type: "missing_task_ref", question: "哪个任务？" }
+      })).toBe("hitl");
     });
-
-    test("chat_only + medium message with data context → tool_action", () => {
-      expect(routeAfterRouter({
-        mode: "chat_only",
-        userMessage: "能帮我查吗",
-        messages: [aiMsg("完成率: | 80% | 20% |")],
-      })).toBe("tool_action");
-    });
-
-    test("chat_only + long message (>=10 chars) → tool_action", () => {
-      expect(routeAfterRouter({
-        mode: "chat_only",
-        userMessage: "华东区的完成率是多少",
-        messages: [],
-      })).toBe("tool_action");
-    });
-
-    test("default (no deny, no chat_only) → tool_action", () => {
-      expect(routeAfterRouter({
-        mode: "tool_action",
-        userMessage: "查询数据",
-        messages: [],
-      })).toBe("tool_action");
+    test("tool + no ambiguity → FC", () => {
+      expect(routeAfterSafetyGateway({ mode: "tool", ambiguity_payload: null })).toBe("fc");
     });
   });
 
-  // ─── routeAfterFcLlm ───────────────────────────────────────
+  describe("routeAfterFcCheckSteps", () => {
+    test("under max steps → fc_LlmToolCallStep", () => {
+      expect(routeAfterFcCheckSteps({ fc_super_step_count: 1 })).toBe("fc_LlmToolCallStep");
+    });
+    test("at max default (3) → FinalResponseStep", () => {
+      expect(routeAfterFcCheckSteps({ fc_super_step_count: 3 })).toBe("FinalResponseStep");
+    });
+    test("respects MAX_FC_ROUNDS env var when set to 5", () => {
+      process.env.MAX_FC_ROUNDS = "5";
+      expect(routeAfterFcCheckSteps({ fc_super_step_count: 4 })).toBe("fc_LlmToolCallStep");
+      expect(routeAfterFcCheckSteps({ fc_super_step_count: 5 })).toBe("FinalResponseStep");
+      delete process.env.MAX_FC_ROUNDS;
+    });
+  });
 
   describe("routeAfterFcLlm", () => {
-    test("last message has tool_calls → fc_CheckDuplicate", () => {
+    test("has tool_calls → fc_CheckDuplicate", () => {
       expect(routeAfterFcLlm({
-        messages: [aiMsg("", { tool_calls: [{ name: "getOverviewData" }] })],
+        messages: [aiMsg("", { tool_calls: [{ name: "query_metric" }] })]
       })).toBe("fc_CheckDuplicate");
     });
-
-    test("last message has no tool_calls → FinalResponseStep", () => {
-      expect(routeAfterFcLlm({
-        messages: [aiMsg("这是回复内容")],
-      })).toBe("FinalResponseStep");
-    });
-
-    test("empty messages → FinalResponseStep", () => {
-      expect(routeAfterFcLlm({ messages: [] })).toBe("FinalResponseStep");
+    test("no tool_calls → FinalResponseStep", () => {
+      expect(routeAfterFcLlm({ messages: [aiMsg("总结回复")] })).toBe("FinalResponseStep");
     });
   });
-
-  // ─── routeAfterCheckDuplicate ──────────────────────────────
 
   describe("routeAfterCheckDuplicate", () => {
-    test("fc_next_action merge → fc_MergeToolResults", () => {
-      expect(routeAfterCheckDuplicate({ fc_next_action: "merge" }))
-        .toBe("fc_MergeToolResults");
+    test("pending calls → execute", () => {
+      expect(routeAfterCheckDuplicate({ pending_tool_calls: [{ id: "1" }] })).toBe("fc_ExecuteTool");
     });
-
-    test("fc_next_action validate → fc_ValidateParams", () => {
-      expect(routeAfterCheckDuplicate({ fc_next_action: "validate" }))
-        .toBe("fc_ValidateParams");
-    });
-
-    test("default → fc_ValidateParams", () => {
-      expect(routeAfterCheckDuplicate({})).toBe("fc_ValidateParams");
+    test("no pending → merge", () => {
+      expect(routeAfterCheckDuplicate({ pending_tool_calls: [] })).toBe("fc_MergeToolResults");
     });
   });
 
-  // ─── routeAfterValidateParams ──────────────────────────────
-
-  describe("routeAfterValidateParams", () => {
-    test("finalize → FinalResponseStep", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "finalize" })).toBe("FinalResponseStep");
+  describe("routeAfterExecute", () => {
+    test("escalate_count < 1 → merge", () => {
+      expect(routeAfterExecute({ escalate_count: 0 })).toBe("fc_MergeToolResults");
     });
-
-    test("hitl → HumanInTheLoopGate", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "hitl" })).toBe("HumanInTheLoopGate");
-    });
-
-    test("repair → fc_ParamRepair", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "repair" })).toBe("fc_ParamRepair");
-    });
-
-    test("execute → fc_ExecuteTool", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "execute" })).toBe("fc_ExecuteTool");
-    });
-
-    test("re_route → ContextAnalyzerRouter", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "re_route" })).toBe("ContextAnalyzerRouter");
-    });
-
-    test("unknown action → FinalResponseStep (safe fallback)", () => {
-      expect(routeAfterValidateParams({ fc_next_action: "unknown" })).toBe("FinalResponseStep");
+    test("escalate_count >= 1 → escalate", () => {
+      expect(routeAfterExecute({ escalate_count: 1 })).toBe("fc_Escalate");
     });
   });
-
-  // ─── routeAfterMerge ───────────────────────────────────────
 
   describe("routeAfterMerge", () => {
-    test("finalize → FinalResponseStep", () => {
-      expect(routeAfterMerge({ fc_next_action: "finalize" })).toBe("FinalResponseStep");
+    test("under max → back to CheckSteps", () => {
+      expect(routeAfterMerge({ fc_super_step_count: 1 })).toBe("fc_CheckSteps");
     });
-
-    test("default → fc_CheckSteps (loop back)", () => {
-      expect(routeAfterMerge({ fc_next_action: "" })).toBe("fc_CheckSteps");
-    });
-  });
-
-  // ─── routeAfterHumanInTheLoop ──────────────────────────────
-
-  describe("routeAfterHumanInTheLoop", () => {
-    test("re_route → ContextAnalyzerRouter", () => {
-      expect(routeAfterHumanInTheLoop({ fc_next_action: "re_route" })).toBe("ContextAnalyzerRouter");
-    });
-
-    test("validate → fc_ValidateParams", () => {
-      expect(routeAfterHumanInTheLoop({ fc_next_action: "validate" })).toBe("fc_ValidateParams");
-    });
-
-    test("finalize → FinalResponseStep", () => {
-      expect(routeAfterHumanInTheLoop({ fc_next_action: "finalize" })).toBe("FinalResponseStep");
-    });
-
-    test("default → fc_CheckSteps", () => {
-      expect(routeAfterHumanInTheLoop({ fc_next_action: "" })).toBe("fc_CheckSteps");
+    test("at max → FinalResponseStep", () => {
+      expect(routeAfterMerge({ fc_super_step_count: 3 })).toBe("FinalResponseStep");
     });
   });
 });
