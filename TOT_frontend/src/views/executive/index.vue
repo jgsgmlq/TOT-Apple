@@ -179,39 +179,6 @@
 
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <n-spin :show="isLoadingHistory" style="min-height: 120px">
-            <div v-if="pendingClarification" class="clarify-panel">
-              <div class="clarify-title">{{ pendingClarification.data?.prompt || pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
-              <div class="clarify-options" v-if="(pendingClarification.data?.options || pendingClarification.options || []).length">
-                <n-button
-                  v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
-                  :key="opt.id"
-                  size="small"
-                  round
-                  type="primary"
-                  ghost
-                  @click="sendClarificationResponse(pendingClarification!, { action: 'select_option', option: opt })"
-                >
-                  {{ opt.label }}
-                </n-button>
-              </div>
-              <div
-                class="clarify-input"
-                v-if="(pendingClarification.data?.type || pendingClarification.type) === 'input' || (pendingClarification.data?.reason || pendingClarification.reason) === 'missing_required_param'"
-              >
-                <n-input
-                  v-model:value="clarifyInputDraft"
-                  size="small"
-                  placeholder="请直接输入要补充的内容"
-                  @keyup.enter="submitClarifyInput"
-                />
-                <n-button size="small" type="primary" @click="submitClarifyInput" :disabled="!clarifyInputDraft.trim()">
-                  提交
-                </n-button>
-              </div>
-              <div class="clarify-actions">
-                <n-button size="small" tertiary @click="cancelClarification">取消</n-button>
-              </div>
-            </div>
             <div v-if="messages.length === 0 && !isLoadingHistory" class="empty-chat">
               <h3>Hi! {{ displayName }} 👋✨</h3>
               <p>作为你的智能助手，我可以为你答疑解惑～</p>
@@ -290,7 +257,7 @@
 
                   <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
-                    v-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
+                    v-else-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
                     :content="msg.streamContent || msg.content"
                     :thinking="msg.thinking"
                     :streaming="!msg.done"
@@ -408,39 +375,7 @@
         </div>
 
         <div class="chat-footer">
-          <div v-if="pendingClarification" class="clarify-panel">
-            <div class="clarify-title">需要进一步确认</div>
-            <div class="clarify-text">{{ pendingClarification.data?.prompt || pendingClarification.message || pendingClarification.prompt || '请选择一个选项继续' }}</div>
-            <div class="clarify-options" v-if="(pendingClarification.data?.options || pendingClarification.options || []).length">
-              <n-button
-                v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
-                :key="opt.id"
-                type="primary"
-                secondary
-                round
-                @click="sendClarificationResponse(pendingClarification!, { action: 'select_option', option: opt })"
-              >
-                {{ opt.label }}
-              </n-button>
-            </div>
-            <div
-              class="clarify-input"
-              v-if="(pendingClarification.data?.type || pendingClarification.type) === 'input' || (pendingClarification.data?.reason || pendingClarification.reason) === 'missing_required_param'"
-            >
-              <n-input
-                v-model:value="clarifyInputDraft"
-                size="small"
-                placeholder="请直接输入要补充的内容"
-                @keyup.enter="submitClarifyInput"
-              />
-              <n-button size="small" type="primary" @click="submitClarifyInput" :disabled="!clarifyInputDraft.trim()">
-                提交
-              </n-button>
-            </div>
-            <div class="clarify-actions">
-              <n-button size="small" tertiary @click="cancelClarification">取消</n-button>
-            </div>
-          </div>
+          
           <div class="input-wrapper flex items-end gap-2">
             <n-input
               v-model:value="inputValue"
