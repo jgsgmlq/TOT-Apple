@@ -13,7 +13,8 @@ const getFcModel = () => fcModel;
 
 // 动态将 chatToolsService 中所有的 Schema 转换为 LangChain bindTools 可用的格式
 const getLlmWithTools = () => {
-  const finalTools = chatToolsService.getToolSchemasByNames().map((schema) => ({
+  const allToolNames = chatToolsService.getRegisteredToolNames();
+  const finalTools = chatToolsService.getToolSchemasByNames(allToolNames).map((schema) => ({
     type: "function",
     function: {
       name: schema.function.name,

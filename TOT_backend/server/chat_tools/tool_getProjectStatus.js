@@ -12,7 +12,7 @@ module.exports = {
       parameters: { type: 'object', properties: {} }
     }
   },
-  meta: { enabled: true, scopePolicy: 'regional_scoped' },
+  meta: { enabled: true, requiredRole: ['executive', 'central', 'admin'], scopePolicy: 'regional_scoped' },
   handler: async (args, regionScope) => {
     const filter = buildRegionFilter(regionScope);
 

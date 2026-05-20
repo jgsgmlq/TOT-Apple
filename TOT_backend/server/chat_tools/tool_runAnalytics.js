@@ -34,7 +34,7 @@ module.exports = {
   },
   meta: {
     enabled: true,
-    requiredRole: ['executive'],
+    requiredRole: ['executive', 'central', 'admin'],
     scopePolicy: 'regional_scoped',
     timeoutMs: 8000,
   },

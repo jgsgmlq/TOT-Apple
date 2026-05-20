@@ -18,7 +18,7 @@ module.exports = {
       }
     }
   },
-  meta: { enabled: true, scopePolicy: 'regional_scoped' },
+  meta: { enabled: true, requiredRole: ['executive', 'central', 'admin'], scopePolicy: 'regional_scoped' },
   handler: async (args, regionScope) => {
     let { storeId, taskId } = args;
 

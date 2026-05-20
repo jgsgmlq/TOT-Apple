@@ -20,7 +20,7 @@ module.exports = {
       }
     }
   },
-  meta: { enabled: true, scopePolicy: 'regional_scoped' },
+  meta: { enabled: true, requiredRole: ['executive', 'central', 'admin'], scopePolicy: 'regional_scoped' },
   handler: async (args, regionScope) => {
     const region = (args.region || '').trim();
     const taskId = args.taskId || null;
