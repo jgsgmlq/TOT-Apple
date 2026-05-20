@@ -238,7 +238,7 @@ export function createRouterGuards(router: Router) {
             return;
           }
         }
-        if (userStore.info.role === 'executive') {
+        if (userStore.info.role === 'executive' || userStore.info.role === 'central' || userStore.info.role === 'admin') {
           next('/executive');
           return;
         }
@@ -265,7 +265,7 @@ export function createRouterGuards(router: Router) {
           return;
         }
       }
-      if (userStore.info.role !== 'executive') {
+      if (userStore.info.role !== 'executive' && userStore.info.role !== 'central' && userStore.info.role !== 'admin') {
         storage.clear();
         userStore.setToken('');
         next({ path: '/executive/login', replace: true });
@@ -317,7 +317,7 @@ export function createRouterGuards(router: Router) {
       return;
     }
 
-    if (userStore.info.role === 'executive' && !to.path.startsWith('/executive')) {
+    if ((userStore.info.role === 'executive' || userStore.info.role === 'central' || userStore.info.role === 'admin') && !to.path.startsWith('/executive')) {
       next('/executive');
       return;
     }

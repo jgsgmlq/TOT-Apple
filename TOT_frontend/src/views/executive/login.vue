@@ -106,7 +106,7 @@
           return;
         }
         const role = userStore.getUserInfo?.role;
-        if (role === 'executive') {
+        if (role === 'executive' || role === 'central' || role === 'admin') {
           const redirect = (route.query.redirect as string) || '/executive';
           router.replace(decodeURIComponent(redirect));
           return;

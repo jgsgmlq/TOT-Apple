@@ -221,7 +221,7 @@ function mountChatRoutes(prefix, roles) {
 }
 
 // Executive Chat（区域/高管）
-mountChatRoutes('executive', ['executive']);
+mountChatRoutes('executive', ['executive', 'central', 'admin']);
 
 // 总部端看板机器人：与 E-chat 同一套 chatService / 数据表，路径前缀为 dashboard
 mountChatRoutes('dashboard', ['central', 'admin']);
