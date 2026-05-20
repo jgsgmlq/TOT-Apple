@@ -39,7 +39,7 @@ const finalResponseStep = async (state, config) => {
   if (!response) {
     if (state.mode === "deny") {
       response = "### ⚠️ 请求被拒绝\n\n抱歉，Executive Chat 目前仅支持**只读查询**。我无法帮您执行修改数据、发送催办通知或直接处理业务流等操作。\n\n💡 *建议您可以在系统中手动处理，或询问我当前的数据完成情况。*";
-    } else if ((state.mode === "chat_only" || state.intent === "chat_only") && Object.keys(state.toolResults || {}).length === 0) {
+    } else if ((state.mode === "chat" || state.mode === "chat_only" || state.intent === "chat_only") && Object.keys(state.toolResults || {}).length === 0) {
       console.log(`[FinalResponseStep] 检测到纯聊天意图，调用大模型进行回复...`);
       const emitter = config?.configurable?.sseEmitter;
       const llm = getFcModel();
