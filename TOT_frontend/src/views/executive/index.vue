@@ -2092,3 +2092,15 @@
     width: fit-content;
   }
 </style>
+
+<style>
+.clarify-panel { margin-bottom: 8px !important; padding: 14px 16px !important; border: 1px solid #e0e0e0 !important; background: #fff !important; border-radius: 12px !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; }
+.clarify-title { font-size: 14px !important; font-weight: 600 !important; color: #333 !important; margin-bottom: 12px !important; }
+.clarify-cards { display: flex !important; flex-direction: column !important; gap: 8px !important; margin-bottom: 12px !important; }
+.clarify-card { padding: 10px 14px !important; border: 1px solid #e0e0e0 !important; border-radius: 8px !important; cursor: pointer !important; background: #f8f9fa !important; transition: all 0.15s !important; }
+.clarify-card:hover { border-color: #667eea !important; background: #f0f2ff !important; }
+.clarify-card-title { font-size: 13px !important; font-weight: 600 !important; }
+.clarify-card-meta { font-size: 11px !important; color: #888 !important; margin-top: 4px !important; display: flex !important; gap: 12px !important; }
+.clarify-actions { display: flex !important; justify-content: flex-end !important; }
+</style>
+
