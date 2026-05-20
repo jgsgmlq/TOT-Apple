@@ -48,9 +48,6 @@ export function feedExecStreamDelta(
       state.contentBuf = '';
     }
     if (deltaData.toolName) {
-      state.reasoningBuf += `${state.reasoningBuf.trim() ? '\n\n' : ''}调用工具：${
-        deltaData.toolName
-      }`;
       state.activeToolName = deltaData.toolName;
     }
     state.wasReasoning = false;

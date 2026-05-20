@@ -213,9 +213,7 @@ const finalResponseStep = async (state, config) => {
 
           response = JSON.stringify(parsed);
 
-          if (emitter && typeof emitter.handleLLMNewToken === 'function') {
-            emitter.handleLLMNewToken(response, { isReasoning: false });
-          }
+          // 不通过 SSE delta 推送 JSON——结构化内容统一由 done 事件的 replyContent 传递
           endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
         } catch (err) {
           console.error('[FinalResponseStep] 结构化输出失败，降级到渲染器:', err.message);
