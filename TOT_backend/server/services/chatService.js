@@ -1,7 +1,9 @@
 'use strict';
 
 const { nanoid }       = require('nanoid');
-const { db, getDb }    = require('../db');
+const { getDb }    = require('../db');
+const chatCrud = require('../modules/dashboard/crud/chatCrud');
+const mysql = require('../modules/common/db/mysql');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
 const logger = require('../utils/logger');
 const { compressAssistantContent } = require('../utils/chatHistoryCompress');
@@ -21,19 +23,8 @@ function resolveRegionScope(reqUser) {
   if (!roles || !Array.isArray(roles) || roles.length === 0) {
     throw Object.assign(new Error('User roles are missing or invalid'), { status: 403, code: 'AUTH_005' });
   }
-  if (reqUser.executive_rtm) {
-    return { type: 'rtm', rtm: reqUser.executive_rtm, regions: null, userRoles: roles };
-  }
-  if (reqUser.executive_regions) {
-    try {
-      const regions = JSON.parse(reqUser.executive_regions);
-      if (!Array.isArray(regions) || regions.length === 0) {
-        throw Object.assign(new Error('executive_regions must be a non-empty array for regional scope'), { status: 400, code: 'AUTH_003' });
-      }
-      return { type: 'regional', regions, rtm: null, userRoles: roles };
-    } catch (e) {
-      if (e.code === 'AUTH_003') throw e;
-    }
+  if (reqUser.rtm) {
+    return { type: 'rtm', rtm: reqUser.rtm, regions: null, userRoles: roles };
   }
   return { type: 'national', regions: null, rtm: null, userRoles: roles };
 }
@@ -215,8 +206,8 @@ function storageContentFromAgentResult(result) {
   }
 }
 
-function buildExampleQuestions() {
-  const task = db.get("SELECT title FROM tasks WHERE status = 'dispatched' ORDER BY created_at DESC LIMIT 1");
+async function buildExampleQuestions() {
+  const task = await chatCrud.getLatestDispatchedTask();
   const taskRef = task ? `"${task.title}"` : '最近的';
   return [
     `${taskRef}培训完成率是多少？`,
@@ -226,28 +217,30 @@ function buildExampleQuestions() {
 }
 
 // ─── createSession ────────────────────────────────────────────────────────────
-function createSession(userId, reqUser, ipAddress) {
-  const user = db.get('SELECT id, executive_regions, executive_rtm FROM users WHERE id = ?', [userId]);
+async function createSession(userId, reqUser, ipAddress) {
+  const user = await chatCrud.getUserById(userId);
   if (!user) throw Object.assign(new Error('User not found'), { status: 404, code: 'CHAT_002' });
 
   // 必须将原始请求中解析出的 roles 合并到 DB 查询出的 user 对象中
   const combinedUser = { ...user, roles: reqUser?.roles || ['executive'] };
   const regionScope = resolveRegionScope(combinedUser);
   const sessionId = nanoid();
-  const now = formatNowSqliteLocal();
 
-  db.run(
-    `INSERT INTO chat_sessions (id, user_id, role_scope, regions, rtm, ip_address, created_at, last_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, userId, regionScope.type, regionScope.regions ? JSON.stringify(regionScope.regions) : null, regionScope.rtm || null, ipAddress || null, now, now]
-  );
+  await chatCrud.createSession({
+    id: sessionId,
+    userId,
+    entryType: 'executive',
+    scopeType: regionScope.type,
+    scopeRegionsJson: regionScope.regions ? JSON.stringify(regionScope.regions) : null,
+    scopeRtm: regionScope.rtm || null,
+    ipAddress: ipAddress || null,
+  });
 
-  return { sessionId, contextId: sessionId, exampleQuestions: buildExampleQuestions() };
+  return { sessionId, contextId: sessionId, exampleQuestions: await buildExampleQuestions() };
 }
 
 async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {}, trace = null) {
   const { clarificationResponse, messageId } = reqBody;
-  const now = formatNowSqliteLocal();
   const persistSpan = trace && typeof trace.span === 'function'
     ? trace.span({
         name: 'Persist_User_Message',
@@ -259,7 +252,7 @@ async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {
   try {
     // 1. 幂等检查
     if (messageId) {
-      const existing = db.get('SELECT id FROM chat_messages WHERE client_message_id = ?', [messageId]);
+      const existing = await chatCrud.getMessageByClientId(messageId);
       if (existing) {
         const err = new Error('Duplicate messageId');
         err.status = 409;
@@ -276,16 +269,18 @@ async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {
     if (clarificationResponse && clarificationResponse.toolCallId) {
       // Phase 1.2: 先插入 tool 消息，再插入用于展示的 user 消息，保持 FC 序列连贯
       const toolMsgId = nanoid();
-      db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [toolMsgId, sessionId, 'tool', JSON.stringify(clarificationResponse.result), clarificationResponse.toolCallId, now]
-      );
+      await chatCrud.insertMessage({
+        id: toolMsgId, sessionId, role: 'tool',
+        contentText: JSON.stringify(clarificationResponse.result),
+        toolCallId: clarificationResponse.toolCallId,
+      });
 
       const userMsgId = nanoid();
-      db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
-      );
+      await chatCrud.insertMessage({
+        id: userMsgId, sessionId, role: 'user',
+        contentText: userMessage,
+        clientMessageId: messageId || null,
+      });
       endSpan(persistSpan, {
         output: 'clarify_turn',
         metadata: { status: 'ok', wroteRows: 2, kind: 'clarification', durationMs: Date.now() - t0 },
@@ -295,10 +290,11 @@ async function handleIncomingMessage(sessionId, userMessage, userId, reqBody = {
 
     // 普通消息
     const userMsgId = nanoid();
-    db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, client_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [userMsgId, sessionId, 'user', userMessage, messageId || null, now]
-    );
+    await chatCrud.insertMessage({
+      id: userMsgId, sessionId, role: 'user',
+      contentText: userMessage,
+      clientMessageId: messageId || null,
+    });
     endSpan(persistSpan, {
       output: 'ok',
       metadata: { status: 'ok', wroteRows: 1, kind: 'user', durationMs: Date.now() - t0 },
@@ -370,23 +366,19 @@ function handleSseClientAbort(err, ctx, { trace, sessionId, loggerTag }) {
   }
   return false;
 }
-function loadFormattedHistory(sessionId, trace = null) {
+async function loadFormattedHistory(sessionId, trace = null) {
   const loadSpan = trace && typeof trace.span === 'function'
     ? trace.span({ name: 'Load_History', input: { sessionId } })
     : null;
   const t0 = Date.now();
   try {
     const limit = Number(process.env.CHAT_HISTORY_MAX_ROWS || 100);
-    const rows = db.all(
-      `SELECT role, content, tool_calls, tool_call_id, client_message_id FROM chat_messages
-       WHERE session_id = ?
-       ORDER BY created_at ASC, rowid ASC LIMIT ?`,
-      [sessionId, limit]
-    );
-    const formatted = rows.map((r) => ({
+    const rows = await chatCrud.getMessages(sessionId);
+    const limited = rows.slice(0, limit);
+    const formatted = limited.map((r) => ({
       role: r.role,
-      content: r.role === 'assistant' ? compressAssistantContent(r.content) : r.content,
-      tool_calls: r.tool_calls ? JSON.parse(r.tool_calls) : undefined,
+      content: r.role === 'assistant' ? compressAssistantContent(r.content_text) : r.content_text,
+      tool_calls: r.tool_calls_json ? JSON.parse(r.tool_calls_json) : undefined,
       tool_call_id: r.tool_call_id || undefined,
       client_message_id: r.client_message_id || undefined,
     }));
@@ -429,14 +421,14 @@ function historyToLangChainMessages(rows) {
 
 // ─── sendMessage (Non-stream) ──────────────────────────────────────────────────
 async function sendMessage(sessionId, userMessage, userId, req = {}) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  const session = await chatCrud.getSession(sessionId);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
   if (Number(session.user_id) !== Number(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
 
   const regionScope = {
-    type: session.role_scope,
-    regions: parseSessionRegionsStored(session.regions, sessionId),
-    rtm: session.rtm || null,
+    type: session.scope_type,
+    regions: parseSessionRegionsStored(session.scope_regions_json, sessionId),
+    rtm: session.scope_rtm || null,
     userRoles: req?.user?.roles || ['executive']
   };
 
@@ -455,7 +447,7 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
   });
 
   await handleIncomingMessage(sessionId, userMessage, userId, req.body || {}, trace);
-  const history = loadFormattedHistory(sessionId, trace);
+  const history = await loadFormattedHistory(sessionId, trace);
 
   const startMs = Date.now();
   let result;
@@ -485,11 +477,13 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
   });
   const persistT0 = Date.now();
   try {
-    db.run(
-      'INSERT INTO chat_messages (id, session_id, role, content, intent_type, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [assistMsgId, sessionId, 'assistant', finalContent, result._intentType || null, toolCallsStr, now]
-    );
-    db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    await chatCrud.insertMessage({
+      id: assistMsgId, sessionId, role: 'assistant',
+      contentText: finalContent,
+      intentType: result._intentType || null,
+      toolCallsJson: toolCallsStr,
+    });
+    await chatCrud.updateSessionActive(sessionId);
     endSpan(persistAsstSpan, {
       output: 'ok',
       metadata: {
@@ -542,7 +536,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     throw Object.assign(new Error('threadId 与 sessionId 不匹配'), { status: 400, code: 'CHAT_011' });
   }
 
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  const session = await chatCrud.getSession(sessionId);
   if (!session) {
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
     return;
@@ -553,9 +547,9 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
   }
 
   const regionScope = {
-    type: session.role_scope,
-    regions: parseSessionRegionsStored(session.regions, sessionId),
-    rtm: session.rtm || null,
+    type: session.scope_type,
+    regions: parseSessionRegionsStored(session.scope_regions_json, sessionId),
+    rtm: session.scope_rtm || null,
     userRoles: req?.user?.roles || ['executive']
   };
 
@@ -701,7 +695,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
 
 // ─── sendMessageStreamLangGraph (T1 Phase 2 调试专用) ────────────────────────────────
 async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, res, options = {}) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  const session = await chatCrud.getSession(sessionId);
   if (!session) {
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
     return;
@@ -712,9 +706,9 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
   }
 
   const regionScope = {
-    type: session.role_scope,
-    regions: parseSessionRegionsStored(session.regions, sessionId),
-    rtm: session.rtm || null,
+    type: session.scope_type,
+    regions: parseSessionRegionsStored(session.scope_regions_json, sessionId),
+    rtm: session.scope_rtm || null,
     userRoles: req?.user?.roles || ['executive']
   };
 
@@ -773,20 +767,11 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
        });
     }
 
-    const historyRows = loadFormattedHistory(sessionId, trace);
+    const historyRows = await loadFormattedHistory(sessionId, trace);
     const historyMessages = historyToLangChainMessages(historyRows);
 
-    const lastAssistant = db.get(
-      `SELECT intent_type, entities_json FROM chat_messages
-       WHERE session_id = ? AND role = 'assistant'
-       ORDER BY created_at DESC LIMIT 1`,
-      [sessionId]
-    );
-
-    let prevEntities = {};
-    if (lastAssistant?.entities_json) {
-      try { prevEntities = JSON.parse(lastAssistant.entities_json); } catch {}
-    }
+    const allSessionMessages = await chatCrud.getMessages(sessionId);
+    const lastAssistantRow = [...allSessionMessages].reverse().find(m => m.role === 'assistant') || null;
 
     const inputState = {
       userMessage,
@@ -794,8 +779,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       userId: session.user_id.toString(),
       regionScope,
       messages: historyMessages,
-      prevIntent: lastAssistant?.intent_type || '',
-      prevEntities
+      prevIntent: lastAssistantRow?.intent_type || '',
+      prevEntities: {}
     };
 
     const threadId = `${sessionId}:${nanoid()}`;
@@ -900,25 +885,33 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
   }
 }
 // ─── getHistory ───────────────────────────────────────────────────────────────
-function getHistory(sessionId, pageNum, pageSize) {
+async function getHistory(sessionId, pageNum, pageSize) {
   const offset = (pageNum - 1) * pageSize;
-  const totalRow = db.get('SELECT COUNT(*) AS total FROM chat_messages WHERE session_id = ?', [sessionId]);
-  const total = totalRow ? totalRow.total : 0;
+  const total = await chatCrud.getMessageCount(sessionId);
 
-  const rows = db.all(
-    `SELECT cm.id, cm.role, cm.content, cm.intent_type, cm.created_at, cmf.feedback_type
-     FROM chat_messages cm
-     LEFT JOIN chat_message_feedback cmf ON cm.id = cmf.message_id AND cmf.user_id = (SELECT user_id FROM chat_sessions WHERE id = ?)
-     WHERE cm.session_id = ?
-     ORDER BY cm.created_at ASC, cm.rowid ASC LIMIT ? OFFSET ?`,
-    [sessionId, sessionId, pageSize, offset]
-  );
+  const allMessages = await chatCrud.getMessages(sessionId);
+  const pageMessages = allMessages.slice(offset, offset + pageSize);
 
-  const historyList = rows.map((r) => {
+  // 查询消息反馈
+  const sessionInfo = await chatCrud.getSession(sessionId);
+  let feedbackMap = {};
+  if (sessionInfo && pageMessages.length > 0) {
+    const messageIds = pageMessages.map(m => m.id);
+    const placeholders = messageIds.map(() => '?').join(',');
+    const feedbackRows = await mysql.all(
+      `SELECT message_id, feedback_type FROM chat_message_feedback WHERE message_id IN (${placeholders}) AND user_id = ?`,
+      [...messageIds, sessionInfo.user_id]
+    );
+    for (const fb of feedbackRows) {
+      feedbackMap[fb.message_id] = fb.feedback_type;
+    }
+  }
+
+  const historyList = pageMessages.map((r) => {
     let replyContent = null;
     let markdownContent = null;
     if (r.role === 'assistant') {
-      const normalizedContent = typeof r.content === 'string' ? r.content : '';
+      const normalizedContent = typeof r.content_text === 'string' ? r.content_text : '';
       markdownContent = normalizedContent || null;
       try {
         const parsed = JSON.parse(normalizedContent);
@@ -947,11 +940,11 @@ function getHistory(sessionId, pageNum, pageSize) {
     return {
       messageId: r.id,
       role: r.role,
-      content: markdownContent || r.content,
+      content: markdownContent || r.content_text,
       markdownContent,
       replyContent,
       intentType: r.intent_type,
-      userFeedback: r.role === 'assistant' ? (r.feedback_type || null) : undefined,
+      userFeedback: r.role === 'assistant' ? (feedbackMap[r.id] || null) : undefined,
       timestamp: r.created_at,
     };
   });
@@ -963,20 +956,15 @@ function getHistory(sessionId, pageNum, pageSize) {
 }
 
 // ─── setMessageFeedback ───────────────────────────────────────────────────────
-function setMessageFeedback(sessionId, messageId, userId, feedback) {
-  const msg = db.get('SELECT id, role, session_id FROM chat_messages WHERE id = ?', [messageId]);
+async function setMessageFeedback(sessionId, messageId, userId, feedback) {
+  const msg = await chatCrud.getMessageById(messageId);
   if (!msg || msg.session_id !== sessionId) throw Object.assign(new Error('Message not found'), { status: 404, code: 'CHAT_007' });
   if (msg.role !== 'assistant') throw Object.assign(new Error('Can only provide feedback for assistant messages'), { status: 400, code: 'CHAT_006' });
 
-  const now = formatNowSqliteLocal();
   if (feedback === 'none') {
-    db.run('DELETE FROM chat_message_feedback WHERE message_id = ? AND user_id = ?', [messageId, userId]);
+    await chatCrud.deleteFeedback(messageId, userId);
   } else if (feedback === 'like' || feedback === 'dislike') {
-    db.run(
-      `INSERT INTO chat_message_feedback (id, message_id, user_id, feedback_type, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(message_id, user_id) DO UPDATE SET feedback_type = excluded.feedback_type, updated_at = excluded.updated_at`,
-      [nanoid(), messageId, userId, feedback, now, now]
-    );
+    await chatCrud.insertFeedback({ id: nanoid(), messageId, userId, feedbackType: feedback });
   } else {
     throw Object.assign(new Error('Invalid feedback type'), { status: 400, code: 'CHAT_006' });
   }
@@ -984,7 +972,7 @@ function setMessageFeedback(sessionId, messageId, userId, feedback) {
 
 // ─── regenerateLastAssistantStreamLangGraph ──────────────────────────────────
 async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, userId, req, res) {
-  const session = db.get('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  const session = await chatCrud.getSession(sessionId);
   if (!session) {
     res.status(404).json({ code: 404, message: 'Session not found', errorCode: 'CHAT_003' });
     return;
@@ -994,14 +982,14 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     return;
   }
 
-  const lastMsgRow = db.get('SELECT id, role FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', [sessionId]);
-  if (!lastMsgRow || lastMsgRow.id !== messageId || lastMsgRow.role !== 'assistant') {
+  const lastMsgRow = await chatCrud.getLastAssistantMessage(sessionId);
+  if (!lastMsgRow || lastMsgRow.id !== messageId) {
     res.status(400).json({ code: 400, message: 'Can only regenerate the last assistant message', errorCode: 'CHAT_008' });
     return;
   }
 
   // 获取上一个 user message
-  const chronological = loadFormattedHistory(sessionId, NOOP_TRACE);
+  const chronological = await loadFormattedHistory(sessionId, NOOP_TRACE);
   if (chronological.length < 2) {
     res.status(400).json({ code: 400, message: 'Not enough history to regenerate', errorCode: 'CHAT_008' });
     return;
@@ -1020,51 +1008,39 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     return;
   }
 
-  // 1. 删除旧消息（包括对应的 tool 消息）
-  // 注：项目自定义 db.transaction(fn) 会同步执行并返回结果，不能再 () 调用一次。
-  // 之前写成 `const doDelete = db.transaction(...); doDelete();` 直接 TypeError: doDelete is not a function。
-  //
-  // 同时为 sendMessageStreamLangGraph 失败做兜底：先快照旧消息与 feedback，
+  // 1. 删除旧消息：先快照，再软删除（chatCrud 使用 deleted_at 标记）。
   // 流式失败时尝试还原，避免出现「旧消息已删 + 新消息没生成 + 用户彻底丢失原回复」。
-  const oldMessageRow = db.get('SELECT * FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-  const oldFeedbackRows = db.all
-    ? db.all('SELECT * FROM chat_message_feedback WHERE message_id = ?', [messageId])
-    : [];
+  const allMsgs = await chatCrud.getMessages(sessionId);
+  const oldMessageRow = allMsgs.find(m => m.id === messageId) || null;
+  const oldFeedbackRows = await mysql.all(
+    'SELECT * FROM chat_message_feedback WHERE message_id = ?',
+    [messageId]
+  );
 
-  db.transaction(() => {
-    db.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
-    db.run('DELETE FROM chat_messages WHERE id = ? AND session_id = ?', [messageId, sessionId]);
-  });
+  await chatCrud.deleteMessage(messageId);
+  await mysql.run('DELETE FROM chat_message_feedback WHERE message_id = ?', [messageId]);
 
-  const restoreOldMessage = () => {
+  const restoreOldMessage = async () => {
     if (!oldMessageRow) return;
     try {
-      db.transaction(() => {
-        db.run(
-          `INSERT OR IGNORE INTO chat_messages
-            (id, session_id, role, content, intent_type, tool_calls, tool_call_id, client_message_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            oldMessageRow.id,
-            oldMessageRow.session_id,
-            oldMessageRow.role,
-            oldMessageRow.content,
-            oldMessageRow.intent_type,
-            oldMessageRow.tool_calls,
-            oldMessageRow.tool_call_id,
-            oldMessageRow.client_message_id,
-            oldMessageRow.created_at,
-          ]
-        );
-        for (const fb of oldFeedbackRows || []) {
-          db.run(
-            `INSERT OR IGNORE INTO chat_message_feedback
-              (id, message_id, user_id, feedback_type, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [fb.id, fb.message_id, fb.user_id, fb.feedback_type, fb.created_at, fb.updated_at]
-          );
-        }
+      await chatCrud.insertMessage({
+        id: oldMessageRow.id,
+        sessionId: oldMessageRow.session_id,
+        role: oldMessageRow.role,
+        contentText: oldMessageRow.content_text,
+        intentType: oldMessageRow.intent_type,
+        toolCallsJson: oldMessageRow.tool_calls_json,
+        toolCallId: oldMessageRow.tool_call_id,
+        clientMessageId: oldMessageRow.client_message_id,
       });
+      for (const fb of oldFeedbackRows || []) {
+        await chatCrud.insertFeedback({
+          id: fb.id,
+          messageId: fb.message_id,
+          userId: fb.user_id,
+          feedbackType: fb.feedback_type,
+        });
+      }
       logger.warn('regenerate_old_message_restored', { sessionId, messageId });
     } catch (restoreErr) {
       logger.error('regenerate_restore_failed', {
@@ -1083,21 +1059,16 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     });
   } catch (err) {
     // 流式重新生成失败 —— 还原旧消息，保证用户至少能继续看到之前的回复并再次重试。
-    restoreOldMessage();
+    await restoreOldMessage();
     throw err;
   }
 }
 
 
 
-function deleteSessionById(sessionId) {
-  const database = getDb();
-  const runDelete = database.transaction(() => {
-    database.prepare('DELETE FROM chat_message_feedback WHERE message_id IN (SELECT id FROM chat_messages WHERE session_id = ?)').run(sessionId);
-    database.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(sessionId);
-    database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
-  });
-  runDelete();
+async function deleteSessionById(sessionId) {
+  await chatCrud.softDeleteSessionMessages(sessionId);
+  await chatCrud.softDeleteSession(sessionId);
   chatSessionStateService.clearSession(sessionId);
 }
 
