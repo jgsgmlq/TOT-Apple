@@ -746,7 +746,28 @@
         },
         { signal: abortController.value?.signal }
       );
-      applySendSuccess(sessionId.value, result, thinkingSnapshot);
+      // 内联 applySendSuccess 逻辑（避免跨函数作用域的 hoisting 问题）
+      const sid = sessionId.value;
+      const lastIdx = messages.value.length - 1;
+      const lastMsg2 = messages.value[lastIdx];
+      if (lastMsg2) {
+        lastMsg2.id = result.messageId;
+        lastMsg2.done = true;
+        lastMsg2.activeToolName = undefined;
+        lastMsg2.content = result.markdownContent || formatReplyContentText(result.replyContent);
+        lastMsg2.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
+        lastMsg2.replyContent = result.replyContent;
+      }
+      const titleShort2 = question.length > 28 ? `${question.slice(0, 28)}…` : question;
+      const existing2 = historyList.value.find((h) => h.id === sid);
+      if (existing2) {
+        if (existing2.title === '新对话' || !existing2.title.trim()) {
+          existing2.title = titleShort2;
+        }
+      } else {
+        historyList.value.unshift({ id: sid, title: titleShort2 });
+      }
+      persistSidebar();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[resume error]', msg, e);
