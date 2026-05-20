@@ -758,7 +758,7 @@
         lastMsg2.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg2.replyContent = result.replyContent;
       }
-      const titleShort2 = question.length > 28 ? `${question.slice(0, 28)}…` : question;
+      const titleShort2 = (typeof resolvedValue === 'string' ? resolvedValue : String(resolvedValue || '查询')).slice(0, 28);
       const existing2 = historyList.value.find((h) => h.id === sid);
       if (existing2) {
         if (existing2.title === '新对话' || !existing2.title.trim()) {
