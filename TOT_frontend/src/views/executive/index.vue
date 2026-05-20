@@ -748,7 +748,9 @@
       );
       applySendSuccess(sessionId.value, result, thinkingSnapshot);
     } catch (e) {
-      message.error('恢复对话失败，请重试');
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[resume error]', msg, e);
+      message.error('恢复对话失败: ' + msg);
     }
     return resumePayload;
   };
