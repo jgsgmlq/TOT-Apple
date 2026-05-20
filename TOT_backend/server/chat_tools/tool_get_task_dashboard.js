@@ -1,6 +1,7 @@
 'use strict';
 
 const queryEngine = require('../modules/dashboard/services/queryEngine');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
 
 module.exports = {
   schema: {
@@ -24,14 +25,26 @@ module.exports = {
     timeoutMs: 15000
   },
   handler: async (args, regionScope) => {
-    const taskId = (args.task_id || '').trim();
-    if (!taskId) {
+    const rawId = (args.task_id || '').trim();
+    if (!rawId) {
       return {
-        success: false,
-        needDisambiguation: true,
-        reason: 'missing_task_id',
-        message: '请提供要查询的任务名称或 ID。'
+        success: false, needDisambiguation: true,
+        reason: 'missing_task_id', message: '请提供要查询的任务名称或 ID。'
       };
+    }
+
+    // 模糊搜索：先全词，再逐词缩短
+    let taskId = rawId;
+    let matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
+    if (matches.length === 0) {
+      const words = rawId.split(/[\s，,、]+/).filter(w => w.length > 1);
+      for (let i = words.length - 1; i >= 1; i--) {
+        matches = await mysqlCrud.searchTasks(words.slice(0, i).join(' ').toLowerCase());
+        if (matches.length > 0) break;
+      }
+    }
+    if (matches.length > 0) {
+      taskId = matches[0].task_publish_id;
     }
 
     const [overview, funnel, alerts] = await Promise.all([
@@ -41,30 +54,24 @@ module.exports = {
     ]);
 
     if (!overview || overview.totalAssignments === 0) {
-      return { success: false, errorCode: 'NO_DATA', message: `未找到任务 ${taskId} 的数据。` };
+      return { success: false, errorCode: 'NO_DATA', message: `未找到任务 ${rawId} 的数据。` };
     }
 
     return {
       success: true,
       data: {
-        task_id: taskId,
+        task_id: taskId, task_name: rawId,
         overall_metrics: {
           total_count: overview.totalAssignments,
-          sent_count: overview.pushUserCount,
-          delivered_count: overview.deliveredCount || 0,
-          learning_count: overview.learningCount || 0,
           completed_count: overview.completedCount,
           uncompleted_count: overview.pendingCount + (overview.inProgressCount || 0),
-          sent_rate: 1.0,
-          delivered_rate: overview.deliveredRate || overview.taskReachRate || 0,
-          learning_rate: overview.learningRate || overview.taskReadRate || 0,
-          completion_rate: overview.completionRate
+          completion_rate: overview.completionRate,
+          learning_rate: overview.taskReadRate || overview.taskReachRate || 0
         },
-        completion_funnel: funnel || null,
-        alerts: alerts ? alerts.stages || alerts : null,
-        alert_funnel: alerts || null
+        completion_funnel: funnel ? { stages: funnel.stages } : null,
+        alerts: alerts || null
       },
-      summary: `任务完成率 ${overview.completionRate}%，已完成 ${overview.completedCount}/${overview.totalAssignments} 人`,
+      summary: `任务完成率 ${overview.completionRate}%，已 ${overview.completedCount}/${overview.totalAssignments} 人`,
       uiHints: { preferredView: 'dashboard' }
     };
   }

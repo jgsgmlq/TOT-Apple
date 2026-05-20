@@ -1,6 +1,7 @@
 'use strict';
 
 const queryEngine = require('../modules/dashboard/services/queryEngine');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
 
 module.exports = {
   schema: {
@@ -12,8 +13,8 @@ module.exports = {
         type: 'object',
         required: ['task_id', 'mode'],
         properties: {
-          task_id: { type: 'string', description: '任务标识' },
-          mode: { type: 'string', enum: ['completion', 'learning'], description: 'completion 返回完成率趋势，learning 返回学习率趋势' },
+          task_id: { type: 'string', description: '任务标识（名称模糊匹配或 ID 精确匹配）' },
+          mode: { type: 'string', enum: ['completion', 'learning'], description: 'completion 完成率趋势，learning 学习率趋势' },
           granularity: { type: 'string', enum: ['day', 'week'], description: '粒度，默认 day' }
         }
       }
@@ -26,19 +27,20 @@ module.exports = {
     timeoutMs: 10000
   },
   handler: async (args, regionScope) => {
-    const taskId = (args.task_id || '').trim();
-    if (!taskId) {
+    const rawId = (args.task_id || '').trim();
+    if (!rawId) {
       return { success: false, errorCode: 'MISSING_PARAM', message: '参数 task_id 是必填的' };
     }
 
-    const qType = args.mode === 'completion' ? 'daily' : 'daily';
-    const trendData = await queryEngine.getTrendBoardData({ taskId, type: qType });
+    let taskId = rawId;
+    const matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
+    if (matches.length > 0) taskId = matches[0].task_publish_id;
 
+    const trendData = await queryEngine.getTrendBoardData({ taskId, type: 'daily' });
     return {
       success: true,
       data: {
-        task_id: taskId,
-        mode: args.mode,
+        task_id: taskId, mode: args.mode,
         granularity: args.granularity || 'day',
         timeline: Array.isArray(trendData) ? trendData : (trendData?.trendData || [])
       }

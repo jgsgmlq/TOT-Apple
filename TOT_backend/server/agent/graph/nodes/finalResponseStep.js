@@ -23,11 +23,7 @@ const sanitizeUserFacingMarkdown = (content) => {
     return '抱歉，查询过程中遇到了问题。请尝试缩小查询范围，或换个方式重新描述您的问题。';
   }
 
-  const hasInternalMarkers =
-    text.includes('执行已达到复杂度上限') ||
-    text.includes('工具查询片段');
-  if (!hasInternalMarkers) return text;
-  return '我已完成查询并提取了核心数据。若需更精确结果，可指定时间范围、大区或门店，我会继续为您细化。';
+  return text;
 };
 
 const getFcModel = () => fcModel;
@@ -83,7 +79,51 @@ const finalResponseStep = async (state, config) => {
         response = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。";
       }
     } else {
-      response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || "抱歉，我暂时无法回答这个问题，或者执行过程中遇到了错误。请稍后重试或尝试缩小查询范围。";
+      // tool mode: FC loop 结束，有工具查询结果。调用 LLM 生成总结
+      const toolResultKeys = Object.keys(state.toolResults || {});
+      if (toolResultKeys.length > 0) {
+        console.log('[FinalResponseStep] 工具查询完成，调用 LLM 生成总结...');
+        const emitter = config?.configurable?.sseEmitter;
+        const llm = getFcModel();
+        const traceId = config?.configurable?.traceId;
+        const client = getClient();
+        const gen = client && traceId
+          ? client.generation({ traceId, name: 'FinalResponse_Summary', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
+          : NOOP_TRACE.generation({ name: 'FinalResponse_Summary' });
+
+        const resultsText = JSON.stringify(state.toolResults, null, 2).slice(0, 4000);
+        const summaryPrompt = `你是培训助手。根据以下数据回答用户问题。用简洁的列表或表格呈现关键数据。
+
+用户问题: ${state.userMessage}
+
+工具查询结果:
+${resultsText}
+
+请直接回答用户问题，突出关键数字。`;
+
+        try {
+          const stream = await llm.stream([
+            new SystemMessage(summaryPrompt),
+            new HumanMessage('请根据上面的数据回答用户问题')
+          ]);
+          response = '';
+          for await (const chunk of stream) {
+            if (chunk.content) {
+              response += chunk.content;
+              if (emitter && typeof emitter.handleLLMNewToken === 'function') {
+                emitter.handleLLMNewToken(chunk.content, { isReasoning: false });
+              }
+            }
+          }
+          endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
+        } catch (err) {
+          console.error('[FinalResponseStep] 总结生成失败:', err.message);
+          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'ERROR', statusMessage: err.message, model: 'deepseek-chat' });
+          response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || '抱歉，查询过程中遇到了问题。';
+        }
+      } else {
+        response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || "抱歉，我暂时无法回答这个问题，或者执行过程中遇到了错误。请稍后重试或尝试缩小查询范围。";
+      }
     }
   }
 

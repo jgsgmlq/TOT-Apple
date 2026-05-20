@@ -1,6 +1,7 @@
 'use strict';
 
 const queryEngine = require('../modules/dashboard/services/queryEngine');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
 
 module.exports = {
   schema: {
@@ -14,7 +15,7 @@ module.exports = {
         properties: {
           task_id: { type: 'string', description: '任务标识（名称模糊匹配或 ID 精确匹配）' },
           funnel_type: { type: 'string', enum: ['completion', 'alert'], description: 'completion 任务完成漏斗，alert 预警催办漏斗' },
-          dimension: { type: 'string', enum: ['hq', 'l3', 'l4', 'dealer', 'store'], description: '按维度拆分，不传返回整体' },
+          dimension: { type: 'string', enum: ['hq', 'l3', 'l4', 'dealer', 'store'], description: '按维度拆分' },
           dimension_value: { type: 'string', description: '特定维度值' }
         }
       }
@@ -27,17 +28,21 @@ module.exports = {
     timeoutMs: 12000
   },
   handler: async (args, regionScope) => {
-    const taskId = (args.task_id || '').trim();
-    if (!taskId) {
+    const rawId = (args.task_id || '').trim();
+    if (!rawId) {
       return { success: false, errorCode: 'MISSING_PARAM', message: '参数 task_id 是必填的' };
     }
 
+    let taskId = rawId;
+    const matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
+    if (matches.length > 0) taskId = matches[0].task_publish_id;
+
     if (args.funnel_type === 'completion') {
-      const funnelData = await queryEngine.getFunnelData({ taskId });
-      return { success: true, data: { funnel_type: 'completion', ...(funnelData || {}) } };
+      const data = await queryEngine.getFunnelData({ taskId });
+      return { success: true, data: { funnel_type: 'completion', task_id: taskId, ...(data || {}) } };
     }
 
-    const alertFunnel = await queryEngine.getAlertFunnelData({ taskId });
-    return { success: true, data: { funnel_type: 'alert', ...(alertFunnel || {}) } };
+    const data = await queryEngine.getAlertFunnelData({ taskId });
+    return { success: true, data: { funnel_type: 'alert', task_id: taskId, ...(data || {}) } };
   }
 };

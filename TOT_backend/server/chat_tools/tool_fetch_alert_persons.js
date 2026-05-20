@@ -1,6 +1,7 @@
 'use strict';
 
 const queryEngine = require('../modules/dashboard/services/queryEngine');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
 
 module.exports = {
   schema: {
@@ -28,32 +29,34 @@ module.exports = {
     timeoutMs: 15000
   },
   handler: async (args, regionScope) => {
-    const taskId = (args.task_id || '').trim();
-    if (!taskId) {
+    const rawId = (args.task_id || '').trim();
+    if (!rawId) {
       return { success: false, errorCode: 'MISSING_PARAM', message: '参数 task_id 是必填的' };
     }
 
-    const alertLevel = String(args.alert_level || '').toLowerCase();
+    let taskId = rawId;
+    const matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
+    if (matches.length > 0) taskId = matches[0].task_publish_id;
+
+    const level = String(args.alert_level || '').toLowerCase();
     const warnings = await queryEngine.getWarningsBoardData({
-      taskId, warningLevel: alertLevel,
+      taskId, warningLevel: level,
       pageNum: args.page || 1, pageSize: args.page_size || 50
     });
 
-    const list = warnings && warnings.list ? warnings.list : (Array.isArray(warnings) ? warnings : []);
-
+    const list = warnings && warnings.list ? warnings.list : [];
     const rows = list.map(w => ({
-      user_id: w.email_id || w.emailId, name: w.learner_name || w.learnerName,
+      user_id: w.email_id, name: w.learner_name,
       alert_level: args.alert_level, completion_status: '未完成',
-      store: w.store_name || w.storeName, dealer: w.dealer_name || w.dealerName,
-      l3: w.region, l4: w.format
+      store: w.store_name, dealer: w.dealer_name, l3: w.region
     }));
 
     return {
       success: true,
       data: {
         task_id: taskId, alert_level: args.alert_level,
-        total_count: warnings.pagination ? warnings.pagination.total : rows.length,
-        page: args.page || 1, page_size: args.page_size || 50, rows
+        total_count: warnings.pagination?.total || rows.length,
+        page: args.page || 1, rows
       }
     };
   }
