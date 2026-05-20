@@ -1122,11 +1122,11 @@
     abortController.value = new AbortController();
     scrollToBottom();
 
-    const applySendSuccess = (
+    function applySendSuccess(
       sid: string,
       result: SendMessageResult,
       thinkingSnapshot?: string
-    ) => {
+    ) {
       const lastMsg = messages.value[loadingIndex];
       if (lastMsg) {
         lastMsg.id = result.messageId;
