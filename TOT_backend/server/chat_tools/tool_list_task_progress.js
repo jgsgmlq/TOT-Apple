@@ -30,7 +30,7 @@ module.exports = {
   handler: async (args, regionScope) => {
     const statuses = args.status === 'ended'
       ? ['ended'] : args.status === 'all'
-      ? ['active', 'ended'] : ['active'];
+      ? ['dispatched', 'ended'] : ['dispatched'];
 
     const tasks = await taskCrud.getTaskList({ statuses });
 
@@ -39,17 +39,20 @@ module.exports = {
     }
 
     const rows = await Promise.all(tasks.slice(0, 50).map(async (t) => {
+      const tid = t.task_publish_id;
       try {
-        const ov = await queryEngine.getOverviewBoardData({ taskId: t.id });
+        const ov = await queryEngine.getOverviewBoardData({ taskId: tid });
         return {
-          task_id: t.id, task_name: t.name, platform: t.platform, priority: t.priority,
+          task_id: tid, task_name: t.task_title,
+          platform: (() => { try { return JSON.parse(t.platform_scope || '[]')[0] || null; } catch (_) { return null; } })(),
+          priority: t.urgency_level,
           completion_rate: ov ? ov.completionRate : 0,
           learning_rate: ov ? (ov.taskReadRate || ov.taskReachRate || 0) : 0,
-          deadline: t.ddl_at || t.due_date,
+          deadline: t.due_date,
           learning_count: ov ? (ov.learningCount || ov.inProgressCount || 0) : 0
         };
       } catch (_) {
-        return { task_id: t.id, task_name: t.name, platform: t.platform, priority: t.priority, completion_rate: 0, learning_rate: 0, deadline: t.ddl_at || t.due_date, learning_count: 0 };
+        return { task_id: tid, task_name: t.task_title, platform: null, priority: t.urgency_level, completion_rate: 0, learning_rate: 0, deadline: t.due_date, learning_count: 0 };
       }
     }));
 

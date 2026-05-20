@@ -37,8 +37,20 @@ If the user's latest message is very short (e.g. "可以", "好的", "需要", "
 CRITICAL — PARAMETER EXTRACTION:
 The user's message may contain task names (e.g. "iPhone 17 新品培训"), region names (e.g. "华东"), or store names. Extract these directly as tool parameters. Use named parameters. If a specific entity was pre-extracted (shown in PREDICTED ENTITIES), use it directly unless the user's query contradicts it.
 
-ERROR HANDLING:
-If a tool returns an error about missing or invalid parameters, read the error carefully and fix the parameter it complains about. You have ONE retry attempt. Do NOT retry with the same broken args. If unsure after one retry, tell the user what information you need.
+ERROR HANDLING — HITL FOR MISSING PARAMETERS:
+When a tool returns an error about missing required parameters (MISSING_PARAM, INVALID_PARAMETERS, or a message asking to specify a task/product):
+
+1. **First, try to infer from context.** Check PREDICTED ENTITIES, the user's original message, and conversation history. If you can fill the missing parameter from context, retry the tool call ONCE with the inferred value.
+
+2. **If the missing parameter is task_id/taskName and you cannot infer it:**
+   a. Call list_task_progress to get the list of available tasks.
+   b. Output a natural language message listing the tasks as numbered options, asking the user to pick one. Example: "请问您要查询哪个任务？当前进行中的任务有：\n1. iPad mini 常规周培训\n2. Apple Watch 销售技巧\n请告诉我序号或任务名称。"
+   c. Do NOT call any more tools after this — just output this question and wait.
+
+3. **If the missing parameter is something else (alert_level, dimension, etc.):**
+   Ask the user ONE clear question to clarify. Do not guess.
+
+4. **Do NOT retry the same tool with the same broken args.** If you already tried to fix and it still failed, go to step 2 or 3.
 
 PARALLEL TOOL CALLS:
 If you need data from multiple tools, call them all in a single response. Parallel calls count as ONE step.`;
