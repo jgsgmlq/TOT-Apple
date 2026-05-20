@@ -202,6 +202,10 @@ const finalResponseStep = async (state, config) => {
               return { level: p.level || 'info', text };
             });
           }
+          // LLM 可能把 statisticsProvenance 输出为字符串而非对象
+          if (typeof rawJson.statisticsProvenance === 'string') {
+            rawJson.statisticsProvenance = { "统计口径": rawJson.statisticsProvenance, "数据截止": "" };
+          }
           if (rawJson.table && rawJson.table.rows) {
             rawJson.table.rows = rawJson.table.rows.map(row =>
               row.map(cell => String(cell ?? ''))
