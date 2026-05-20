@@ -28,7 +28,7 @@ async function insertMessage({ id, sessionId, role, contentText, contentJson, in
 
 async function getMessages(sessionId) {
   return await all(
-    'SELECT id, session_id, role, content_text, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC',
+    'SELECT id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC',
     [sessionId]
   );
 }

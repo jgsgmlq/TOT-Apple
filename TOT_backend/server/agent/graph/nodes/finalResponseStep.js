@@ -7,6 +7,21 @@ const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = requ
 const promptRegistry = require('../../../prompts/registry');
 const { renderToolResultsMarkdown } = require('../renderers');
 const { fcModel } = require('../llm');
+const { ChatOpenAI } = require("@langchain/openai");
+
+// 结构化输出用非 streaming 模型 (streaming=true 与 withStructuredOutput 冲突)
+const getStructuredModel = () => {
+  const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+  const baseURL = process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1";
+  return new ChatOpenAI({
+    modelName: "deepseek-chat",
+    apiKey,
+    configuration: { baseURL },
+    temperature: 0.1,
+    maxTokens: 2048,
+    modelKwargs: { response_format: { type: "json_object" } },
+  });
+};
 
 const { z } = require("zod");
 
@@ -19,24 +34,24 @@ const FinalResponseOutput = z.object({
   })),
   attentionPoints: z.array(z.object({
     level: z.enum(["warning", "info", "positive"]),
-    text: z.string(),
-  })),
-  followUpSuggestions: z.array(z.string()),
+    text: z.string().default(""),
+  }).catchall(z.any())).default([]),
+  followUpSuggestions: z.array(z.string()).default([]),
   visualizations: z.array(z.object({
     type: z.enum(["bar", "line", "pie"]),
     title: z.string(),
     option: z.record(z.any()),
-  })).optional(),
+  })).nullable().default(null),
   statisticsProvenance: z.object({
     "统计口径": z.string(),
     "数据截止": z.string(),
   }).passthrough(),
-  forecastDisclaimer: z.string().nullable().optional(),
+  forecastDisclaimer: z.string().nullable().default(null),
   table: z.object({
     title: z.string(),
     columns: z.array(z.string()),
-    rows: z.array(z.array(z.string())),
-  }).nullable().optional(),
+    rows: z.array(z.array(z.union([z.string(), z.number()]))),
+  }).nullable().default(null),
 });
 
 function prepareToolData(toolResults) {
@@ -78,7 +93,12 @@ const getFcModel = () => fcModel;
 
 const finalResponseStep = async (state, config) => {
   const span = startNodeSpan(state, 'FinalResponseStep', { mode: state.mode, intent: state.intent });
-  let response = state.reply_markdown || state.finalResponse || "";
+  // 工具模式有结果时，忽略 FC LLM 的内联回复，强制走结构化输出
+  let response = "";
+  const hasToolResults = Object.keys(state.toolResults || {}).length > 0;
+  if (state.mode !== "tool" || !hasToolResults) {
+    response = state.reply_markdown || state.finalResponse || "";
+  }
 
   if (!response) {
     if (state.mode === "deny") {
@@ -132,7 +152,7 @@ const finalResponseStep = async (state, config) => {
       if (toolResultKeys.length > 0) {
         console.log('[FinalResponseStep] 工具查询完成，调用 FinalResponse LLM (structured)...');
         const emitter = config?.configurable?.sseEmitter;
-        const llm = getFcModel();
+        const llm = getStructuredModel();
         const traceId = config?.configurable?.traceId;
         const client = getClient();
         const gen = client && traceId
@@ -153,14 +173,36 @@ const finalResponseStep = async (state, config) => {
         const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}\n${chartBlock}`;
 
         try {
-          const structuredModel = llm.withStructuredOutput(FinalResponseOutput, {
-            name: "final_response",
-            method: "jsonMode",
-          });
-          const parsed = await structuredModel.invoke([
+          const result = await llm.invoke([
             new SystemMessage(fullPrompt),
-            new HumanMessage('根据以上数据生成结构化回答，严格遵守 JSON schema。')
+            new HumanMessage('输出严格的 JSON 对象。')
           ], { signal: config?.signal });
+
+          const rawText = typeof result.content === 'string' ? result.content : '';
+          let rawJson;
+          try { rawJson = JSON.parse(rawText); } catch (_) {
+            try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
+          }
+
+          // 预处理：修复常见 LLM 输出偏差
+          if (rawJson.keyNumbers) {
+            rawJson.keyNumbers.forEach(k => { if (k.unit === null) delete k.unit; });
+          }
+          if (rawJson.attentionPoints) {
+            rawJson.attentionPoints = rawJson.attentionPoints.map(p => {
+              if (typeof p === 'string') return { level: 'info', text: p };
+              if (!p.text) return { ...p, text: '' };
+              return p;
+            });
+          }
+          if (rawJson.table && rawJson.table.rows) {
+            rawJson.table.rows = rawJson.table.rows.map(row =>
+              row.map(cell => String(cell ?? ''))
+            );
+          }
+          if (rawJson.visualizations === null) delete rawJson.visualizations;
+
+          const parsed = FinalResponseOutput.parse(rawJson);
 
           response = JSON.stringify(parsed);
 
@@ -182,18 +224,9 @@ const finalResponseStep = async (state, config) => {
   response = sanitizeUserFacingMarkdown(response);
   endSpan(span, { output: preview(response), metadata: { responseBytes: response.length } });
 
-  // 提取 overview 文本用于 content_text
-  let overviewText = response;
-  try {
-    const parsed = JSON.parse(response);
-    if (parsed.overview) overviewText = parsed.overview;
-  } catch (_) { /* not JSON, use full response */ }
-
   return {
     finalResponse: response,
     reply_markdown: response,
-    reply_content_json: response,
-    reply_overview_text: overviewText,
     messages: [new AIMessage({ content: response })]
   };
 };

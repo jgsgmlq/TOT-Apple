@@ -15,8 +15,20 @@ const persistAndEmit = async (state, config) => {
   console.log(`[PersistAndEmit] 正在持久化会话 ${sessionId} 的机器人回复...`);
 
   try {
-    const overviewText = state.reply_overview_text || replyContent;
-    const contentJson = state.reply_content_json || null;
+    // 从 replyContent 提取 overview 和结构化 JSON
+    let overviewText = replyContent;
+    let contentJson = null;
+    if (typeof replyContent === 'string') {
+      try {
+        const parsed = JSON.parse(replyContent.trim());
+        if (parsed && typeof parsed === 'object') {
+          contentJson = replyContent.trim();
+          if (typeof parsed.overview === 'string' && parsed.overview.trim()) {
+            overviewText = parsed.overview.trim();
+          }
+        }
+      } catch (_) { /* plain text, no JSON */ }
+    }
     await chatCrud.insertMessage({
       id: assistMsgId, sessionId, role: 'assistant',
       contentText: overviewText,
