@@ -229,33 +229,7 @@
                   </div>
 
 
-                  <!-- HITL clarify：缺参追问，展示选项任务卡片 -->
-                  <div v-if="msg.pendingClarification && (msg.pendingClarification.data?.options || msg.pendingClarification.options || []).length" class="clarify-panel">
-                    <div class="clarify-title">{{ msg.pendingClarification.data?.prompt || msg.pendingClarification.message || msg.pendingClarification.prompt || '请补充信息' }}</div>
-                    <div class="clarify-cards">
-                      <div
-                        v-for="opt in (msg.pendingClarification.data?.options || msg.pendingClarification.options || [])"
-                        :key="opt.id"
-                        class="clarify-card"
-                        @click="sendClarificationResponse(msg.pendingClarification!, { action: 'select_option', option: opt })"
-                      >
-                        <div class="clarify-card-title">{{ opt.label }}</div>
-                        <div class="clarify-card-meta">
-                          <span v-if="opt.completionRate != null">完成率 {{ opt.completionRate }}%</span>
-                          <span v-if="opt.subtitle">{{ opt.subtitle }}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="clarify-actions">
-                      <n-button size="small" quaternary @click="cancelClarification">取消</n-button>
-                    </div>
-                  </div>
-                  <!-- Clarify without options: just show the text -->
-                  <div v-else-if="msg.pendingClarification" class="clarify-textonly">
-                    {{ msg.pendingClarification.data?.prompt || msg.pendingClarification.message || msg.pendingClarification.prompt || '请补充信息' }}
-                  </div>
-
-                  <!-- 新版：Markdown 渲染器 -->
+                                    <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
                     v-else-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
                     :content="msg.streamContent || msg.content"
@@ -375,6 +349,27 @@
         </div>
 
         <div class="chat-footer">
+          <div v-if="pendingClarification" class="clarify-panel">
+            <div class="clarify-title">{{ pendingClarification.data?.prompt || pendingClarification.message || pendingClarification.prompt || '请补充信息' }}</div>
+            <div class="clarify-cards" v-if="(pendingClarification.data?.options || pendingClarification.options || []).length">
+              <div
+                v-for="opt in (pendingClarification.data?.options || pendingClarification.options || [])"
+                :key="opt.id"
+                class="clarify-card"
+                @click="sendClarificationResponse(pendingClarification!, { action: 'select_option', option: opt })"
+              >
+                <div class="clarify-card-title">{{ opt.label }}</div>
+                <div class="clarify-card-meta">
+                  <span v-if="opt.completionRate != null">完成率 {{ opt.completionRate }}%</span>
+                  <span v-if="opt.subtitle">{{ opt.subtitle }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="clarify-actions">
+              <n-button size="small" quaternary @click="cancelClarification">取消</n-button>
+            </div>
+          </div>
+
           
           <div class="input-wrapper flex items-end gap-2">
             <n-input
