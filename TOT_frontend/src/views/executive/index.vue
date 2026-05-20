@@ -261,6 +261,33 @@
                     <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
+
+                  <!-- HITL clarify：缺参追问，展示选项任务卡片 -->
+                  <div v-if="msg.pendingClarification && (msg.pendingClarification.data?.options || msg.pendingClarification.options || []).length" class="clarify-panel">
+                    <div class="clarify-title">{{ msg.pendingClarification.data?.prompt || msg.pendingClarification.message || msg.pendingClarification.prompt || '请补充信息' }}</div>
+                    <div class="clarify-cards">
+                      <div
+                        v-for="opt in (msg.pendingClarification.data?.options || msg.pendingClarification.options || [])"
+                        :key="opt.id"
+                        class="clarify-card"
+                        @click="sendClarificationResponse(msg.pendingClarification!, { action: 'select_option', option: opt })"
+                      >
+                        <div class="clarify-card-title">{{ opt.label }}</div>
+                        <div class="clarify-card-meta">
+                          <span v-if="opt.completionRate != null">完成率 {{ opt.completionRate }}%</span>
+                          <span v-if="opt.subtitle">{{ opt.subtitle }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="clarify-actions">
+                      <n-button size="small" quaternary @click="cancelClarification">取消</n-button>
+                    </div>
+                  </div>
+                  <!-- Clarify without options: just show the text -->
+                  <div v-else-if="msg.pendingClarification" class="clarify-textonly">
+                    {{ msg.pendingClarification.data?.prompt || msg.pendingClarification.message || msg.pendingClarification.prompt || '请补充信息' }}
+                  </div>
+
                   <!-- 新版：Markdown 渲染器 -->
                   <MarkdownRenderer
                     v-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
@@ -1718,6 +1745,60 @@
 
           &.exec-structured--stream {
             opacity: 0.92;
+          }
+
+
+          .clarify-panel {
+            margin-bottom: 8px;
+            padding: 12px 14px;
+            border: 1px solid #e0e0e0;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+          }
+          .clarify-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+          }
+          .clarify-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 8px;
+          }
+          .clarify-card {
+            padding: 8px 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            background: #f8f9fa;
+            transition: all .15s;
+          }
+          .clarify-card:hover {
+            border-color: #667eea;
+            background: #f0f2ff;
+          }
+          .clarify-card-title {
+            font-size: 13px;
+            font-weight: 600;
+          }
+          .clarify-card-meta {
+            font-size: 11px;
+            color: #888;
+            margin-top: 2px;
+            display: flex;
+            gap: 12px;
+          }
+          .clarify-actions {
+            display: flex;
+            justify-content: flex-end;
+          }
+          .clarify-textonly {
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #555;
           }
 
           .exec-prov-footer {

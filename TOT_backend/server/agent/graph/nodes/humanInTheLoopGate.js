@@ -7,13 +7,48 @@ const { endSpan, getClient, NOOP_TRACE } = require('../../../utils/tracer');
 const { makeToolMessage } = require('../toolCallUtils');
 
 const humanInTheLoopGate = async (state) => {
-  const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status, reason: state.interrupt_payload?.reason || null });
-  const payload = state.interrupt_payload;
+  const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status, reason: state.ambiguity_payload?.type || null });
+  let payload = state.ambiguity_payload || state.interrupt_payload;
   console.log(`[HITL] 图执行流挂起，等待客户端发送 resume。 payload:`, payload);
 
   // Trace event: interrupt sent
   if (span && span !== NOOP_TRACE) {
     try { span.event({ name: 'HITL_Interrupt', input: payload?.reason, metadata: { type: payload?.type } }); } catch {}
+  }
+
+  // 缺任务参数时，查询任务列表作为候选
+  if (payload?.type === 'missing_task_ref') {
+    try {
+      const taskCrud = require('../../../modules/task/crud/taskCrud');
+      const tasks = await taskCrud.getTaskList({ statuses: ['dispatched', 'active'] });
+      if (tasks.length > 0) {
+        let rates = {};
+        try {
+          const queryEngine = require('../../../modules/dashboard/services/queryEngine');
+          const results = await Promise.allSettled(
+            tasks.slice(0, 8).map(t => queryEngine.getOverviewBoardData({ taskId: t.task_publish_id }).catch(() => null))
+          );
+          results.forEach((r, i) => { if (r.status === 'fulfilled' && r.value) rates[tasks[i].task_publish_id] = r.value.completionRate; });
+        } catch (_) {}
+
+        payload = {
+          ...payload,
+          prompt: payload.question || '请问要查询哪个任务？',
+          options: tasks.slice(0, 8).map(t => ({
+            id: t.task_publish_id,
+            label: t.task_title,
+            value: t.task_publish_id,
+            subtitle: `${t.urgency_level || ''} · 截止 ${t.due_date ? new Date(t.due_date).toISOString().slice(0,10) : '--'}`,
+            completionRate: rates[t.task_publish_id] ?? null,
+            platform: (() => { try { return JSON.parse(t.platform_scope || '[]')[0] || null; } catch (_) { return null; } })(),
+          })),
+          resume_type: 'slot_fill',
+        };
+        console.log(`[HITL] 已补全任务候选列表，共 ${payload.options.length} 个任务`);
+      }
+    } catch (err) {
+      console.error('[HITL] 查询任务候选失败:', err.message);
+    }
   }
 
   const userResponse = interrupt(payload);
@@ -38,14 +73,9 @@ const humanInTheLoopGate = async (state) => {
     endSpan(span, { output: 'cancel' });
     const cancelMsg = '已取消本次查询。如需继续，请告诉我新的问题。';
     return {
-      hitl_status: 'resumed',
-      interrupt_payload: null,
-      hitl_resume_payload: normalized,
-      pending_tool_calls: [],
-      reply_markdown: cancelMsg,
-      finalResponse: cancelMsg,
-      fc_next_action: 'finalize',
-      messages: [new AIMessage({ content: cancelMsg })]
+      hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
+      pending_tool_calls: [], reply_markdown: cancelMsg, finalResponse: cancelMsg,
+      fc_next_action: 'finalize', messages: [new AIMessage({ content: cancelMsg })]
     };
   }
 
@@ -53,43 +83,22 @@ const humanInTheLoopGate = async (state) => {
     endSpan(span, { output: 'intent_shift' });
     const nextUserMessage = userText || state.userMessage;
     const cancelMessages = (state.pending_tool_calls || []).map(tc =>
-      makeToolMessage(
-        { id: tc.id || 'unknown', name: tc.name || 'clarify_intent' },
-        JSON.stringify({ error: 'User cancelled this operation due to intent shift.' })
-      )
+      makeToolMessage({ id: tc.id || 'unknown', name: tc.name || 'clarify_intent' }, JSON.stringify({ error: 'User cancelled this operation due to intent shift.' }))
     );
     return {
-      hitl_status: 'resumed',
-      interrupt_payload: null,
-      hitl_resume_payload: normalized,
-      userMessage: nextUserMessage,
-      intent: '',
-      entities: {},
-      entities_confidence: {},
-      candidateTools: [],
-      pending_tool_calls: [],
-      fc_next_action: 're_route',
-      messages: [
-        ...cancelMessages,
-        new HumanMessage(nextUserMessage)
-      ]
+      hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
+      userMessage: nextUserMessage, intent: '', entities: {}, entities_confidence: {},
+      candidateTools: [], pending_tool_calls: [], fc_next_action: 're_route',
+      messages: [...cancelMessages, new HumanMessage(nextUserMessage)]
     };
   }
 
   endSpan(span, { output: resumeType });
   const messageContent = `用户确认了选项/补充了信息: ${JSON.stringify(normalized?.value ?? normalized?.selected_option_id ?? normalized)}`;
   return {
-    hitl_status: 'resumed',
-    interrupt_payload: null,
-    hitl_resume_payload: normalized,
+    hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
     fc_next_action: 'validate',
-    messages: [
-      new ToolMessage({
-        tool_call_id: payload?.resume_token || 'unknown_token',
-        name: 'clarify_intent',
-        content: messageContent
-      })
-    ]
+    messages: [new ToolMessage({ tool_call_id: payload?.resume_token || 'unknown_token', name: 'clarify_intent', content: messageContent })]
   };
 };
 
