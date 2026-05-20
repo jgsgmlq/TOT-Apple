@@ -1,0 +1,83 @@
+<h2>Human-in-the-Loop — 追问用户选择</h2>
+<p class="subtitle">当缺参数/有歧义时，Agent 反问用户，用户点击选项后继续</p>
+
+<div class="section">
+  <h3>场景：用户问"有哪些门店需要重点关注？"（没提任务）</h3>
+  <div class="mockup" style="max-width:480px;">
+    <div class="mockup-body" style="padding:16px;">
+
+      <!-- 用户消息 -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+        <div style="background:#667eea;color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;max-width:80%;font-size:14px;">有哪些门店需要重点关注？</div>
+      </div>
+
+      <!-- Agent HITL 追问卡片 -->
+      <div style="background:#fff;border:1px solid #e0e0e0;padding:16px;border-radius:12px;margin-bottom:12px;">
+        <div style="font-size:14px;color:#333;margin-bottom:4px;">请问您要查看<strong>哪个任务</strong>的预警门店？</div>
+        <div style="font-size:12px;color:#999;margin-bottom:12px;">当前进行中的任务有：</div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
+          <div style="padding:10px 14px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;background:#f8f9fa;transition:all .15s;">
+            <div style="font-size:13px;font-weight:600;">【Mock】iPad mini 常规周培训</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">完成率 42.5% · MyPAL · 截止 05-28</div>
+          </div>
+          <div style="padding:10px 14px;border:2px solid #667eea;border-radius:8px;cursor:pointer;background:#f0f2ff;">
+            <div style="font-size:13px;font-weight:600;color:#667eea;">【Mock】NPI 新品组合学习</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">完成率 47.5% · MyPAL · 截止 06-01</div>
+          </div>
+          <div style="padding:10px 14px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;background:#f8f9fa;transition:all .15s;">
+            <div style="font-size:13px;font-weight:600;">【Mock】iPhone Air 已逾期复盘</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">完成率 25% · MyPAL · 已逾期</div>
+          </div>
+          <div style="padding:10px 14px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;background:#f8f9fa;transition:all .15s;">
+            <div style="font-size:13px;font-weight:600;">【Mock】iPad Air 临期冲刺</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">完成率 22.5% · MyPAL · 即将截止</div>
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:#aaa;text-align:center;">点击上方任务卡片即可查看预警详情</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:16px;">
+  <h3>HITL 的其他形式</h3>
+
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">简单追问（补参数）</div>
+      <div class="mockup-body" style="padding:16px;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <div style="background:#667eea;color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;">帮我查一下完成率</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e0e0e0;padding:12px 16px;border-radius:12px;">
+          <div style="font-size:13px;color:#555;">请问您要查询哪个任务的完成率？</div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <span style="background:#e8eaf6;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">iPad mini 培训</span>
+            <span style="background:#e8eaf6;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">NPI 新品学习</span>
+            <span style="background:#e8eaf6;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">iPhone Air 复盘</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">模糊指代追问</div>
+      <div class="mockup-body" style="padding:16px;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <div style="background:#667eea;color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;">上次那个任务怎么样了？</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e0e0e0;padding:12px 16px;border-radius:12px;">
+          <div style="font-size:13px;color:#555;">您指的是哪个任务？最近讨论过的任务有：</div>
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+            <span style="background:#e8eaf6;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">iPad mini 培训</span>
+            <span style="background:#e8eaf6;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">NPI 新品</span>
+          </div>
+          <div style="font-size:11px;color:#aaa;margin-top:6px;">或直接输入任务名称</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

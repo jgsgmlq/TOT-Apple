@@ -1,0 +1,108 @@
+<h2>表格和图表子组件</h2>
+<p class="subtitle">当回复包含漏斗/排名数据时，卡片下方展开表格。选你倾向的表格风格。</p>
+
+<div class="section">
+  <h3>A. 表格样式 — 紧凑型</h3>
+  <div class="mockup" style="max-width:480px;">
+    <div class="mockup-body" style="padding:12px;">
+
+      <div style="margin-bottom:16px;">
+        <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;border-radius:12px;">
+          <div style="font-size:22px;font-weight:700;">完成率 42.5%</div>
+          <div style="font-size:13px;opacity:0.9;">17/40人 · 23人未完成</div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-weight:600;font-size:13px;color:#555;margin-bottom:6px;">📋 各阶段学员分布</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead><tr style="background:#f5f5f5;"><th style="padding:8px;text-align:left;border-bottom:1px solid #e0e0e0;">阶段</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">人数</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">占比</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">流失</th></tr></thead>
+          <tbody>
+            <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">📤 推送</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">40</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">100%</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">—</td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">✅ 送达</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">40</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">100%</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;color:#2e7d32;">0%</td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">📖 学习中</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">33</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;">82.5%</td><td style="padding:8px;text-align:right;border-bottom:1px solid #f0f0f0;color:#e65100;">17.5%</td></tr>
+            <tr><td style="padding:8px;">🎯 已完成</td><td style="padding:8px;text-align:right;">17</td><td style="padding:8px;text-align:right;">42.5%</td><td style="padding:8px;text-align:right;color:#c62828;">48.5%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">👥 未完成名单</div>
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">📈 趋势图</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>B. 表格 + 进度条</h3>
+  <div class="mockup" style="max-width:480px;">
+    <div class="mockup-body" style="padding:12px;">
+
+      <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;border-radius:12px;margin-bottom:12px;">
+        <div style="font-size:22px;font-weight:700;">完成率 42.5%</div>
+        <div style="font-size:13px;opacity:0.9;">17/40人 · 超半数未完成</div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-weight:600;font-size:13px;color:#555;margin-bottom:8px;">📋 各阶段学员分布</div>
+
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;"><span>📤 推送</span><span>40人 · 100%</span></div>
+          <div style="height:6px;background:#e0e0e0;border-radius:3px;"><div style="height:6px;width:100%;background:#90caf9;border-radius:3px;"></div></div>
+        </div>
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;"><span>✅ 送达</span><span>40人 · 100%</span></div>
+          <div style="height:6px;background:#e0e0e0;border-radius:3px;"><div style="height:6px;width:100%;background:#a5d6a7;border-radius:3px;"></div></div>
+        </div>
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;"><span>📖 学习中</span><span>33人 · 82.5%</span></div>
+          <div style="height:6px;background:#e0e0e0;border-radius:3px;"><div style="height:6px;width:82.5%;background:#ffcc80;border-radius:3px;"></div></div>
+        </div>
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px;"><span>🎯 已完成</span><span style="color:#c62828;">17人 · 42.5%</span></div>
+          <div style="height:6px;background:#e0e0e0;border-radius:3px;"><div style="height:6px;width:42.5%;background:#ef9a9a;border-radius:3px;"></div></div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">👥 未完成名单</div>
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">📈 趋势图</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;">
+  <h3>图表嵌入</h3>
+  <p class="subtitle">当有对比数据（≥3个实体）时，在卡片中嵌入迷你图表</p>
+  <div class="mockup" style="max-width:480px;">
+    <div class="mockup-body" style="padding:12px;">
+      <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;border-radius:12px;margin-bottom:12px;">
+        <div style="font-size:22px;font-weight:700;">华东最优 · 华南落后</div>
+        <div style="font-size:13px;opacity:0.9;">平均完成率 78.5% · 华南仅 72%</div>
+      </div>
+
+      <div style="margin-bottom:8px;font-weight:600;font-size:13px;color:#555;">📊 各区域完成率对比</div>
+      <div style="display:flex;align-items:flex-end;gap:12px;height:100px;padding:8px;margin-bottom:12px;">
+        <div style="flex:1;text-align:center;">
+          <div style="height:85px;background:linear-gradient(180deg,#667eea,#764ba2);border-radius:6px 6px 0 0;width:100%;display:flex;align-items:flex-start;justify-content:center;color:#fff;font-size:12px;font-weight:600;padding-top:4px;">85%</div>
+          <div style="font-size:10px;color:#888;margin-top:4px;">华东</div>
+        </div>
+        <div style="flex:1;text-align:center;">
+          <div style="height:72px;background:linear-gradient(180deg,#764ba2,#667eea);border-radius:6px 6px 0 0;width:100%;display:flex;align-items:flex-start;justify-content:center;color:#fff;font-size:12px;font-weight:600;padding-top:4px;">78%</div>
+          <div style="font-size:10px;color:#888;margin-top:4px;">华北</div>
+        </div>
+        <div style="flex:1;text-align:center;">
+          <div style="height:72px;background:linear-gradient(180deg,#f093fb,#f5576c);border-radius:6px 6px 0 0;width:100%;display:flex;align-items:flex-start;justify-content:center;color:#fff;font-size:12px;font-weight:600;padding-top:4px;">72%</div>
+          <div style="font-size:10px;color:#888;margin-top:4px;">华南</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">🏪 华南明细</div>
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">📈 趋势</div>
+      </div>
+    </div>
+  </div>
+</div>

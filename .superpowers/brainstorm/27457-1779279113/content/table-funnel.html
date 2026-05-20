@@ -1,0 +1,91 @@
+<h2>方案 C：进度条 + 流失标注</h2>
+<p class="subtitle">进度条展示留存比例，条之间用红色小字标注流失的人数和比例</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">方案 C：进度条 + 流失标注</div>
+    <div class="mockup-body" style="padding:16px;">
+
+      <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;border-radius:12px;margin-bottom:16px;">
+        <div style="font-size:22px;font-weight:700;">完成率 42.5%</div>
+        <div style="font-size:13px;opacity:0.9;">17/40人 · 超半数未完成</div>
+      </div>
+
+      <div style="margin-bottom:12px;font-weight:600;font-size:13px;color:#555;">📋 任务漏斗</div>
+
+      <!-- 推送 → 送达 -->
+      <div style="margin-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
+          <span>📤 推送</span><span style="font-weight:600;">40人 · 100%</span>
+        </div>
+        <div style="height:10px;background:#e0e0e0;border-radius:5px;">
+          <div style="height:10px;width:100%;background:#90caf9;border-radius:5px;"></div>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#2e7d32;margin-bottom:8px;">↓ 流失 0人 (0%)</div>
+
+      <!-- 送达 → 学习中 -->
+      <div style="margin-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
+          <span>✅ 送达</span><span style="font-weight:600;">40人 · 100%</span>
+        </div>
+        <div style="height:10px;background:#e0e0e0;border-radius:5px;">
+          <div style="height:10px;width:100%;background:#a5d6a7;border-radius:5px;"></div>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#e65100;margin-bottom:8px;">↓ 流失 7人 (17.5%) · 未开始学习</div>
+
+      <!-- 学习中 → 已完成 -->
+      <div style="margin-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
+          <span>📖 学习中</span><span style="font-weight:600;">33人 · 82.5%</span>
+        </div>
+        <div style="height:10px;background:#e0e0e0;border-radius:5px;">
+          <div style="height:10px;width:82.5%;background:#ffcc80;border-radius:5px;"></div>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#c62828;margin-bottom:8px;">↓ 流失 16人 (48.5%) · 学习中但未完成</div>
+
+      <!-- 已完成 -->
+      <div style="margin-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;">
+          <span>🎯 已完成</span><span style="font-weight:600;color:#c62828;">17人 · 42.5%</span>
+        </div>
+        <div style="height:10px;background:#e0e0e0;border-radius:5px;">
+          <div style="height:10px;width:42.5%;background:#ef9a9a;border-radius:5px;"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">👥 未完成名单</div>
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">📈 趋势图</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">方案 A（紧凑表）回顾</div>
+    <div class="mockup-body" style="padding:16px;">
+      <div style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;border-radius:12px;margin-bottom:12px;">
+        <div style="font-size:22px;font-weight:700;">完成率 42.5%</div>
+        <div style="font-size:13px;opacity:0.9;">17/40人 · 23人未完成</div>
+      </div>
+
+      <div style="font-weight:600;font-size:13px;color:#555;margin-bottom:6px;">📋 各阶段学员分布</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f5f5f5;"><th style="padding:8px;text-align:left;border-bottom:1px solid #e0e0e0;">阶段</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">人数</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">占比</th><th style="padding:8px;text-align:right;border-bottom:1px solid #e0e0e0;">流失</th></tr></thead>
+        <tbody>
+          <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">📤 推送</td><td style="padding:8px;text-align:right;">40</td><td style="padding:8px;text-align:right;">100%</td><td style="padding:8px;text-align:right;">—</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">✅ 送达</td><td style="padding:8px;text-align:right;">40</td><td style="padding:8px;text-align:right;">100%</td><td style="padding:8px;text-align:right;color:#2e7d32;">0人</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #f0f0f0;">📖 学习中</td><td style="padding:8px;text-align:right;">33</td><td style="padding:8px;text-align:right;">82.5%</td><td style="padding:8px;text-align:right;color:#e65100;">7人</td></tr>
+          <tr><td style="padding:8px;">🎯 已完成</td><td style="padding:8px;text-align:right;">17</td><td style="padding:8px;text-align:right;">42.5%</td><td style="padding:8px;text-align:right;color:#c62828;">16人</td></tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">👥 未完成名单</div>
+        <div style="flex-shrink:0;background:#e8eaf6;padding:6px 14px;border-radius:16px;font-size:12px;">📈 趋势图</div>
+      </div>
+    </div>
+  </div>
+</div>

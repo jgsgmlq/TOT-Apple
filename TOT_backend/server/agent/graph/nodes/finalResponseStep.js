@@ -9,7 +9,7 @@ const { renderToolResultsMarkdown } = require('../renderers');
 const { fcModel } = require('../llm');
 const { ChatOpenAI } = require("@langchain/openai");
 
-// 结构化输出用非 streaming 模型 (streaming=true 与 withStructuredOutput 冲突)
+// 结构化输出用 streaming 模型 (json_mode)
 const getStructuredModel = () => {
   const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
   const baseURL = process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1";
@@ -19,6 +19,7 @@ const getStructuredModel = () => {
     configuration: { baseURL },
     temperature: 0.1,
     maxTokens: 2048,
+    streaming: true,
     modelKwargs: { response_format: { type: "json_object" } },
   });
 };
@@ -173,12 +174,17 @@ const finalResponseStep = async (state, config) => {
         const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}\n${chartBlock}`;
 
         try {
-          const result = await llm.invoke([
+          // 静默生成结构化 JSON，不在流中逐字推送
+          // 解析后通过 replyContent 在 done 事件中传给前端一次性渲染
+          let rawText = '';
+          const stream = await llm.stream([
             new SystemMessage(fullPrompt),
             new HumanMessage('输出严格的 JSON 对象。')
           ], { signal: config?.signal });
-
-          const rawText = typeof result.content === 'string' ? result.content : '';
+          for await (const chunk of stream) {
+            const delta = typeof chunk.content === 'string' ? chunk.content : '';
+            if (delta) rawText += delta;
+          }
           let rawJson;
           try { rawJson = JSON.parse(rawText); } catch (_) {
             try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }

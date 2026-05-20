@@ -280,10 +280,12 @@
                       </n-collapse>
                     </div>
                     <div class="exec-structured">
-                      <p class="exec-overview">
+                      <!-- Hero 卡片 -->
+                      <div v-if="msg.replyContent.overview" class="hero-card">
                         {{ msg.replyContent.overview }}
-                      </p>
+                      </div>
 
+                      <!-- 图表 -->
                       <div
                         v-if="msg.replyContent.visualizations?.length"
                         class="exec-charts"
@@ -303,53 +305,23 @@
                         {{ msg.replyContent.forecastDisclaimer }}
                       </div>
 
-                      <div v-if="msg.replyContent.statisticsProvenance" class="exec-provenance">
-                        <n-collapse :default-expanded-names="[]">
-                          <n-collapse-item title="数据溯源与统计口径" name="prov">
-                            <div class="exec-prov-content">
-                              <div
-                                v-for="(val, key) in msg.replyContent.statisticsProvenance"
-                                :key="key"
-                                class="exec-prov-item"
-                              >
-                                <span class="prov-k">{{ key }}:</span>
-                                <span class="prov-v">{{ val }}</span>
-                              </div>
-                            </div>
-                          </n-collapse-item>
-                        </n-collapse>
-                      </div>
+                      <!-- 指标格子 -->
+                      <KeyGrid :items="msg.replyContent.keyNumbers || []" />
 
-                      <div v-if="msg.replyContent.keyNumbers?.length" class="exec-keynums">
-                        <div
-                          v-for="(kn, ki) in msg.replyContent.keyNumbers"
-                          :key="ki"
-                          class="exec-keynum-row"
-                        >
-                          <span class="exec-k-label">{{ kn.label }}</span>
-                          <span class="exec-k-value">{{ kn.value }}{{ kn.unit || '' }}</span>
-                        </div>
-                      </div>
-                      <ul v-if="msg.replyContent.attentionPoints?.length" class="exec-attn">
-                        <li v-for="(ap, ai) in msg.replyContent.attentionPoints" :key="ai">
-                          {{ ap }}
-                        </li>
-                      </ul>
-                      <div v-if="msg.replyContent.followUpSuggestions?.length" class="exec-follow">
-                        <div class="exec-follow-title">💡 建议追问：</div>
-                        <div class="exec-follow-bubbles">
-                          <n-button
-                            v-for="(sug, si) in msg.replyContent.followUpSuggestions"
-                            :key="si"
-                            size="small"
-                            quaternary
-                            round
-                            class="exec-follow-chip"
-                            @click="fillComposerWithSuggestion(sug)"
-                          >
-                            {{ sug }}
-                          </n-button>
-                        </div>
+                      <!-- 表格 -->
+                      <TableBlock :table="msg.replyContent.table" />
+
+                      <!-- 洞察 -->
+                      <InsightList :items="msg.replyContent.attentionPoints || []" />
+
+                      <!-- 追问 chips -->
+                      <SuggestChips :items="msg.replyContent.followUpSuggestions || []" @select="fillComposerWithSuggestion" />
+
+                      <!-- 数据溯源 -->
+                      <div v-if="msg.replyContent.statisticsProvenance" class="exec-prov-footer">
+                        <span v-for="(val, key) in msg.replyContent.statisticsProvenance" :key="key">
+                          {{ key }}: {{ val }}
+                        </span>
                       </div>
                     </div>
                   </template>
@@ -512,6 +484,10 @@
   import { useUserStore } from '@/store/modules/user';
   import AiChartRenderer from './components/AiChartRenderer.vue';
   import MarkdownRenderer from './components/MarkdownRenderer.vue';
+  import KeyGrid from '@/components/chat/KeyGrid.vue';
+  import InsightList from '@/components/chat/InsightList.vue';
+  import TableBlock from '@/components/chat/TableBlock.vue';
+  import SuggestChips from '@/components/chat/SuggestChips.vue';
   import {
     createChatSession,
     streamExecutiveChatMessage,
@@ -1639,19 +1615,6 @@
       text-align: center;
 
       h3 {
-        margin: 0 0 12px;
-        font-size: 28px;
-        font-weight: 600;
-        color: #1d1d1f;
-        letter-spacing: -0.28px;
-        line-height: 1.1;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue',
-          Helvetica, Arial, sans-serif;
-      }
-
-      p {
-        color: rgba(0, 0, 0, 0.48);
-        font-size: 15px;
         line-height: 1.47;
         letter-spacing: -0.374px;
         margin: 0 0 40px;
@@ -1747,74 +1710,19 @@
         }
 
         .exec-structured {
-          .exec-overview {
-            margin: 0 0 12px;
-            font-size: 15px;
+          .hero-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff; padding: 14px 16px; border-radius: 12px;
+            margin-bottom: 12px; font-size: 15px; line-height: 1.6;
           }
 
           &.exec-structured--stream {
             opacity: 0.92;
           }
 
-          .exec-keynums {
-            display: grid;
-            gap: 8px;
-            margin-bottom: 12px;
-          }
-
-          .exec-keynum-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 8px 10px;
-            background: rgba(255, 255, 255, 0.65);
-            border-radius: 8px;
-            font-size: 14px;
-          }
-
-          .exec-k-label {
-            color: rgba(0, 0, 0, 0.55);
-          }
-
-          .exec-k-value {
-            font-weight: 600;
-            color: #1d1d1f;
-          }
-
-          .exec-attn {
-            margin: 0 0 12px;
-            padding-left: 18px;
-            color: #b45309;
-            font-size: 14px;
-          }
-
-          .exec-follow {
-            font-size: 13px;
-            color: rgba(0, 0, 0, 0.55);
-
-            .exec-follow-title {
-              margin-bottom: 8px;
-            }
-
-            .exec-follow-bubbles {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 8px;
-            }
-
-            .exec-follow-chip {
-              background: #ffffff;
-              border: 1px solid rgba(0, 0, 0, 0.08);
-              font-size: 13px;
-              height: 32px;
-              padding: 0 12px;
-              color: #0071e3;
-
-              &:hover {
-                background: #f5f5f7;
-                border-color: #0071e3;
-              }
-            }
+          .exec-prov-footer {
+            font-size: 11px; color: #aaa; text-align: right; margin-top: 8px;
+            display: flex; gap: 12px; justify-content: flex-end;
           }
 
           .exec-charts {

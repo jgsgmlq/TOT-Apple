@@ -100,10 +100,13 @@ const fc_LlmToolCallStep = async (state, config) => {
   // 3. 流式：用 model.stream() AsyncIterator 显式拿 chunk，逐帧推给 SSE emitter。
   // 不用 ChatOpenAI 的 streaming:true + invoke + handleLLMNewToken callbacks 那套，
   // 因为它跟 DeepSeek 不兼容（B/D 二分测试过，invoke 那条路 SDK 内 stream reader 死锁）。
+  // FC 循环中只推送 reasoning（思考过程），不推送 content。
+  // 用户可见的回复统一由 FinalResponseStep 生成和推送。
   const emitDeltaToSse = (token, isReasoning) => {
     if (!emitter || typeof emitter.handleLLMNewToken !== 'function') return;
     if (typeof token !== 'string' || !token) return;
-    emitter.handleLLMNewToken(token, { isReasoning: !!isReasoning });
+    if (!isReasoning) return;  // 静默 content，只传 reasoning
+    emitter.handleLLMNewToken(token, { isReasoning: true });
   };
 
   // 4. 根据步数决定是否绑定工具

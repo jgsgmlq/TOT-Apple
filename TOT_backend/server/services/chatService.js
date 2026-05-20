@@ -48,7 +48,24 @@ function buildExecutiveMessageApiData(result) {
       ? result.markdownContent.trim()
       : null;
   if (md) {
-    return { replyContent: null, markdownContent: md };
+    // 检测是否是结构化 JSON (FinalResponse 输出)
+    let replyContent = null;
+    try {
+      const parsed = JSON.parse(md);
+      if (parsed && typeof parsed.overview === 'string') {
+        replyContent = {
+          overview: parsed.overview,
+          keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
+          attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
+          followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
+          ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
+          ...(parsed.statisticsProvenance ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
+          ...(parsed.forecastDisclaimer ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
+          ...(parsed.table ? { table: parsed.table } : {}),
+        };
+      }
+    } catch (_) { /* not JSON, keep as plain markdown */ }
+    return { replyContent, markdownContent: md };
   }
   const replyContent = {
     overview: typeof result.overview === 'string' ? result.overview : '',
