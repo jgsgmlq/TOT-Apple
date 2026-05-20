@@ -1,34 +1,39 @@
 'use strict';
 
 const express      = require('express');
-const { db }       = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createError } = require('../middleware/errorHandler');
 const chatService  = require('../services/chatService');
+const chatCrud = require('../modules/dashboard/crud/chatCrud');
 
 const router = express.Router();
 
-/** SQLite / JWT 下 user id 可能 number|string，避免 !== 误判无权 */
+/** MySQL account_id / JWT id 均为字符串，直接比较 */
 function sameChatUser(sessionUserId, reqUserId) {
-  return Number(sessionUserId) === Number(reqUserId);
+  if (!sessionUserId || !reqUserId) return false;
+  return String(sessionUserId) === String(reqUserId);
 }
 
 /** 校验会话归属权中间件 */
-function requireSessionOwnership(req, res, next) {
+async function requireSessionOwnership(req, res, next) {
   const { sessionId } = req.params;
   if (!sessionId) return next();
-  const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
-  if (!session) return next(createError(404, '会话不存在', 'CHAT_003'));
-  if (!sameChatUser(session.user_id, req.user.id)) return next(createError(403, '无权访问此会话', 'CHAT_004'));
-  next();
+  try {
+    const session = await chatCrud.getSession(sessionId);
+    if (!session) return next(createError(404, '会话不存在', 'CHAT_003'));
+    if (!sameChatUser(session.user_id, req.user.id)) return next(createError(403, '无权访问此会话', 'CHAT_004'));
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 // ─── 共享 handlers（Executive Chat 与总部看板机器人共用 chatService）────────────────
 
-function handleCreateSession(req, res, next) {
+async function handleCreateSession(req, res, next) {
   try {
     const ip = req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || null;
-    const result = chatService.createSession(req.user.id, req.user, ip);
+    const result = await chatService.createSession(req.user.id, req.user, ip);
     res.json({ code: 200, message: '会话创建成功', data: result, requestId: req.requestId });
   } catch (err) {
     next(err);
@@ -82,7 +87,7 @@ async function handleResume(req, res, next) {
   }
 }
 
-function handleFeedback(req, res, next) {
+async function handleFeedback(req, res, next) {
   try {
     const { sessionId, messageId } = req.params;
     const { feedback } = req.body;
@@ -91,7 +96,7 @@ function handleFeedback(req, res, next) {
       throw createError(400, '无效的反馈类型', 'CHAT_006');
     }
 
-    chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
+    await chatService.setMessageFeedback(sessionId, messageId, req.user.id, feedback);
 
     res.json({
       code: 200,
@@ -120,10 +125,10 @@ async function handleRegenerate(req, res, next) {
   }
 }
 
-function handleDeleteSession(req, res, next) {
+async function handleDeleteSession(req, res, next) {
   try {
     const { sessionId } = req.params;
-    chatService.deleteSessionById(sessionId);
+    await chatService.deleteSessionById(sessionId);
     res.json({
       code: 200,
       message: '会话已删除',
@@ -135,13 +140,13 @@ function handleDeleteSession(req, res, next) {
   }
 }
 
-function handleHistory(req, res, next) {
+async function handleHistory(req, res, next) {
   try {
     const { sessionId } = req.params;
     const pageNum  = Math.max(1, parseInt(req.query.pageNum, 10) || 1);
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
 
-    const data = chatService.getHistory(sessionId, pageNum, pageSize);
+    const data = await chatService.getHistory(sessionId, pageNum, pageSize);
     res.json({
       code: 200, message: 'success',
       data: { sessionId, ...data },

@@ -423,7 +423,7 @@ function historyToLangChainMessages(rows) {
 async function sendMessage(sessionId, userMessage, userId, req = {}) {
   const session = await chatCrud.getSession(sessionId);
   if (!session) throw Object.assign(new Error('Session not found'), { status: 404, code: 'CHAT_003' });
-  if (Number(session.user_id) !== Number(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
+  if (String(session.user_id) !== String(userId)) throw Object.assign(new Error('Forbidden'), { status: 403, code: 'CHAT_004' });
 
   const regionScope = {
     type: session.scope_type,
@@ -541,7 +541,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
     return;
   }
-  if (Number(session.user_id) !== Number(userId)) {
+  if (String(session.user_id) !== String(userId)) {
     res.status(403).json({ code: 403, message: '无权访问此会话', errorCode: 'CHAT_004', requestId: req.requestId });
     return;
   }
@@ -700,7 +700,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     res.status(404).json({ code: 404, message: '会话不存在', errorCode: 'CHAT_003', requestId: req.requestId });
     return;
   }
-  if (Number(session.user_id) !== Number(userId)) {
+  if (String(session.user_id) !== String(userId)) {
     res.status(403).json({ code: 403, message: '无权访问此会话', errorCode: 'CHAT_004', requestId: req.requestId });
     return;
   }
@@ -977,7 +977,7 @@ async function regenerateLastAssistantStreamLangGraph(sessionId, messageId, user
     res.status(404).json({ code: 404, message: 'Session not found', errorCode: 'CHAT_003' });
     return;
   }
-  if (Number(session.user_id) !== Number(userId)) {
+  if (String(session.user_id) !== String(userId)) {
     res.status(403).json({ code: 403, message: 'Forbidden', errorCode: 'CHAT_004' });
     return;
   }
