@@ -10,7 +10,7 @@ const loadContext = async (state) => {
   // T4 阶段二：真实调用 Store API 读取 `mid_term` 等记忆
   let memorySnippets = [];
   try {
-    const rawMemories = chatMemoryService.getMemories(state.userId, state.userMessage);
+    const rawMemories = await chatMemoryService.getMemories(state.userId, state.userMessage);
     if (typeof rawMemories === 'string' && rawMemories.trim() !== '') {
       const lines = rawMemories.split('\n').filter(line => line.trim());
       memorySnippets = lines.map(line => ({ text: line.trim(), score: 1.0, source: 'user_memories' }));

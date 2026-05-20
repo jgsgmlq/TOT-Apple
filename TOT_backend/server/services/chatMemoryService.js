@@ -1,6 +1,6 @@
 'use strict';
 
-const { db } = require('../db');
+const { get, all, run } = require('../modules/common/db/mysql');
 const { simpleChat } = require('../utils/ai');
 const { nanoid } = require('nanoid');
 const crypto = require('crypto');
@@ -52,19 +52,19 @@ const MEMORY_PROMPT_HASH = promptHash(MEMORY_SYSTEM_PROMPT);
 async function extract(sessionId) {
   // 独立 Memory_Extract Trace：原请求 trace 已结束，这里 setImmediate 后另起一条。
   // 主链路一切异常都应 no-op 降级，所以这里所有 Langfuse 调用都走 NoopTrace 安全路径。
-  const session = db.get('SELECT user_id FROM chat_sessions WHERE id = ?', [sessionId]);
+  const session = await get('SELECT user_id FROM chat_session WHERE id = ? AND deleted_at IS NULL', [sessionId]);
   if (!session) return;
 
-  const messages = db.all(
-    'SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 2',
+  const messages = await all(
+    'SELECT role, content_text FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 2',
     [sessionId]
-  ).reverse();
+  );
+  const reversed = [...messages].reverse();
+  if (reversed.length < 2) return;
 
-  if (messages.length < 2) return;
+  const conversationText = reversed.map((m) => `${m.role}: ${m.content_text}`).join('\n');
 
-  const conversationText = messages.map((m) => `${m.role}: ${m.content}`).join('\n');
-
-  const existingMemories = db.all('SELECT memory_type, content FROM user_memories WHERE user_id = ?', [session.user_id]);
+  const existingMemories = await all('SELECT memory_type, content FROM user_memory WHERE user_id = ?', [session.user_id]);
   const memoryListStr = existingMemories.map((m) => `[${m.memory_type}] ${m.content}`).join('\n');
 
   const userPrompt = `已知记忆：
@@ -77,7 +77,7 @@ ${conversationText}`;
     sessionId,
     userId: session.user_id,
     summary: conversationText,
-    turnCount: messages.length,
+    turnCount: reversed.length,
     triggeredBy: 'setImmediate',
   });
 
@@ -155,21 +155,18 @@ ${conversationText}`;
       if (!item.content || !item.type) continue;
 
       const hash = crypto.createHash('sha256').update(item.content).digest('hex');
-      const now = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-');
 
-      const changes = db.run(
-        `
-        INSERT INTO user_memories (id, user_id, memory_hash, memory_type, content, confidence_score, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, memory_hash) DO UPDATE SET
-          memory_type = excluded.memory_type,
-          content = excluded.content,
-          confidence_score = excluded.confidence_score,
-          updated_at = excluded.updated_at
-      `,
-        [nanoid(), session.user_id, hash, item.type, item.content, 0.8, now, now]
+      const result = await run(
+        `INSERT INTO user_memory (id, user_id, memory_hash, memory_type, content, confidence_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(3), NOW(3))
+         ON DUPLICATE KEY UPDATE
+           memory_type = VALUES(memory_type),
+           content = VALUES(content),
+           confidence_score = VALUES(confidence_score),
+           updated_at = NOW(3)`,
+        [nanoid(), session.user_id, hash, item.type, item.content, 0.8]
       );
-      if (changes && changes.changes) written += 1;
+      if (result && result.affectedRows) written += 1;
       if (String(item.action).toUpperCase() === 'UPDATE') conflicts += 1;
     }
   } catch (err) {
@@ -197,29 +194,29 @@ ${conversationText}`;
 
 /**
  * 获取用户的所有记忆，用于注入 System Prompt
- * @param {number} userId 
+ * @param {number} userId
  */
-function getMemories(userId) {
-  // T4: mid-term TTL 14 天兜底策略。对于 mid_term 类型的记忆，只读取最近 14 天内的记录
-  const rows = db.all(`
-    SELECT memory_type, content 
-    FROM user_memories 
-    WHERE user_id = ? 
+async function getMemories(userId) {
+  const rows = await all(`
+    SELECT memory_type, content
+    FROM user_memory
+    WHERE user_id = ?
+      AND (expires_at IS NULL OR expires_at > NOW(3))
       AND (
-        memory_type != 'mid_term' 
-        OR (memory_type = 'mid_term' AND created_at > datetime('now', '-14 days'))
+        memory_type != 'mid_term'
+        OR (memory_type = 'mid_term' AND updated_at > NOW(3) - INTERVAL 14 DAY)
       )
   `, [userId]);
   if (!rows || !rows.length) return '';
-  
+
   return rows.map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
 }
 
 /**
  * 删除记忆
  */
-function deleteMemory(userId, memoryId) {
-  return db.run('DELETE FROM user_memories WHERE id = ? AND user_id = ?', [memoryId, userId]);
+async function deleteMemory(userId, memoryId) {
+  return await run('DELETE FROM user_memory WHERE id = ? AND user_id = ?', [memoryId, userId]);
 }
 
 module.exports = { extract, getMemories, deleteMemory };

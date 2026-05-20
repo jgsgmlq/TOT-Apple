@@ -1,8 +1,7 @@
 'use strict';
 
 const { nanoid } = require('nanoid');
-const { db } = require('../../../db');
-const { formatNowSqliteLocal } = require('../../../utils/ddlAt');
+const chatCrud = require('../../../modules/dashboard/crud/chatCrud');
 const { startNodeSpan } = require('../shared/spanHelper');
 const { endSpan, getClient } = require('../../../utils/tracer');
 const { memoryQueueProducer } = require('../../queue/bullMqProducer');
@@ -11,19 +10,17 @@ const persistAndEmit = async (state, config) => {
   const span = startNodeSpan(state, 'PersistAndEmit', { sessionId: state.sessionId, intent: state.intent });
   const sessionId = state.sessionId;
   const replyContent = state.reply_markdown || state.finalResponse || "";
-  const now = formatNowSqliteLocal();
   const assistMsgId = nanoid();
 
   console.log(`[PersistAndEmit] 正在持久化会话 ${sessionId} 的机器人回复...`);
 
   try {
-    db.transaction(() => {
-      db.run(
-        'INSERT INTO chat_messages (id, session_id, role, content, intent_type, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [assistMsgId, sessionId, 'assistant', replyContent, state.intent || null, now]
-      );
-      db.run('UPDATE chat_sessions SET last_active = ? WHERE id = ?', [now, sessionId]);
+    await chatCrud.insertMessage({
+      id: assistMsgId, sessionId, role: 'assistant',
+      contentText: replyContent,
+      intentType: state.intent || null,
     });
+    await chatCrud.updateSessionActive(sessionId);
   } catch (err) {
     throw Object.assign(new Error(`CHAT_PERSIST_FAILED: ${err.message}`), { code: 'CHAT_PERSIST_FAILED', status: 500 });
   }
