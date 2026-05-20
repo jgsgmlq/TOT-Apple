@@ -2,47 +2,44 @@
 
 const path = require('path');
 const os = require('os');
-// 先读仓库根目录 `.env`（与前端/Vite 同一份配置）；再读 `TOT_backend/.env` 仅补全根目录未出现的键（不覆盖）
-const rootEnv = path.join(__dirname, '..', '..', '.env');
-const backendEnv = path.join(__dirname, '..', '.env');
+// 先读仓库根目录 `.env`，再读 `server/.env` 仅补全根目录未出现的键（不覆盖）
+const rootEnv = path.join(__dirname, '..', '.env');
+const serverEnv = path.join(__dirname, '.env');
 require('dotenv').config({ path: rootEnv });
-require('dotenv').config({ path: backendEnv });
+require('dotenv').config({ path: serverEnv });
 
 const http    = require('http');
 const express = require('express');
-const requestId        = require('./middleware/requestId');
-const { errorHandler } = require('./middleware/errorHandler');
-const { setupWebSocket } = require('./ws/manager');
-const { setupTtsRealtimeWebSocket } = require('./ws/ttsRealtime');
+// ─── 基础中间件（modules/common/）─────────────────────────────────────────────
+const requestId        = require('./modules/common/middleware/requestId');
+const { errorHandler } = require('./modules/common/middleware/errorHandler');
 
-const authRoutes          = require('./routes/auth');
-const tasksRoutes         = require('./routes/tasks');
-const storesRoutes        = require('./routes/stores');
-const employeesRoutes     = require('./routes/employees');
-const assignmentsRoutes   = require('./routes/assignments');
-const notificationsRoutes = require('./routes/notifications');
-const nudgeRoutes         = require('./routes/nudge');
-const dashboardRoutes       = require('./routes/dashboard');
-const dashboardInsightRoutes = require('./routes/dashboardInsights');
-const dashboardAgentRoutes   = require('./routes/dashboardAgent');
-const mypalRoutes         = require('./routes/mypal');
-const chatRoutes          = require('./routes/chat');
-const asrRoutes           = require('./routes/asr');
-
-const MYPAL_MOCK = process.env.MYPAL_MOCK === '1';
-const mypalMockRoutes = MYPAL_MOCK ? require('./routes/mypalMock') : null;
+// ─── WebSocket（modules/common/ws/）───────────────────────────────────────────
+const { setupWebSocket } = require('./modules/common/ws/manager');
+const { setupTtsRealtimeWebSocket } = require('./modules/common/ws/ttsRealtime');
 
 const app = express();
 
 // ─── 基础中间件 ────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, appId, timestamp, nonce, Signature');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 app.use(express.json({ limit: '50mb' }));
+// open-sync 签名校验依赖原始 form body，须在全局 urlencoded 之前挂载
+app.use(
+  '/api/v1/open-sync',
+  express.urlencoded({
+    limit: '50mb',
+    extended: false,
+    verify: (req, _res, buf) => {
+      if (buf && buf.length) req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(requestId);
 
@@ -67,23 +64,33 @@ app.get('/.well-known/appspecific/com.chrome.devtools.json', (req, res) => {
 });
 
 // ─── 路由 ──────────────────────────────────────────────────────────────────────
-app.use('/api/v1/auth',        authRoutes);
-app.use('/api/v1/tasks',       tasksRoutes);
-app.use('/api/v1/stores',      storesRoutes);
-app.use('/api/v1/employees',   employeesRoutes);
-app.use('/api/v1/assignments', assignmentsRoutes);
-app.use('/api/v1/events',      notificationsRoutes);
-app.use('/api/v1/nudges',      nudgeRoutes);
-app.use('/api/v1/dashboard',  dashboardRoutes);
-app.use('/api/v1/dashboard',  dashboardInsightRoutes);
-app.use('/api/v1/dashboard',  dashboardAgentRoutes);
-app.use('/api/v1/mypal',      mypalRoutes);
-app.use('/api/v1/chat',       chatRoutes);
-app.use('/api/v1/asr',        asrRoutes);
+// 旧路径兼容：/api/v1/auth|stores|employees → Admin Router; /api/v1/assignments → Queue Router; /api/v1/events|nudges → Reminder Router
+app.use('/api/v1/auth',        require('./modules/admin/routes/authRoutes'));
+app.use('/api/v1/tasks',       require('./modules/task/routes/taskRoutes'));
+app.use('/api/v1/campaigns',   require('./modules/task/routes/campaignRoutes'));
+app.use('/api/v1/stores',      require('./modules/admin/routes/storeRoutes'));
+app.use('/api/v1/employees',   require('./modules/admin/routes/learnerRoutes'));
+app.use('/api/v1/assignments', require('./modules/task/routes/queueRoutes'));
+app.use('/api/v1/events',      require('./modules/task/routes/reminderRoutes'));
+app.use('/api/v1/nudges',      require('./modules/task/routes/reminderRoutes'));
+app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/dashboardRoutes'));
+app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/insightRoutes'));
+app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/agentRoutes'));
+app.use('/api/v1/mypal',       require('./modules/mypal/routes/mypalRoutes'));
+app.use('/api/v1/open-sync',   require('./modules/task/routes/openSyncRoutes'));
+app.use('/api/v1/chat',        require('./routes/chat'));
+app.use('/api/v1/asr',         require('./routes/asr'));
 
-// ─── MyPal（开发环境 Mock）──────────────────────────────────────────────────
-if (mypalMockRoutes) {
-  app.use('/api/v1/mypal/mock', mypalMockRoutes);
+app.use('/api/v1/admin/auth',     require('./modules/admin/routes/authRoutes'));
+app.use('/api/v1/admin/accounts', require('./modules/admin/routes/accountRoutes'));
+app.use('/api/v1/admin/stores',   require('./modules/admin/routes/storeRoutes'));
+app.use('/api/v1/admin/dicts',    require('./modules/admin/routes/dictRoutes'));
+app.use('/api/v1/admin/learners', require('./modules/admin/routes/learnerRoutes'));
+app.use('/api/v1/data-import',    require('./modules/admin/routes/resellerhqRoutes'));
+app.use('/api/v1/data-import/campaign', require('./modules/admin/routes/campaignRoutes'));
+
+if (process.env.MYPAL_MOCK === '1') {
+  app.use('/api/v1/mypal/mock', require('./modules/mypal/routes/mypalMockRoutes'));
 }
 
 // ─── 统一错误处理（最后挂载）────────────────────────────────────────────────────
@@ -152,8 +159,8 @@ server.listen(PORT, '0.0.0.0', () => {
 // Langfuse v3 SDK 走后台批量上报，直接进程退出会丢最后一批 trace（见
 // `docs/plans/2026-04-23-agent-execution-telemetry.md` §5.8）。SIGTERM/SIGINT
 // 到达时触发一次带 5s 超时的 flushAsync，再关闭 HTTP server 与退出。
-const { getClient: getLangfuseClient } = require('./utils/tracer');
-const logger = require('./utils/logger');
+const { getClient: getLangfuseClient } = require('./modules/common/utils/tracer');
+const logger = require('./modules/common/utils/logger');
 
 let shuttingDown = false;
 async function gracefulShutdown(signal) {

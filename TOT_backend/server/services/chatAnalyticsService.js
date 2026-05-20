@@ -1,7 +1,7 @@
 'use strict';
 
-const { db } = require('../db');
-const { buildRegionFilter } = require('../utils/chatUtils');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
+const { fetchTaskContext, classifyStatus, completionTimeHours } = require('../modules/dashboard/services/queryEngine');
 
 const SUPPORTED_ANALYSIS_TYPES = new Set([
   'quantile_duration',
@@ -12,28 +12,65 @@ const SUPPORTED_ANALYSIS_TYPES = new Set([
   'trimmed_mean_duration',
 ]);
 
-function buildAssignmentWhere(args, regionScope) {
-  const filter = buildRegionFilter(regionScope);
-  const clauses = ["t.status = 'dispatched'"];
-  const params = [];
+function filterByRegionScope(queues, regionScope) {
+  if (!regionScope || regionScope.type === 'national') return queues;
+  if (regionScope.type === 'regional') {
+    if (!regionScope.regions || regionScope.regions.length === 0) return [];
+    const allowed = new Set(regionScope.regions);
+    return queues.filter(q => allowed.has(q.sub_region_code));
+  }
+  if (regionScope.type === 'rtm' && regionScope.rtm) {
+    return queues.filter(q => q.rtm4_name === regionScope.rtm);
+  }
+  return queues;
+}
 
+async function fetchAggregatedData(args, regionScope) {
+  let tasks = [];
   if (args.taskId) {
-    clauses.push('ta.task_id = ?');
-    params.push(args.taskId);
-  }
-  if (args.region) {
-    clauses.push('s.region = ?');
-    params.push(args.region);
-  }
-  if (args.storeId) {
-    clauses.push('ta.store_id = ?');
-    params.push(args.storeId);
+    const t = await mysqlCrud.getTaskById(args.taskId);
+    if (t) tasks.push(t);
+  } else {
+    tasks = await mysqlCrud.getActiveDispatchedTasks();
   }
 
-  return {
-    sql: `${clauses.join(' AND ')} ${filter.sql}`.trim(),
-    params: [...params, ...filter.params],
-  };
+  let allQueues = [];
+  const drill = {};
+  if (args.storeId) drill.storeId = args.storeId;
+  if (args.region) drill.format = args.region; 
+
+  const contexts = await Promise.all(tasks.map(t => fetchTaskContext(t.task_publish_id, drill)));
+
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    const ctx = contexts[i];
+    const queues = filterByRegionScope(ctx.queues, regionScope);
+
+    for (const q of queues) {
+      const status = classifyStatus(q.email_id, ctx.mpsRows);
+      
+      let durationHours = null;
+      let completedAtMs = null;
+      if (status === 'completed') {
+         durationHours = completionTimeHours(t, ctx.mpsRows, q.email_id);
+         const learnerRows = ctx.mpsRows.filter(r => r.email_id === q.email_id && r.required_flag === 1 && r.passed_time);
+         if (learnerRows.length > 0) {
+           completedAtMs = Math.max(...learnerRows.map(r => new Date(r.passed_time).getTime()));
+         }
+      }
+
+      allQueues.push({
+        status,
+        duration_hours: durationHours,
+        completed_at_ms: completedAtMs,
+        progress: status === 'completed' ? 100 : (status === 'pending' ? 0 : 50),
+        nudge_count: 0, 
+        channel: q.rtm4_name || 'UNKNOWN',
+      });
+    }
+  }
+
+  return allQueues;
 }
 
 function computeQuantile(values, q) {
@@ -82,34 +119,11 @@ function formatUnsupported(analysisType) {
   };
 }
 
-function fetchDurationRows(args, regionScope) {
-  const where = buildAssignmentWhere(args, regionScope);
-  return db.all(
-    `SELECT
-       ta.id,
-       ta.progress,
-       ta.nudge_count,
-       ta.store_id,
-       s.region,
-       s.rtm,
-       (
-         julianday(ta.completed_at) - julianday(COALESCE(ta.started_at, ta.received_at, ta.created_at))
-       ) * 24.0 AS duration_hours
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     JOIN stores s ON s.id = ta.store_id
-     WHERE ${where.sql}
-       AND ta.status = 'completed'
-       AND ta.completed_at IS NOT NULL`,
-    where.params
-  );
-}
-
-function runQuantileDuration(args, regionScope) {
-  const rows = fetchDurationRows(args, regionScope);
-  const durations = rows
-    .map((r) => Number(r.duration_hours))
-    .filter((n) => Number.isFinite(n) && n >= 0);
+async function runQuantileDuration(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
+  const durations = allQueues
+    .filter(q => q.status === 'completed' && q.duration_hours !== null)
+    .map(q => q.duration_hours);
 
   if (!durations.length) {
     return {
@@ -131,11 +145,11 @@ function runQuantileDuration(args, regionScope) {
   };
 }
 
-function runCompletionTimeDistribution(args, regionScope) {
-  const rows = fetchDurationRows(args, regionScope);
-  const durations = rows
-    .map((r) => Number(r.duration_hours))
-    .filter((n) => Number.isFinite(n) && n >= 0);
+async function runCompletionTimeDistribution(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
+  const durations = allQueues
+    .filter(q => q.status === 'completed' && q.duration_hours !== null)
+    .map(q => q.duration_hours);
 
   const buckets = [
     { label: '0-4h', min: 0, max: 4, count: 0 },
@@ -160,14 +174,11 @@ function runCompletionTimeDistribution(args, regionScope) {
   };
 }
 
-function runMetricCorrelation(args, regionScope) {
-  const rows = fetchDurationRows(args, regionScope);
-  const pairs = rows
-    .map((r) => ({
-      x: Number(r.nudge_count),
-      y: Number(r.progress),
-    }))
-    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+async function runMetricCorrelation(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
+  const pairs = allQueues
+    .filter(q => q.status === 'completed')
+    .map(q => ({ x: q.nudge_count, y: q.progress }));
 
   const corr = computeCorrelation(pairs);
   return {
@@ -187,22 +198,10 @@ function runMetricCorrelation(args, regionScope) {
   };
 }
 
-function runProgressVarianceByChannel(args, regionScope) {
-  const where = buildAssignmentWhere(args, regionScope);
-  const rows = db.all(
-    `SELECT
-       COALESCE(s.rtm, 'UNKNOWN') AS channel,
-       COUNT(*) AS total,
-       SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     JOIN stores s ON s.id = ta.store_id
-     WHERE ${where.sql}
-     GROUP BY COALESCE(s.rtm, 'UNKNOWN')`,
-    where.params
-  );
+async function runProgressVarianceByChannel(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
 
-  if (!rows.length) {
+  if (!allQueues.length) {
     return {
       analysisType: 'progress_variance_by_channel',
       sampleSize: 0,
@@ -212,11 +211,24 @@ function runProgressVarianceByChannel(args, regionScope) {
     };
   }
 
-  const channels = rows.map((r) => ({
-    channel: r.channel,
-    completionRate: Number(((Number(r.completed || 0) / Number(r.total || 1)) * 100).toFixed(2)),
-    totalCount: Number(r.total),
-  }));
+  const byChannel = new Map();
+  for (const q of allQueues) {
+    const ch = q.channel;
+    if (!byChannel.has(ch)) byChannel.set(ch, { total: 0, completed: 0 });
+    const st = byChannel.get(ch);
+    st.total++;
+    if (q.status === 'completed') st.completed++;
+  }
+
+  const channels = [];
+  for (const [channel, st] of byChannel.entries()) {
+    channels.push({
+      channel,
+      completionRate: Number(((st.completed / st.total) * 100).toFixed(2)),
+      totalCount: st.total,
+    });
+  }
+
   const mean = channels.reduce((acc, c) => acc + c.completionRate, 0) / channels.length;
   const variance = channels.reduce((acc, c) => acc + ((c.completionRate - mean) ** 2), 0) / channels.length;
 
@@ -229,21 +241,12 @@ function runProgressVarianceByChannel(args, regionScope) {
   };
 }
 
-function runCompletionRateForecast(args, regionScope) {
-  const where = buildAssignmentWhere(args, regionScope);
-  const base = db.get(
-    `SELECT
-       COUNT(*) AS total,
-       SUM(CASE WHEN ta.status = 'completed' THEN 1 ELSE 0 END) AS completed
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     JOIN stores s ON s.id = ta.store_id
-     WHERE ${where.sql}`,
-    where.params
-  );
+async function runCompletionRateForecast(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
 
-  const total = Number(base?.total || 0);
-  const completed = Number(base?.completed || 0);
+  const total = allQueues.length;
+  const completed = allQueues.filter(q => q.status === 'completed').length;
+
   if (!total) {
     return {
       analysisType: 'completion_rate_forecast',
@@ -253,20 +256,12 @@ function runCompletionRateForecast(args, regionScope) {
     };
   }
 
-  // use trailing 24h completion velocity as naive forecast baseline
-  const velocityRows = db.all(
-    `SELECT strftime('%Y-%m-%d %H:00:00', ta.completed_at) AS hourBucket, COUNT(*) AS completedCount
-     FROM task_assignments ta
-     JOIN tasks t ON t.id = ta.task_id
-     JOIN stores s ON s.id = ta.store_id
-     WHERE ${where.sql}
-       AND ta.status = 'completed'
-       AND ta.completed_at >= datetime('now', '-24 hours', 'localtime')
-     GROUP BY hourBucket`,
-    where.params
-  );
-  const totalRecentCompleted = velocityRows.reduce((acc, r) => acc + Number(r.completedCount || 0), 0);
-  const avgCompletedPerHour = velocityRows.length ? (totalRecentCompleted / 24) : 0;
+  const recentCompleted = allQueues.filter(q => {
+    if (q.status !== 'completed' || !q.completed_at_ms) return false;
+    return (Date.now() - q.completed_at_ms) <= 24 * 60 * 60 * 1000;
+  }).length;
+
+  const avgCompletedPerHour = recentCompleted / 24;
 
   const forecastTarget = args.targetTime
     ? new Date(args.targetTime)
@@ -284,11 +279,11 @@ function runCompletionRateForecast(args, regionScope) {
   };
 }
 
-function runTrimmedMeanDuration(args, regionScope) {
-  const rows = fetchDurationRows(args, regionScope);
-  const durations = rows
-    .map((r) => Number(r.duration_hours))
-    .filter((n) => Number.isFinite(n) && n >= 0)
+async function runTrimmedMeanDuration(args, regionScope) {
+  const allQueues = await fetchAggregatedData(args, regionScope);
+  const durations = allQueues
+    .filter(q => q.status === 'completed' && q.duration_hours !== null)
+    .map(q => q.duration_hours)
     .sort((a, b) => a - b);
 
   if (!durations.length) {
@@ -315,7 +310,7 @@ function runTrimmedMeanDuration(args, regionScope) {
   };
 }
 
-function runAnalysis(args, regionScope) {
+async function runAnalysis(args, regionScope) {
   const analysisType = args.analysisType;
   if (!SUPPORTED_ANALYSIS_TYPES.has(analysisType)) {
     throw new Error(`Unsupported analysisType: ${analysisType}`);
@@ -323,17 +318,17 @@ function runAnalysis(args, regionScope) {
 
   switch (analysisType) {
     case 'quantile_duration':
-      return runQuantileDuration(args, regionScope);
+      return await runQuantileDuration(args, regionScope);
     case 'completion_time_distribution':
-      return runCompletionTimeDistribution(args, regionScope);
+      return await runCompletionTimeDistribution(args, regionScope);
     case 'metric_correlation':
-      return runMetricCorrelation(args, regionScope);
+      return await runMetricCorrelation(args, regionScope);
     case 'progress_variance_by_channel':
-      return runProgressVarianceByChannel(args, regionScope);
+      return await runProgressVarianceByChannel(args, regionScope);
     case 'completion_rate_forecast':
-      return runCompletionRateForecast(args, regionScope);
+      return await runCompletionRateForecast(args, regionScope);
     case 'trimmed_mean_duration':
-      return runTrimmedMeanDuration(args, regionScope);
+      return await runTrimmedMeanDuration(args, regionScope);
     default:
       return formatUnsupported(analysisType);
   }

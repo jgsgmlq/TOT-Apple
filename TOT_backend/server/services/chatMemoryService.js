@@ -1,8 +1,7 @@
 'use strict';
 
-const { z } = require('zod');
-const { ChatOpenAI } = require('@langchain/openai');
 const { db } = require('../db');
+const { simpleChat } = require('../utils/ai');
 const { nanoid } = require('nanoid');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
@@ -13,21 +12,6 @@ const {
   preview,
   promptHash,
 } = require('../utils/tracer');
-
-const MemoryItem = z.object({
-  type: z.string(),
-  content: z.string(),
-  action: z.enum(["ADD", "UPDATE"]),
-});
-const MemoryOutput = z.array(MemoryItem);
-
-const memoryModel = new ChatOpenAI({
-  modelName: "deepseek-chat",
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  configuration: { baseURL: process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1" },
-  temperature: 0.1,
-  maxTokens: 512,
-});
 
 // Trace 更新包装（Langfuse v3 trace 只有 `.update()` 无 `.end()`；NoopTrace 亦同）。
 function finishTrace(trace, opts = {}) {
@@ -72,7 +56,7 @@ async function extract(sessionId) {
   if (!session) return;
 
   const messages = db.all(
-    'SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 6',
+    'SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC LIMIT 2',
     [sessionId]
   ).reverse();
 
@@ -109,17 +93,15 @@ ${conversationText}`;
   });
 
   const llmStart = Date.now();
-  const structuredModel = memoryModel.withStructuredOutput(MemoryOutput, {
-    name: "memory_extract",
-    method: "jsonMode",
-  });
-
-  let extracted;
+  let llmResp;
   try {
-    extracted = await structuredModel.invoke([
-      { role: 'system', content: MEMORY_SYSTEM_PROMPT },
-      { role: 'user', content: userPrompt },
-    ]);
+    llmResp = await simpleChat(
+      [
+        { role: 'system', content: MEMORY_SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt },
+      ],
+      { maxTokens: 512, returnUsage: true }
+    );
   } catch (err) {
     endGeneration(llmGen, {
       output: null,
@@ -136,11 +118,27 @@ ${conversationText}`;
     return;
   }
 
+  const response = llmResp.content || '';
   endGeneration(llmGen, {
-    output: preview(JSON.stringify(extracted)),
-    model: 'deepseek-chat',
+    output: preview(response),
+    usage: llmResp.usage || undefined,
+    model: llmResp.model || undefined,
     metadata: { durationMs: Date.now() - llmStart },
   });
+
+  let extracted;
+  try {
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    extracted = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
+  } catch (e) {
+    logger.warn('memory_extraction_parse_failed', { sessionId, response });
+    finishTrace(memoryTrace, {
+      output: null,
+      level: 'WARNING',
+      metadata: { status: 'parse_error', written: 0, conflicts: 0 },
+    });
+    return;
+  }
 
   if (!Array.isArray(extracted) || extracted.length === 0) {
     finishTrace(memoryTrace, {
@@ -201,38 +199,20 @@ ${conversationText}`;
  * 获取用户的所有记忆，用于注入 System Prompt
  * @param {number} userId 
  */
-function getMemories(userId, userMessage) {
+function getMemories(userId) {
+  // T4: mid-term TTL 14 天兜底策略。对于 mid_term 类型的记忆，只读取最近 14 天内的记录
   const rows = db.all(`
-    SELECT memory_type, content
-    FROM user_memories
-    WHERE user_id = ?
+    SELECT memory_type, content 
+    FROM user_memories 
+    WHERE user_id = ? 
       AND (
-        memory_type != 'mid_term'
+        memory_type != 'mid_term' 
         OR (memory_type = 'mid_term' AND created_at > datetime('now', '-14 days'))
       )
-    ORDER BY updated_at DESC
-    LIMIT 10
   `, [userId]);
   if (!rows || !rows.length) return '';
-
-  // 如果有当前用户消息，做关键词匹配过滤
-  let filtered = rows;
-  const msg = typeof userMessage === 'string' ? userMessage.trim() : '';
-  if (msg) {
-    const keywords = msg.split(/[，。！？\s,!\?]+/).filter(w => w.length >= 2);
-    if (keywords.length > 0) {
-      filtered = rows
-        .map(r => {
-          const hits = keywords.filter(kw => r.content.includes(kw)).length;
-          return { ...r, _hits: hits };
-        })
-        .filter(r => r._hits > 0)
-        .sort((a, b) => b._hits - a._hits);
-      if (filtered.length === 0) filtered = rows.slice(0, 5).map(r => ({ ...r, _hits: 0 }));
-    }
-  }
-
-  return filtered.slice(0, 5).map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
+  
+  return rows.map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
 }
 
 /**
