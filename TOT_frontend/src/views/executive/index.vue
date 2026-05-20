@@ -1678,58 +1678,6 @@
           }
 
 
-          .clarify-panel {
-            margin-bottom: 8px;
-            padding: 12px 14px;
-            border: 1px solid #e0e0e0;
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-          }
-          .clarify-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 8px;
-          }
-          .clarify-cards {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            margin-bottom: 8px;
-          }
-          .clarify-card {
-            padding: 8px 12px;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            cursor: pointer;
-            background: #f8f9fa;
-            transition: all .15s;
-          }
-          .clarify-card:hover {
-            border-color: #667eea;
-            background: #f0f2ff;
-          }
-          .clarify-card-title {
-            font-size: 13px;
-            font-weight: 600;
-          }
-          .clarify-card-meta {
-            font-size: 11px;
-            color: #888;
-            margin-top: 2px;
-            display: flex;
-            gap: 12px;
-          }
-          .clarify-actions {
-            display: flex;
-            justify-content: flex-end;
-          }
-          .clarify-textonly {
-            padding: 8px 12px;
-            font-size: 13px;
-            color: #555;
-          }
 
           .exec-prov-footer {
             font-size: 11px; color: #aaa; text-align: right; margin-top: 8px;
@@ -1821,35 +1769,61 @@
           }
         }
 
-        .clarify-panel {
-          margin-bottom: 16px;
+
+                .clarify-panel {
+          margin-bottom: 8px;
           padding: 12px 14px;
-          border: 1px solid rgba(37, 99, 235, 0.2);
-          background: rgba(37, 99, 235, 0.06);
+          border: 1px solid #e0e0e0;
+          background: #fff;
           border-radius: 12px;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.04);
         }
-
         .clarify-title {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 600;
-          color: #1d4ed8;
-          margin-bottom: 10px;
-          white-space: pre-wrap;
+          color: #333;
+          margin-bottom: 8px;
         }
-
-        .clarify-options {
+        .clarify-cards {
           display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin-bottom: 10px;
+          flex-direction: column;
+          gap: 6px;
+          margin-bottom: 8px;
         }
-
+        .clarify-card {
+          padding: 8px 12px;
+          border: 1px solid #e0e0e0;
+          border-radius: 8px;
+          cursor: pointer;
+          background: #f8f9fa;
+          transition: all .15s;
+        }
+        .clarify-card:hover {
+          border-color: #667eea;
+          background: #f0f2ff;
+        }
+        .clarify-card-title {
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .clarify-card-meta {
+          font-size: 11px;
+          color: #888;
+          margin-top: 2px;
+          display: flex;
+          gap: 12px;
+        }
         .clarify-actions {
           display: flex;
           justify-content: flex-end;
         }
+        .clarify-textonly {
+          padding: 8px 12px;
+          font-size: 13px;
+          color: #555;
+        }
 
-        .exec-json-fallback {
+.exec-json-fallback {
           margin: 0;
           padding: 10px;
           background: rgba(0, 0, 0, 0.04);
