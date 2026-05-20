@@ -18,11 +18,11 @@ async function updateSessionActive(id) {
   await run('UPDATE chat_session SET last_active_at = NOW(3) WHERE id = ?', [id]);
 }
 
-async function insertMessage({ id, sessionId, role, contentText, intentType, toolCallsJson, toolCallId, clientMessageId }) {
+async function insertMessage({ id, sessionId, role, contentText, contentJson, intentType, toolCallsJson, toolCallId, clientMessageId }) {
   await run(
-    `INSERT INTO chat_message (id, session_id, role, content_text, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
-    [id, sessionId, role, contentText, intentType || null, toolCallsJson || null, toolCallId || null, clientMessageId || null]
+    `INSERT INTO chat_message (id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
+    [id, sessionId, role, contentText, contentJson || null, intentType || null, toolCallsJson || null, toolCallId || null, clientMessageId || null]
   );
 }
 

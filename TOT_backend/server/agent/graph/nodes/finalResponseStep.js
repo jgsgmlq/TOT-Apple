@@ -8,6 +8,54 @@ const promptRegistry = require('../../../prompts/registry');
 const { renderToolResultsMarkdown } = require('../renderers');
 const { fcModel } = require('../llm');
 
+const { z } = require("zod");
+
+const FinalResponseOutput = z.object({
+  overview: z.string(),
+  keyNumbers: z.array(z.object({
+    label: z.string(),
+    value: z.union([z.string(), z.number()]),
+    unit: z.string().optional(),
+  })),
+  attentionPoints: z.array(z.object({
+    level: z.enum(["warning", "info", "positive"]),
+    text: z.string(),
+  })),
+  followUpSuggestions: z.array(z.string()),
+  visualizations: z.array(z.object({
+    type: z.enum(["bar", "line", "pie"]),
+    title: z.string(),
+    option: z.record(z.any()),
+  })).optional(),
+  statisticsProvenance: z.object({
+    "统计口径": z.string(),
+    "数据截止": z.string(),
+  }).passthrough(),
+  forecastDisclaimer: z.string().nullable().optional(),
+  table: z.object({
+    title: z.string(),
+    columns: z.array(z.string()),
+    rows: z.array(z.array(z.string())),
+  }).nullable().optional(),
+});
+
+function prepareToolData(toolResults) {
+  const items = [];
+  for (const [, entry] of Object.entries(toolResults || {})) {
+    if (!entry) continue;
+    let parsed = entry.data;
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch (_) { /* keep raw */ }
+    }
+    items.push({
+      toolName: entry.toolName || null,
+      data: parsed,
+      error: entry.error || (parsed && parsed.error) || null,
+    });
+  }
+  return items;
+}
+
 const sanitizeUserFacingMarkdown = (content) => {
   const text = typeof content === 'string' ? content : '';
   if (!text) return text;
@@ -79,46 +127,50 @@ const finalResponseStep = async (state, config) => {
         response = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。";
       }
     } else {
-      // tool mode: FC loop 结束，有工具查询结果。调用 LLM 生成总结
+      // tool mode: FC loop 结束，有工具查询结果。调用 LLM 生成结构化输出
       const toolResultKeys = Object.keys(state.toolResults || {});
       if (toolResultKeys.length > 0) {
-        console.log('[FinalResponseStep] 工具查询完成，调用 LLM 生成总结...');
+        console.log('[FinalResponseStep] 工具查询完成，调用 FinalResponse LLM (structured)...');
         const emitter = config?.configurable?.sseEmitter;
         const llm = getFcModel();
         const traceId = config?.configurable?.traceId;
         const client = getClient();
         const gen = client && traceId
-          ? client.generation({ traceId, name: 'FinalResponse_Summary', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
-          : NOOP_TRACE.generation({ name: 'FinalResponse_Summary' });
+          ? client.generation({ traceId, name: 'FinalResponse_Structured', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
+          : NOOP_TRACE.generation({ name: 'FinalResponse_Structured' });
 
-        const resultsText = JSON.stringify(state.toolResults, null, 2).slice(0, 4000);
-        const summaryPrompt = `你是培训助手。根据以下数据回答用户问题。用简洁的列表或表格呈现关键数据。
+        const toolItems = prepareToolData(state.toolResults);
+        const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
 
-用户问题: ${state.userMessage}
+        // decideChart 已生成的图表数据
+        const { decideChart } = require('../decideChart');
+        const suggestedChart = decideChart(state.toolResults || {}, state.intent);
+        const chartBlock = suggestedChart
+          ? '\n\nAVAILABLE CHART DATA (可修改 title/colors，但不要编造数据):\n' + JSON.stringify(suggestedChart, null, 2)
+          : '';
 
-工具查询结果:
-${resultsText}
-
-请直接回答用户问题，突出关键数字。`;
+        const prompt = promptRegistry.get('final_response');
+        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}\n${chartBlock}`;
 
         try {
-          const stream = await llm.stream([
-            new SystemMessage(summaryPrompt),
-            new HumanMessage('请根据上面的数据回答用户问题')
-          ]);
-          response = '';
-          for await (const chunk of stream) {
-            if (chunk.content) {
-              response += chunk.content;
-              if (emitter && typeof emitter.handleLLMNewToken === 'function') {
-                emitter.handleLLMNewToken(chunk.content, { isReasoning: false });
-              }
-            }
+          const structuredModel = llm.withStructuredOutput(FinalResponseOutput, {
+            name: "final_response",
+            method: "jsonMode",
+          });
+          const parsed = await structuredModel.invoke([
+            new SystemMessage(fullPrompt),
+            new HumanMessage('根据以上数据生成结构化回答，严格遵守 JSON schema。')
+          ], { signal: config?.signal });
+
+          response = JSON.stringify(parsed);
+
+          if (emitter && typeof emitter.handleLLMNewToken === 'function') {
+            emitter.handleLLMNewToken(response, { isReasoning: false });
           }
           endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
         } catch (err) {
-          console.error('[FinalResponseStep] 总结生成失败:', err.message);
-          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'ERROR', statusMessage: err.message, model: 'deepseek-chat' });
+          console.error('[FinalResponseStep] 结构化输出失败，降级到渲染器:', err.message);
+          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'WARNING', statusMessage: err.message, model: 'deepseek-chat' });
           response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || '抱歉，查询过程中遇到了问题。';
         }
       } else {
@@ -129,7 +181,21 @@ ${resultsText}
 
   response = sanitizeUserFacingMarkdown(response);
   endSpan(span, { output: preview(response), metadata: { responseBytes: response.length } });
-  return { finalResponse: response, reply_markdown: response, messages: [new AIMessage({ content: response })] };
+
+  // 提取 overview 文本用于 content_text
+  let overviewText = response;
+  try {
+    const parsed = JSON.parse(response);
+    if (parsed.overview) overviewText = parsed.overview;
+  } catch (_) { /* not JSON, use full response */ }
+
+  return {
+    finalResponse: response,
+    reply_markdown: response,
+    reply_content_json: response,
+    reply_overview_text: overviewText,
+    messages: [new AIMessage({ content: response })]
+  };
 };
 
 module.exports = { finalResponseStep, sanitizeUserFacingMarkdown };

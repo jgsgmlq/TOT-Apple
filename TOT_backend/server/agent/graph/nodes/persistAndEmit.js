@@ -15,9 +15,12 @@ const persistAndEmit = async (state, config) => {
   console.log(`[PersistAndEmit] 正在持久化会话 ${sessionId} 的机器人回复...`);
 
   try {
+    const overviewText = state.reply_overview_text || replyContent;
+    const contentJson = state.reply_content_json || null;
     await chatCrud.insertMessage({
       id: assistMsgId, sessionId, role: 'assistant',
-      contentText: replyContent,
+      contentText: overviewText,
+      contentJson,
       intentType: state.intent || null,
     });
     await chatCrud.updateSessionActive(sessionId);
