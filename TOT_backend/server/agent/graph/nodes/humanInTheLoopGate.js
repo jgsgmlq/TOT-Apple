@@ -94,11 +94,20 @@ const humanInTheLoopGate = async (state) => {
   }
 
   endSpan(span, { output: resumeType });
-  const messageContent = `用户确认了选项/补充了信息: ${JSON.stringify(normalized?.value ?? normalized?.selected_option_id ?? normalized)}`;
+
+  // 提取用户选择的参数值（slot_fill）
+  const selectedValue = normalized?.value ?? normalized?.selected_option_id ?? normalized;
+  const selectedLabel = typeof normalized?.label === 'string' ? normalized.label : (selectedValue?.label || '');
+
+  const messageContent = selectedLabel
+    ? `用户已选择任务: ${selectedLabel} (task_id: ${selectedValue?.value || selectedValue?.id || selectedValue})。请立即用这个 task_id 重新调用之前失败的工具，继续完成用户最初的问题。`
+    : `用户补充了信息: ${JSON.stringify(selectedValue)}。请用这些参数重新调用工具，继续完成用户最初的问题。`;
+
+  // 用 HumanMessage 而非 ToolMessage：HITL 路径未经过 FC 循环，无 tool_calls 历史，ToolMessage 会导致 API 400 错误
   return {
     hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
-    fc_next_action: 'validate',
-    messages: [new ToolMessage({ tool_call_id: payload?.resume_token || 'unknown_token', name: 'clarify_intent', content: messageContent })]
+    fc_next_action: 'validate', userMessage: messageContent,
+    messages: [new HumanMessage(messageContent)]
   };
 };
 
