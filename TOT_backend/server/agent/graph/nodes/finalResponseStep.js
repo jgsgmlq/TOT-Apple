@@ -191,8 +191,9 @@ const finalResponseStep = async (state, config) => {
           if (rawJson.attentionPoints) {
             rawJson.attentionPoints = rawJson.attentionPoints.map(p => {
               if (typeof p === 'string') return { level: 'info', text: p };
-              if (!p.text) return { ...p, text: '' };
-              return p;
+              // LLM 可能把内容写到 message 而非 text
+              const text = p.text || p.message || p.content || '';
+              return { level: p.level || 'info', text };
             });
           }
           if (rawJson.table && rawJson.table.rows) {

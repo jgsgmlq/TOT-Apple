@@ -65,7 +65,7 @@ export function tryParseReplyContent(jsonRaw: string): ReplyContent | null {
     ? parsed.keyNumbers.map(normalizeKeyNumber).filter((k) => k.label || k.value)
     : [];
   const attentionPoints = Array.isArray(parsed.attentionPoints)
-    ? parsed.attentionPoints.map((p) => String(p)).filter(Boolean)
+    ? parsed.attentionPoints.map((p: any) => typeof p === 'string' ? p : (p?.text || p?.message || '')).filter(Boolean)
     : [];
   const followUpSuggestions = Array.isArray(parsed.followUpSuggestions)
     ? parsed.followUpSuggestions.map((p) => String(p)).filter(Boolean)
@@ -199,7 +199,13 @@ export function parseReplyContentProgressive(jsonRaw: string): ReplyContent | nu
   const keyNumObjs = extractCompleteObjectsInArray(t, 'keyNumbers');
   const keyNumbers = keyNumObjs.map(normalizeKeyNumber).filter((k) => k.label || k.value);
 
-  const attentionPoints = extractStringArrayLoose(t, 'attentionPoints');
+  // attentionPoints 可以是旧格式 string[] 或新格式 {level,text}[]
+  const rawAttention = extractCompleteObjectsInArray(t, 'attentionPoints');
+  const attentionPoints: string[] = rawAttention.map((p: any) => typeof p === 'string' ? p : (p?.text || p?.message || '')).filter(Boolean);
+  // 如果对象格式没提取到，尝试旧格式 string[]
+  if (attentionPoints.length === 0) {
+    attentionPoints.push(...extractStringArrayLoose(t, 'attentionPoints'));
+  }
   const followUpSuggestions = extractStringArrayLoose(t, 'followUpSuggestions');
 
   const visualizations = extractCompleteObjectsInArray(t, 'visualizations') as any[];

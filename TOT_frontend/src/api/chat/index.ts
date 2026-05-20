@@ -4,12 +4,13 @@ import type { ChartData } from '@/types/chat';
 
 export interface ReplyContent {
   overview: string;
-  keyNumbers: Array<{ label: string; value: string; unit?: string }>;
-  attentionPoints: string[];
+  keyNumbers: Array<{ label: string; value: string | number; unit?: string }>;
+  attentionPoints: Array<string | { level: 'warning' | 'info' | 'positive'; text: string }>;
   followUpSuggestions: string[];
   visualizations?: ChartData[];
   statisticsProvenance?: any;
   forecastDisclaimer?: string;
+  table?: { title: string; columns: string[]; rows: string[][] } | null;
 }
 
 export interface CreateSessionResult {
@@ -88,7 +89,12 @@ export function formatReplyContentText(rc: ReplyContent | null | undefined): str
       rc.keyNumbers.map((k) => `• ${k.label}：${k.value}${k.unit || ''}`).join('\n');
   }
   if (rc.attentionPoints?.length) {
-    text += '\n\n⚠️ 关注点：\n' + rc.attentionPoints.map((p) => `• ${p}`).join('\n');
+    const points = rc.attentionPoints.map((p) => {
+      const label = typeof p === 'string' ? p : (p.text || '');
+      const level = typeof p === 'object' && p.level === 'warning' ? '⚠️ ' : p.level === 'positive' ? '✅ ' : 'ℹ️ ';
+      return `• ${level}${label}`;
+    });
+    text += '\n\n' + points.join('\n');
   }
   if (rc.followUpSuggestions?.length) {
     text += '\n\n💡 ' + rc.followUpSuggestions.join(' / ');
