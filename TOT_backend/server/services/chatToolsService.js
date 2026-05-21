@@ -277,6 +277,40 @@ function authorizeToolCall(toolName, meta, sessionContext) {
   return { ok: violations.length === 0, violations };
 }
 
+function summarizeArgs(args) {
+  if (!args || typeof args !== 'object') return '(none)';
+  const keys = Object.keys(args).filter((k) => args[k] != null);
+  if (keys.length === 0) return '(empty)';
+  return keys.map((k) => {
+    const v = args[k];
+    if (typeof v === 'string') return `${k}="${v.slice(0, 60)}${v.length > 60 ? '…' : ''}"`;
+    if (typeof v === 'number' || typeof v === 'boolean') return `${k}=${v}`;
+    if (Array.isArray(v)) return `${k}=[${v.length} items]`;
+    if (typeof v === 'object') return `${k}={${Object.keys(v).length} keys}`;
+    return `${k}=?`;
+  }).join(', ');
+}
+
+function summarizeResult(result) {
+  if (result === undefined || result === null) return '(void)';
+  if (typeof result === 'string') {
+    let parsed;
+    try { parsed = JSON.parse(result); } catch { /* not JSON */ }
+    if (parsed && typeof parsed === 'object') {
+      const keys = Object.keys(parsed).filter((k) => !k.startsWith('_'));
+      return `JSON{${keys.slice(0, 5).join(', ')}${keys.length > 5 ? ', …' : ''}} (${result.length}c)`;
+    }
+    return `text (${result.length}c)`;
+  }
+  if (Array.isArray(result)) return `array[${result.length}]`;
+  if (typeof result === 'object') {
+    const keys = Object.keys(result).filter((k) => !k.startsWith('_'));
+    if (result.error) return `error: ${result.error.code || result.error.message || 'unknown'}`;
+    return `object{${keys.slice(0, 5).join(', ')}${keys.length > 5 ? ', …' : ''}}`;
+  }
+  return String(result).slice(0, 80);
+}
+
 async function executeWithTimeout(promise, timeoutMs) {
   let timeoutHandle;
   const timeoutPromise = new Promise((_, reject) => {
@@ -303,7 +337,7 @@ async function executeByName(toolName, params, regionScope) {
   const handler = toolHandlers.get(normalizedToolName);
   const meta = toolMetas.get(normalizedToolName);
   if (!handler || !meta) {
-    return { 
+    return {
       error: {
         code: 'TOOL_NOT_FOUND',
         message: `Unknown tool requested: ${toolName}.`,
@@ -320,6 +354,13 @@ async function executeByName(toolName, params, regionScope) {
 
   if (!regionScope?.userRoles || !Array.isArray(regionScope.userRoles) || regionScope.userRoles.length === 0) {
     logger.warn('tool_roles_fallback', { toolName, usingFallback: 'executive' });
+  }
+
+  const debugGraph = process.env.DEBUG_GRAPH === 'true' || process.env.LOG_LEVEL === 'debug';
+  const t0 = Date.now();
+  const argsPreview = debugGraph ? summarizeArgs(params) : undefined;
+  if (debugGraph) {
+    logger.debug('tool_call_start', { tool: normalizedToolName, args: argsPreview });
   }
 
   try {
@@ -347,8 +388,31 @@ async function executeByName(toolName, params, regionScope) {
     const executionPromise = Promise.resolve(handler(params, regionScope));
     const result = await executeWithTimeout(executionPromise, meta.timeoutMs);
 
+    if (debugGraph) {
+      const elapsed = Date.now() - t0;
+      logger.debug('tool_call_end', {
+        tool: normalizedToolName,
+        elapsed: elapsed < 1000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`,
+        elapsedMs: elapsed,
+        status: 'ok',
+        result: summarizeResult(result),
+      });
+    }
+
     return result;
   } catch (err) {
+    if (debugGraph) {
+      const elapsed = Date.now() - t0;
+      logger.error('tool_call_end', {
+        tool: normalizedToolName,
+        elapsed: elapsed < 1000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`,
+        elapsedMs: elapsed,
+        status: 'error',
+        error: err.message,
+        code: err.code || undefined,
+      });
+    }
+
     // 5) 统一错误包装。优先采用 err.code（来自结构化 violation），其次根据 message 推断（兼容超时/handler 抛错）
     let code = err.code || 'EXECUTION_ERROR';
     let recommendation = 'Please explain the limitation to the user.';

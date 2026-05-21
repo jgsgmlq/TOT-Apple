@@ -11,6 +11,7 @@ const { fc_Escalate } = require("./nodes/fc_Escalate");
 const { humanInTheLoopGate } = require("./nodes/humanInTheLoopGate");
 const { finalResponseStep } = require("./nodes/finalResponseStep");
 const { persistAndEmit } = require("./nodes/persistAndEmit");
+const { maybeWrapNode, maybeWrapRoute } = require("./shared/graphDebugger");
 
 const routeAfterSafetyGateway = (state) => {
   if (state.mode === "deny") return "deny";
@@ -66,60 +67,63 @@ const routeAfterHumanInTheLoop = (state) => {
 };
 
 const buildGraph = () => {
+  const wn = (name, fn) => maybeWrapNode(name, fn);
+  const wr = (from, fn) => maybeWrapRoute(from, fn);
+
   const workflow = new StateGraph(ExecChatGraphState)
-    .addNode("LoadContext", loadContext)
-    .addNode("SafetyGateway", safetyGateway)
-    .addNode("fc_CheckSteps", fc_CheckSteps)
-    .addNode("fc_LlmToolCallStep", fc_LlmToolCallStep)
-    .addNode("fc_CheckDuplicate", fc_CheckDuplicate)
-    .addNode("fc_ExecuteTool", fc_ExecuteTool)
-    .addNode("fc_MergeToolResults", fc_MergeToolResults)
-    .addNode("fc_Escalate", fc_Escalate)
-    .addNode("HumanInTheLoopGate", humanInTheLoopGate)
-    .addNode("FinalResponseStep", finalResponseStep)
-    .addNode("PersistAndEmit", persistAndEmit);
+    .addNode("LoadContext", wn("LoadContext", loadContext))
+    .addNode("SafetyGateway", wn("SafetyGateway", safetyGateway))
+    .addNode("fc_CheckSteps", wn("fc_CheckSteps", fc_CheckSteps))
+    .addNode("fc_LlmToolCallStep", wn("fc_LlmToolCallStep", fc_LlmToolCallStep))
+    .addNode("fc_CheckDuplicate", wn("fc_CheckDuplicate", fc_CheckDuplicate))
+    .addNode("fc_ExecuteTool", wn("fc_ExecuteTool", fc_ExecuteTool))
+    .addNode("fc_MergeToolResults", wn("fc_MergeToolResults", fc_MergeToolResults))
+    .addNode("fc_Escalate", wn("fc_Escalate", fc_Escalate))
+    .addNode("HumanInTheLoopGate", wn("HumanInTheLoopGate", humanInTheLoopGate))
+    .addNode("FinalResponseStep", wn("FinalResponseStep", finalResponseStep))
+    .addNode("PersistAndEmit", wn("PersistAndEmit", persistAndEmit));
 
   workflow.addEdge(START, "LoadContext");
   workflow.addEdge("LoadContext", "SafetyGateway");
 
-  workflow.addConditionalEdges("SafetyGateway", routeAfterSafetyGateway, {
+  workflow.addConditionalEdges("SafetyGateway", wr("SafetyGateway", routeAfterSafetyGateway), {
     deny: "FinalResponseStep",
     chat: "FinalResponseStep",
     hitl: "HumanInTheLoopGate",
     fc: "fc_CheckSteps",
   });
 
-  workflow.addConditionalEdges("fc_CheckSteps", routeAfterFcCheckSteps, {
+  workflow.addConditionalEdges("fc_CheckSteps", wr("fc_CheckSteps", routeAfterFcCheckSteps), {
     "fc_LlmToolCallStep": "fc_LlmToolCallStep",
     "FinalResponseStep": "FinalResponseStep",
   });
 
-  workflow.addConditionalEdges("fc_LlmToolCallStep", routeAfterFcLlm, {
+  workflow.addConditionalEdges("fc_LlmToolCallStep", wr("fc_LlmToolCallStep", routeAfterFcLlm), {
     "fc_CheckDuplicate": "fc_CheckDuplicate",
     "FinalResponseStep": "FinalResponseStep",
   });
 
-  workflow.addConditionalEdges("fc_CheckDuplicate", routeAfterCheckDuplicate, {
+  workflow.addConditionalEdges("fc_CheckDuplicate", wr("fc_CheckDuplicate", routeAfterCheckDuplicate), {
     "fc_ExecuteTool": "fc_ExecuteTool",
     "fc_MergeToolResults": "fc_MergeToolResults",
   });
 
-  workflow.addConditionalEdges("fc_ExecuteTool", routeAfterExecute, {
+  workflow.addConditionalEdges("fc_ExecuteTool", wr("fc_ExecuteTool", routeAfterExecute), {
     "fc_MergeToolResults": "fc_MergeToolResults",
     "fc_Escalate": "fc_Escalate",
   });
 
-  workflow.addConditionalEdges("fc_MergeToolResults", routeAfterMerge, {
+  workflow.addConditionalEdges("fc_MergeToolResults", wr("fc_MergeToolResults", routeAfterMerge), {
     "fc_CheckSteps": "fc_CheckSteps",
     "FinalResponseStep": "FinalResponseStep",
   });
 
-  workflow.addConditionalEdges("fc_Escalate", routeAfterEscalate, {
+  workflow.addConditionalEdges("fc_Escalate", wr("fc_Escalate", routeAfterEscalate), {
     "fc_LlmToolCallStep": "fc_LlmToolCallStep",
     "FinalResponseStep": "FinalResponseStep",
   });
 
-  workflow.addConditionalEdges("HumanInTheLoopGate", routeAfterHumanInTheLoop, {
+  workflow.addConditionalEdges("HumanInTheLoopGate", wr("HumanInTheLoopGate", routeAfterHumanInTheLoop), {
     "fc_CheckSteps": "fc_CheckSteps",
     "FinalResponseStep": "FinalResponseStep",
   });

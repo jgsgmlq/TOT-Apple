@@ -84,6 +84,25 @@ function buildExecutiveMessageApiData(result) {
   };
 }
 
+/**
+ * 从结构化 JSON（content_json 或 FinalResponse JSON）提取 ReplyContent。
+ * 与 buildExecutiveMessageApiData 逻辑一致，但接受已解析的对象。
+ */
+function buildReplyContentFromStructured(parsed) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (!parsed.overview && !parsed.keyNumbers && !parsed.attentionPoints && !parsed.followUpSuggestions) return null;
+  return {
+    overview: parsed.overview || '',
+    keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
+    attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
+    followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
+    ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
+    ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
+    ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
+    ...(parsed.table && typeof parsed.table === 'object' ? { table: parsed.table } : {}),
+  };
+}
+
 function buildSseFinalPayload(result, sessionId, requestId, responseTime, timestamp) {
   const payload = buildExecutiveMessageApiData(result);
   return {
@@ -930,6 +949,11 @@ async function getHistory(sessionId, pageNum, pageSize) {
     if (r.role === 'assistant') {
       const normalizedContent = typeof r.content_text === 'string' ? r.content_text : '';
       markdownContent = normalizedContent || null;
+
+      // content_json (MySQL JSON 列) 可能已被驱动解析为对象
+      const contentJson =
+        r.content_json && typeof r.content_json === 'object' ? r.content_json : null;
+
       try {
         const parsed = JSON.parse(normalizedContent);
         if (parsed && typeof parsed === 'object') {
@@ -938,20 +962,18 @@ async function getHistory(sessionId, pageNum, pageSize) {
           }
           if (parsed.replyContent && typeof parsed.replyContent === 'object') {
             replyContent = parsed.replyContent;
-          } else if (parsed && (parsed.overview || parsed.keyNumbers || parsed.attentionPoints || parsed.followUpSuggestions)) {
-            replyContent = {
-              overview: parsed.overview || '',
-              keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
-              attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
-              followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : [],
-              ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
-              ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
-              ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
-            };
+          } else {
+            replyContent = buildReplyContentFromStructured(parsed);
           }
         }
-      } catch (e) {
-        replyContent = null;
+      } catch (_) {
+        // content_text 不是 JSON（如 FinalResponse 只存了 overview 文本），
+        // 回退到 content_json（结构化数据单独存储）
+        if (contentJson) {
+          replyContent = buildReplyContentFromStructured(contentJson);
+          const ov = typeof contentJson.overview === 'string' ? contentJson.overview : '';
+          if (ov && !markdownContent) markdownContent = ov;
+        }
       }
     }
     return {
