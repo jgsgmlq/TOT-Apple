@@ -274,11 +274,11 @@
                     <!-- 关键指标 — 有则渲染 -->
                     <KeyGrid v-if="msg.replyContent.keyNumbers?.length" :items="msg.replyContent.keyNumbers" />
 
-                    <!-- 表格 — 有则渲染（兼容旧 table 和新 tables 字段） -->
-                    <TableBlock v-if="msg.replyContent.table" :table="msg.replyContent.table" />
+                    <!-- 表格 — 有则渲染（tables 优先，table 兜底旧格式） -->
                     <template v-if="msg.replyContent.tables?.length">
                       <TableBlock v-for="(tbl, ti) in msg.replyContent.tables" :key="ti" :table="tbl" />
                     </template>
+                    <TableBlock v-else-if="msg.replyContent.table" :table="msg.replyContent.table" />
 
                     <!-- 洞察 — 有则渲染 -->
                     <InsightList v-if="msg.replyContent.attentionPoints?.length" :items="msg.replyContent.attentionPoints" />

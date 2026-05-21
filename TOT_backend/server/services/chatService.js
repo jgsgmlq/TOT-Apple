@@ -61,7 +61,7 @@ function buildExecutiveMessageApiData(result) {
           ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
           ...(parsed.statisticsProvenance ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
           ...(parsed.forecastDisclaimer ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
-          ...(parsed.table ? { table: parsed.table } : {}),
+          ...(parsed.table && !Array.isArray(parsed.tables) ? { table: parsed.table } : {}),
           ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
         };
       }
@@ -100,7 +100,7 @@ function buildReplyContentFromStructured(parsed) {
     ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
     ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
     ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
-    ...(parsed.table && typeof parsed.table === 'object' ? { table: parsed.table } : {}),
+    ...(parsed.table && typeof parsed.table === 'object' && !Array.isArray(parsed.tables) ? { table: parsed.table } : {}),
     ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
   };
 }

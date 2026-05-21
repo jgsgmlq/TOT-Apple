@@ -49,9 +49,9 @@ const FinalResponseOutput = z.object({
     title: z.string().optional(),
   })).optional().default([]),
   statisticsProvenance: z.object({
-    "统计口径": z.string(),
-    "数据截止": z.string(),
-  }).passthrough(),
+    "统计口径": z.string().optional().default(''),
+    "数据截止": z.string().optional().default(''),
+  }).passthrough().optional().default({}),
   forecastDisclaimer: z.string().nullable().default(null),
 });
 
@@ -208,8 +208,11 @@ const finalResponseStep = async (state, config) => {
           datasetsBlock = '\n\nAVAILABLE DATASETS (通过 selectedCharts/selectedTables 的 datasetId 引用，do not fabricate data):\n' + JSON.stringify(summary, null, 2);
         }
 
+        const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const nowBlock = `\n\nCONTEXT:\n- 当前时间: ${dataTimestamp}\n- 请用此时间填充 statisticsProvenance."数据截止"字段`;
+
         const prompt = promptRegistry.get('final_response');
-        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}${datasetsBlock}`;
+        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}${datasetsBlock}${nowBlock}`;
 
         try {
           // 静默生成结构化 JSON，不在流中逐字推送
@@ -280,7 +283,6 @@ const finalResponseStep = async (state, config) => {
             attentionPoints: parsed.attentionPoints,
             followUpSuggestions: parsed.followUpSuggestions,
             visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
-            table: resolvedTables.length > 0 ? resolvedTables[0] : null,
             tables: resolvedTables.length > 0 ? resolvedTables : null,
             statisticsProvenance: parsed.statisticsProvenance,
             forecastDisclaimer: parsed.forecastDisclaimer,
