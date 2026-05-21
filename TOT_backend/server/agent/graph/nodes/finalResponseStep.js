@@ -37,24 +37,54 @@ const FinalResponseOutput = z.object({
   attentionPoints: z.array(z.object({
     level: z.enum(["warning", "info", "positive"]),
     text: z.string().default(""),
-  }).catchall(z.any())).default([]),
-  followUpSuggestions: z.array(z.string()).default([]),
+  }).catchall(z.any())).optional().default([]),
+  followUpSuggestions: z.array(z.string()).optional().default([]),
   selectedCharts: z.array(z.object({
     datasetId: z.string(),
     chartType: z.enum(["bar","line","pie","scatter","funnel","radar"]),
     title: z.string(),
-  })).default([]),
+  })).optional().default([]),
+  selectedTables: z.array(z.object({
+    datasetId: z.string(),
+    title: z.string().optional(),
+  })).optional().default([]),
   statisticsProvenance: z.object({
     "统计口径": z.string(),
     "数据截止": z.string(),
   }).passthrough(),
   forecastDisclaimer: z.string().nullable().default(null),
-  table: z.object({
-    title: z.string(),
-    columns: z.array(z.string()),
-    rows: z.array(z.array(z.union([z.string(), z.number()]))),
-  }).nullable().default(null),
 });
+
+function buildTableFromRows(rawRows) {
+  if (!rawRows || rawRows.length === 0) return { columns: [], rows: [] };
+
+  // 从第一行自动检测列名
+  const sample = rawRows[0];
+  const skipKeys = new Set(['task_id', 'task_name', 'dimension', 'dimensions', '_total', 'error', 'success', 'signature']);
+  const colKeys = Object.keys(sample).filter(k => !k.startsWith('_') && !skipKeys.has(k) && typeof sample[k] !== 'object');
+  if (colKeys.length === 0) return { columns: [], rows: [] };
+
+  const COL_NAME_MAP = {
+    completion_rate: '完成率%', completed_count: '已完成', total_count: '总计',
+    crisis_p0_rate: 'P0预警%', crisis_p1_rate: 'P1预警%', crisis_p2_rate: 'P2预警%', crisis_p3_rate: 'P3预警%',
+    learning_rate: '学习率%', avg_completion_time_hours: '平均完成耗时h', read_rate: '阅读率%', read_count: '已阅读', start_delay_rate: '延时率%',
+    store: '门店', store_name: '门店', region: '区域', rtm: 'RTM',
+    channel_l3: '大区', channel_l4: '业态', dealer_name: '经销商',
+    stage: 'key', label: '阶段', name: '名称', count: '人数',
+    sharePercent: '占比%', dropPercent: '流失率%', dropWidth: '流失宽度',
+  };
+  // 用映射名，保留 keys 对应关系
+  const colNames = colKeys.map(k => COL_NAME_MAP[k] || k);
+  const rows = rawRows.slice(0, 20).map(row =>
+    colKeys.map(k => {
+      const v = row[k];
+      if (v === null || v === undefined) return '';
+      return typeof v === 'number' ? v : String(v);
+    })
+  );
+
+  return { columns: colNames, rows };
+}
 
 function prepareToolData(toolResults) {
   const items = [];
@@ -175,7 +205,7 @@ const finalResponseStep = async (state, config) => {
             suggest: ds.preferChartType,  // 建议的 chartType，可覆盖
             labelCount: ds.xAxis?.length || 0,
           }));
-          datasetsBlock = '\n\nAVAILABLE CHART DATASETS (引用 datasetId，默认使用 suggest 的 chartType 即可，chartType 可选 bar|line|pie|scatter|funnel|radar，do not fabricate data):\n' + JSON.stringify(summary, null, 2);
+          datasetsBlock = '\n\nAVAILABLE DATASETS (通过 selectedCharts/selectedTables 的 datasetId 引用，do not fabricate data):\n' + JSON.stringify(summary, null, 2);
         }
 
         const prompt = promptRegistry.get('final_response');
@@ -212,17 +242,13 @@ const finalResponseStep = async (state, config) => {
           if (typeof rawJson.statisticsProvenance === 'string') {
             rawJson.statisticsProvenance = { "统计口径": rawJson.statisticsProvenance, "数据截止": "" };
           }
-          if (rawJson.table && rawJson.table.rows) {
-            rawJson.table.rows = rawJson.table.rows.map(row =>
-              row.map(cell => String(cell ?? ''))
-            );
-          }
 
           const parsed = FinalResponseOutput.parse(rawJson);
 
-          // 代码解析 LLM 选中的图表：按 datasetId 匹配实际数据，LLM 不能伪造数据
+          // 代码解析 LLM 选中的图表和表格：按 datasetId 匹配实际数据，LLM 不能伪造数据
           const datasetMap = new Map();
           for (const ds of plottableDatasets) datasetMap.set(ds.id, ds);
+
           const resolvedCharts = (parsed.selectedCharts || [])
             .filter(sc => datasetMap.has(sc.datasetId))
             .map(sc => {
@@ -235,16 +261,29 @@ const finalResponseStep = async (state, config) => {
               };
             });
 
-          // 最终输出：LLM 文字 + 代码生成的 chart
+          const resolvedTables = (parsed.selectedTables || [])
+            .filter(st => datasetMap.has(st.datasetId))
+            .map(st => {
+              const ds = datasetMap.get(st.datasetId);
+              const { columns, rows } = buildTableFromRows(ds.rawRows || []);
+              return {
+                title: st.title || ds.title,
+                columns,
+                rows,
+              };
+            });
+
+          // 最终输出：LLM 文字 + 代码生成的 chart + 代码生成的 table
           response = JSON.stringify({
             overview: parsed.overview,
             keyNumbers: parsed.keyNumbers,
             attentionPoints: parsed.attentionPoints,
             followUpSuggestions: parsed.followUpSuggestions,
             visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
+            table: resolvedTables.length > 0 ? resolvedTables[0] : null,
+            tables: resolvedTables.length > 0 ? resolvedTables : null,
             statisticsProvenance: parsed.statisticsProvenance,
             forecastDisclaimer: parsed.forecastDisclaimer,
-            table: parsed.table,
           });
 
           endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });

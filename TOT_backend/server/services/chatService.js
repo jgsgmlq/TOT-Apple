@@ -62,6 +62,7 @@ function buildExecutiveMessageApiData(result) {
           ...(parsed.statisticsProvenance ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
           ...(parsed.forecastDisclaimer ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
           ...(parsed.table ? { table: parsed.table } : {}),
+          ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
         };
       }
     } catch (_) { /* not JSON, keep as plain markdown */ }
@@ -100,6 +101,7 @@ function buildReplyContentFromStructured(parsed) {
     ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
     ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
     ...(parsed.table && typeof parsed.table === 'object' ? { table: parsed.table } : {}),
+    ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
   };
 }
 

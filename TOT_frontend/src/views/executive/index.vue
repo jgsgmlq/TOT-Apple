@@ -228,69 +228,69 @@
                     <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
+                  <!-- 思考过程（流式/结束后统一展示） -->
+                  <div v-if="msg.thinking" class="exec-thinking-wrap">
+                    <n-collapse :default-expanded-names="['think']">
+                      <n-collapse-item title="思考过程" name="think">
+                        <div class="exec-thinking-body">{{ msg.thinking }}</div>
+                      </n-collapse-item>
+                    </n-collapse>
+                  </div>
 
-                                    <!-- 新版：Markdown 渲染器 -->
+                  <!-- 正文：Markdown / 概述 -->
                   <MarkdownRenderer
-                    v-else-if="!msg.replyContent && (msg.streamContent || msg.content || msg.thinking)"
+                    v-if="!(msg.replyContent?.overview) && (msg.streamContent || msg.content)"
                     :content="msg.streamContent || msg.content"
-                    :thinking="msg.thinking"
+                    :thinking="undefined"
                     :streaming="!msg.done"
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
-                  <!-- 旧版/兼容模式：结构化卡片渲染（流式结束后仍保留思考过程，与 Markdown 分支一致） -->
-                  <template v-else-if="msg.replyContent">
-                    <div v-if="msg.thinking" class="exec-thinking-wrap">
-                      <n-collapse :default-expanded-names="['think']">
-                        <n-collapse-item title="思考过程" name="think">
-                          <div class="exec-thinking-body">{{ msg.thinking }}</div>
-                        </n-collapse-item>
-                      </n-collapse>
+                  <!-- 有结构化内容时按需渲染各组件 -->
+                  <template v-if="msg.replyContent">
+                    <!-- Overview Hero 卡片 -->
+                    <div v-if="msg.replyContent.overview" class="hero-card">
+                      {{ msg.replyContent.overview }}
                     </div>
-                    <div class="exec-structured">
-                      <!-- Hero 卡片 -->
-                      <div v-if="msg.replyContent.overview" class="hero-card">
-                        {{ msg.replyContent.overview }}
-                      </div>
 
-                      <!-- 图表 -->
-                      <div
-                        v-if="msg.replyContent.visualizations?.length"
-                        class="exec-charts"
-                        :class="{
-                          'exec-charts--multiple': msg.replyContent.visualizations.length > 1,
-                        }"
-                      >
-                        <AiChartRenderer
-                          v-for="(chart, ci) in msg.replyContent.visualizations"
-                          :key="ci"
-                          :data="chart"
-                          class="exec-chart-item"
-                        />
-                      </div>
+                    <!-- 图表 — 有则渲染 -->
+                    <div
+                      v-if="msg.replyContent.visualizations?.length"
+                      class="exec-charts"
+                      :class="{ 'exec-charts--multiple': msg.replyContent.visualizations.length > 1 }"
+                    >
+                      <AiChartRenderer
+                        v-for="(chart, ci) in msg.replyContent.visualizations"
+                        :key="ci"
+                        :data="chart"
+                        class="exec-chart-item"
+                      />
+                    </div>
 
-                      <div v-if="msg.replyContent.forecastDisclaimer" class="exec-disclaimer">
-                        {{ msg.replyContent.forecastDisclaimer }}
-                      </div>
+                    <div v-if="msg.replyContent.forecastDisclaimer" class="exec-disclaimer">
+                      {{ msg.replyContent.forecastDisclaimer }}
+                    </div>
 
-                      <!-- 指标格子 -->
-                      <KeyGrid :items="msg.replyContent.keyNumbers || []" />
+                    <!-- 关键指标 — 有则渲染 -->
+                    <KeyGrid v-if="msg.replyContent.keyNumbers?.length" :items="msg.replyContent.keyNumbers" />
 
-                      <!-- 表格 -->
-                      <TableBlock :table="msg.replyContent.table" />
+                    <!-- 表格 — 有则渲染（兼容旧 table 和新 tables 字段） -->
+                    <TableBlock v-if="msg.replyContent.table" :table="msg.replyContent.table" />
+                    <template v-if="msg.replyContent.tables?.length">
+                      <TableBlock v-for="(tbl, ti) in msg.replyContent.tables" :key="ti" :table="tbl" />
+                    </template>
 
-                      <!-- 洞察 -->
-                      <InsightList :items="msg.replyContent.attentionPoints || []" />
+                    <!-- 洞察 — 有则渲染 -->
+                    <InsightList v-if="msg.replyContent.attentionPoints?.length" :items="msg.replyContent.attentionPoints" />
 
-                      <!-- 追问 chips -->
-                      <SuggestChips :items="msg.replyContent.followUpSuggestions || []" @select="fillComposerWithSuggestion" />
+                    <!-- 追问 — 有则渲染 -->
+                    <SuggestChips v-if="msg.replyContent.followUpSuggestions?.length" :items="msg.replyContent.followUpSuggestions" @select="fillComposerWithSuggestion" />
 
-                      <!-- 数据溯源 -->
-                      <div v-if="msg.replyContent.statisticsProvenance" class="exec-prov-footer">
-                        <span v-for="(val, key) in msg.replyContent.statisticsProvenance" :key="key">
-                          {{ key }}: {{ val }}
-                        </span>
-                      </div>
+                    <!-- 数据溯源 -->
+                    <div v-if="msg.replyContent.statisticsProvenance" class="exec-prov-footer">
+                      <span v-for="(val, key) in msg.replyContent.statisticsProvenance" :key="key">
+                        {{ key }}: {{ val }}
+                      </span>
                     </div>
                   </template>
 
