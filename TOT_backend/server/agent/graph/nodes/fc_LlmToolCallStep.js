@@ -87,6 +87,7 @@ const fc_LlmToolCallStep = async (state, config) => {
   const systemPrompt = promptRegistry.get('fc_agent', {
     maxSteps,
     currentStep,
+    now: new Date().toISOString().replace('T', ' ').slice(0, 19),
     chartContext,
     entityBlock: entityBlock || '（无预提取实体）',
     memoryBlock: renderMemoryBlock(state.memory_snippets),
@@ -100,12 +101,10 @@ const fc_LlmToolCallStep = async (state, config) => {
   // 3. 流式：用 model.stream() AsyncIterator 显式拿 chunk，逐帧推给 SSE emitter。
   // 不用 ChatOpenAI 的 streaming:true + invoke + handleLLMNewToken callbacks 那套，
   // 因为它跟 DeepSeek 不兼容（B/D 二分测试过，invoke 那条路 SDK 内 stream reader 死锁）。
-  // FC 循环中只推送 reasoning（思考过程），不推送 content。
-  // 用户可见的回复统一由 FinalResponseStep 生成和推送。
-  const emitDeltaToSse = (token, isReasoning) => {
+  // FC 循环的全部文本作为思考过程（isReasoning: true）传给前端，由 FinalResponseStep 生成最终回复。
+  const emitThinkingToSse = (token) => {
     if (!emitter || typeof emitter.handleLLMNewToken !== 'function') return;
     if (typeof token !== 'string' || !token) return;
-    if (!isReasoning) return;  // 静默 content，只传 reasoning
     emitter.handleLLMNewToken(token, { isReasoning: true });
   };
 
@@ -174,17 +173,22 @@ const fc_LlmToolCallStep = async (state, config) => {
         chunkCount += 1;
         const additionalKwargs = chunk?.additional_kwargs || {};
         const deltaReasoning = additionalKwargs.reasoning_content;
-        if (deltaReasoning) emitDeltaToSse(deltaReasoning, true);
+        if (deltaReasoning) {
+          // deepseek-reasoner 原生思考内容：直接以 reasoning phase 发送
+          if (emitter && typeof emitter.handleLLMNewToken === 'function') {
+            emitter.handleLLMNewToken(deltaReasoning, { isReasoning: true });
+          }
+        }
         const deltaText = typeof chunk.content === 'string' ? chunk.content : '';
         if (deltaText) {
           dsmlBuffer += deltaText;
           const safe = flushSafeFromDsmlBuffer();
-          if (safe) emitDeltaToSse(safe, false);
+          if (safe) emitThinkingToSse(safe);
         }
         aiMessage = aiMessage ? aiMessage.concat(chunk) : chunk;
       }
       if (dsmlBuffer) {
-        emitDeltaToSse(dsmlBuffer, false);
+        emitThinkingToSse(dsmlBuffer);
         dsmlBuffer = '';
       }
     } finally {
@@ -201,8 +205,6 @@ const fc_LlmToolCallStep = async (state, config) => {
       e.code = 'FC_LLM_EMPTY';
       throw e;
     }
-
-    console.log(`[fc_LlmToolCallStep] DeepSeek 返回，耗时 ${Date.now() - fcInvokeT0}ms, chunks=${chunkCount}, hasToolCalls=${!!(aiMessage.tool_calls && aiMessage.tool_calls.length)}`);
 
     if (typeof aiMessage.content === 'string' && aiMessage.content.includes('<｜tool_calls>')) {
       if (!isOverCap) {
@@ -233,6 +235,10 @@ const fc_LlmToolCallStep = async (state, config) => {
     if (!aiMessage.tool_calls) aiMessage.tool_calls = [];
     const hasTools = aiMessage.tool_calls.length > 0;
     const callNames = hasTools ? aiMessage.tool_calls.map((call) => call?.name).filter(Boolean) : [];
+    if (hasTools) {
+      console.log(`[fc_LlmToolCallStep] 工具调用: ${callNames.join(', ')} | args: ${JSON.stringify(aiMessage.tool_calls.map(c => c?.args))}`);
+    }
+    console.log(`[fc_LlmToolCallStep] DeepSeek 返回，耗时 ${Date.now() - fcInvokeT0}ms, chunks=${chunkCount}, hasToolCalls=${hasTools}`);
     endGeneration(fcGen, {
       output: maskPII(preview(aiMessage.content)),
       usage: aiMessage.usage_metadata || aiMessage.usage || null,

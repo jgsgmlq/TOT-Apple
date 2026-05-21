@@ -9,43 +9,30 @@
  * - id: 稳定标识符，供 LLM 在 selectedCharts 中引用
  */
 
-// ─── 解析 ────────────────────────────────────────────────────────────
+const { normalizeToolResults } = require('./normalizeToolResults');
 
-function safeParse(raw) {
-  if (raw == null) return null;
-  if (typeof raw === 'object') return raw;
-  if (typeof raw !== 'string') return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
+// ─── 中文标签映射（统一出口，避免英文字段名泄漏到用户界面）─────────
 
-function flattenRows(toolResults) {
-  const datasets = [];
-  for (const [callId, entry] of Object.entries(toolResults || {})) {
-    if (!entry || entry.error) continue;
-    const parsed = safeParse(entry.data);
-    if (!parsed) continue;
+const FIELD_LABEL_MAP = {
+  // 维度
+  store: '门店', store_name: '门店', region: '区域', rtm: 'RTM',
+  channel_l3: '大区', channel_l4: '业态', dealer_name: '经销商',
+  task_name: '任务名称', task_id: '任务ID', priority: '优先级', platform: '平台',
+  deadline: '截止日期', day: '日期', date: '日期', month: '月份', week: '周',
+  stage: '阶段', label: '标签', name: '名称', metric: '指标', dimension: '维度',
+  // 指标
+  completion_rate: '完成率%', completed_count: '已完成', total_count: '总计',
+  learning_rate: '学习率%', learning_count: '学习人数',
+  crisis_p0_rate: 'P0预警%', crisis_p1_rate: 'P1预警%', crisis_p2_rate: 'P2预警%',
+  read_rate: '阅读率%', avg_completion_time_hours: '平均耗时h',
+  count: '人数', value: '数值',
+  sharePercent: '占比%', dropPercent: '流失率%', dropWidth: '流失宽度',
+};
 
-    // { data: [...] }
-    if (Array.isArray(parsed.data)) {
-      datasets.push({ id: callId, toolName: entry.toolName || '', rows: parsed.data, meta: parsed });
-      continue;
-    }
-    // { data: { ... } } 单条对象
-    if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
-      datasets.push({ id: callId, toolName: entry.toolName || '', rows: [parsed.data], meta: parsed });
-      continue;
-    }
-    // 裸 array
-    if (Array.isArray(parsed)) {
-      datasets.push({ id: callId, toolName: entry.toolName || '', rows: parsed, meta: {} });
-      continue;
-    }
-    // 裸对象
-    if (typeof parsed === 'object') {
-      datasets.push({ id: callId, toolName: entry.toolName || '', rows: [parsed], meta: parsed });
-    }
-  }
-  return datasets;
+function labelOf(key) {
+  // camelCase → snake_case 再查
+  const snake = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+  return FIELD_LABEL_MAP[key] || FIELD_LABEL_MAP[snake] || key;
 }
 
 // ─── 数据集检测 ────────────────────────────────────────────────────────
@@ -55,7 +42,8 @@ function detectMetricNames(rows) {
   const sample = rows[0];
   const candidates = [
     'completion_rate', 'completionRate', 'completed_count', 'completedCount',
-    'total_count', 'totalCount', 'learning_rate', 'crisis_p0_rate', 'crisis_p1_rate',
+    'total_count', 'totalCount', 'learning_rate', 'learning_count',
+    'crisis_p0_rate', 'crisis_p1_rate',
     'read_rate', 'avg_completion_time_hours', 'value', 'count',
   ];
   return candidates.filter((k) => {
@@ -71,7 +59,8 @@ function detectDimensionNames(rows) {
   const candidates = [
     'store', 'store_name', 'storeName', 'region', 'rtm',
     'channel_l3', 'channel_l4', 'dealer_name', 'format',
-    'day', 'date', 'month', 'week', 'stage', 'metric', 'dimension',
+    'task_name', 'task_id', 'priority', 'platform',
+    'day', 'date', 'month', 'week', 'deadline', 'stage', 'metric', 'dimension',
   ];
   return candidates.filter((k) => {
     if (sample[k] !== undefined) return true;
@@ -89,6 +78,37 @@ function getDimValue(row, dimKey) {
 function getMetricValue(row, metricKey) {
   if (row.dimensions && row.dimensions[metricKey] !== undefined) return Number(row.dimensions[metricKey]);
   return Number(row[metricKey]);
+}
+
+// ─── 量纲分组（避免百分比和绝对人数混在同一张图）─────────────────────────
+
+const SCALE_PERCENT = 'pct';
+const SCALE_COUNT = 'cnt';
+const SCALE_OTHER = 'other';
+
+const METRIC_SCALE_MAP = {
+  completion_rate: SCALE_PERCENT, learning_rate: SCALE_PERCENT, read_rate: SCALE_PERCENT,
+  crisis_p0_rate: SCALE_PERCENT, crisis_p1_rate: SCALE_PERCENT, crisis_p2_rate: SCALE_PERCENT,
+  start_delay_rate: SCALE_PERCENT, sharePercent: SCALE_PERCENT, dropPercent: SCALE_PERCENT,
+  completed_count: SCALE_COUNT, total_count: SCALE_COUNT, learning_count: SCALE_COUNT,
+  read_count: SCALE_COUNT, count: SCALE_COUNT,
+  completionRate: SCALE_PERCENT, completedCount: SCALE_COUNT, totalCount: SCALE_COUNT,
+  learningRate: SCALE_PERCENT, learningCount: SCALE_COUNT,
+};
+
+function metricScale(key) {
+  const snake = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+  return METRIC_SCALE_MAP[key] || METRIC_SCALE_MAP[snake] || SCALE_OTHER;
+}
+
+function splitMetricsByScale(metrics) {
+  const groups = {};
+  for (const m of metrics) {
+    const s = metricScale(m);
+    if (!groups[s]) groups[s] = [];
+    groups[s].push(m);
+  }
+  return groups;
 }
 
 // ─── Builder ───────────────────────────────────────────────────────────
@@ -113,11 +133,11 @@ function buildRanking(rows, dims, metrics, shortId) {
   return {
     id: `rank_${shortId}`,
     kind: 'ranking',
-    title: `${dimKey === 'store' || dimKey === 'store_name' ? '门店' : dimKey}完成率排名`,
+    title: `${labelOf(dimKey)}排名`,
     preferChartType: isDistribution ? 'pie' : 'bar',
-    xAxis: sorted.map((r) => getDimValue(r, dimKey).slice(0, 12)),
+    xAxis: sorted.map((r) => getDimValue(r, dimKey).slice(0, 20)),
     series: [{
-      name: metricKey,
+      name: labelOf(metricKey),
       data: sorted.map((r) => getMetricValue(r, metricKey)),
     }],
     rawRows: sorted.slice(0, 8),
@@ -133,7 +153,7 @@ function buildFunnel(meta) {
     id: `funnel_${stages[0]?.stage || 'main'}`,
     kind: 'funnel',
     title: '学习完成漏斗',
-    preferChartType: 'funnel',
+    preferChartType: 'pie',
     xAxis: stages.map((s) => s.label || s.stage),
     series: [{
       name: '人数',
@@ -164,29 +184,43 @@ function buildTrend(rows, dims, metrics, shortId) {
     preferChartType: 'line',
     xAxis: points.map((r) => getDimValue(r, timeDim)),
     series: [{
-      name: metricKey,
+      name: labelOf(metricKey),
       data: points.map((r) => getMetricValue(r, metricKey)),
     }],
     rawRows: points,
   };
 }
 
-function buildComparison(rows, dims, metrics, shortId) {
-  if (dims.length < 2 || metrics.length < 1) return null;
+function buildComparison(rows, dims, metrics, shortId, opts = {}) {
+  if (dims.length < 1 || metrics.length < 1) return null;
   const dimKey = dims[0];
-  const metricKeys = metrics.slice(0, 3);
+  const metricKeys = metrics.slice(0, 4);
   if (rows.length < 2) return null;
 
-  const xAxis = rows.map((r) => getDimValue(r, dimKey).slice(0, 12));
-  const series = metricKeys.map((mk) => ({
-    name: mk,
-    data: rows.map((r) => getMetricValue(r, mk)),
-  }));
+  const scaleGroup = opts.scaleGroup || SCALE_OTHER;
+  const isCountScale = scaleGroup === SCALE_COUNT;
+  const isMixed = scaleGroup === 'mixed';
+  const hasSingles = metrics.length === 1;
+  const titleSuffix = hasSingles
+    ? `（${labelOf(metrics[0])}）`
+    : isCountScale ? '（人数）' : isMixed ? '（多量纲）' : '（比率）';
+
+  const xAxis = rows.map((r) => getDimValue(r, dimKey).slice(0, 20));
+  const series = metricKeys.map((mk) => {
+    const mkScale = metricScale(mk);
+    const s = {
+      name: labelOf(mk),
+      data: rows.map((r) => getMetricValue(r, mk)),
+    };
+    if (isMixed && mkScale === SCALE_COUNT) s.yAxisIndex = 1;
+    else if (isCountScale) s.yAxisIndex = 1;
+    return s;
+  });
 
   return {
-    id: `cmp_${shortId}`,
+    id: `cmp_${scaleGroup}_${shortId}`,
     kind: 'comparison',
-    title: '指标对比',
+    title: `指标对比${titleSuffix}`,
     preferChartType: 'bar',
     xAxis,
     series,
@@ -197,7 +231,7 @@ function buildComparison(rows, dims, metrics, shortId) {
 // ─── Main Export ──────────────────────────────────────────────────────
 
 function extractPlottableData(toolResults) {
-  const datasets = flattenRows(toolResults);
+  const datasets = normalizeToolResults(toolResults);
   const plottable = [];
 
   for (const ds of datasets) {
@@ -229,10 +263,24 @@ function extractPlottableData(toolResults) {
       if (trend) plottable.push(trend);
     }
 
-    // Comparison (多维度 + 多指标)
+    // Comparison (多维度 + 多指标) — 按量纲分组，避免百分比和人数混合
     if (dims.length >= 1 && metrics.length >= 2 && ds.rows.length >= 2) {
-      const cmp = buildComparison(ds.rows, dims, metrics, shortId);
-      if (cmp) plottable.push(cmp);
+      const scaleGroups = splitMetricsByScale(metrics);
+      const usedMetrics = new Set();
+      // Rule 1: 每量纲组 >= 2 个同纲指标 → 单独成图
+      for (const [scale, groupMetrics] of Object.entries(scaleGroups)) {
+        if (groupMetrics.length >= 2) {
+          const cmp = buildComparison(ds.rows, dims, groupMetrics, shortId, { scaleGroup: scale });
+          if (cmp) { plottable.push(cmp); groupMetrics.forEach(m => usedMetrics.add(m)); }
+        }
+      }
+      // Rule 2: 剩余未使用的指标，跨量纲合并到混合图（双Y轴）
+      const leftoverMetrics = metrics.filter(m => !usedMetrics.has(m));
+      if (leftoverMetrics.length >= 1) {
+        // 单指标也出图（可能和主图互补，如比率图+人数图）
+        const cmp = buildComparison(ds.rows, dims, leftoverMetrics, shortId, { scaleGroup: 'mixed' });
+        if (cmp) plottable.push(cmp);
+      }
     }
 
     // 单条对象也当作 row 提取，避免漏掉（无 metrics 时也能进到这里）
@@ -246,7 +294,7 @@ function extractPlottableData(toolResults) {
           id: `kv_${shortId}`,
           kind: 'comparison',
           title: '查询结果概览',
-          xAxis: kvEntries.map(([k]) => k),
+          xAxis: kvEntries.map(([k]) => labelOf(k)),
           series: [{ name: '值', data: kvEntries.map(([, v]) => Number(v) || 0) }],
           rawRows: [row],
         });

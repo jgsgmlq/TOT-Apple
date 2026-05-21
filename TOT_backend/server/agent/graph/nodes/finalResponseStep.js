@@ -27,61 +27,161 @@ const getStructuredModel = () => {
 
 const { z } = require("zod");
 
-const FinalResponseOutput = z.object({
-  overview: z.string(),
-  keyNumbers: z.array(z.object({
-    label: z.string(),
-    value: z.union([z.string(), z.number()]),
-    unit: z.string().optional(),
-  })),
-  attentionPoints: z.array(z.object({
-    level: z.enum(["warning", "info", "positive"]),
-    text: z.string().default(""),
-  }).catchall(z.any())).optional().default([]),
-  followUpSuggestions: z.array(z.string()).optional().default([]),
-  selectedCharts: z.array(z.object({
-    datasetId: z.string(),
-    chartType: z.enum(["bar","line","pie","scatter","funnel","radar"]),
-    title: z.string(),
-  })).optional().default([]),
-  selectedTables: z.array(z.object({
-    datasetId: z.string(),
-    title: z.string().optional(),
-  })).optional().default([]),
-  statisticsProvenance: z.object({
-    "统计口径": z.string().optional().default(''),
-    "数据截止": z.string().optional().default(''),
-  }).passthrough().optional().default({}),
-  forecastDisclaimer: z.string().nullable().default(null),
+// ─── 模板体系 ──────────────────────────────────────────────────────────
+
+const keyNumberItem = z.object({
+  label: z.string(),
+  value: z.union([z.string(), z.number()]),
+  unit: z.string().optional(),
 });
+
+const attentionItem = z.object({
+  level: z.enum(["warning", "info", "positive"]),
+  text: z.string(),
+}).catchall(z.any());
+
+// LLM 可能直接传字符串 "rank_xxx" 或对象 {datasetId: "rank_xxx"}
+const chartRef = z.preprocess((v) => {
+  if (typeof v === 'string') return { datasetId: v };
+  return v;
+}, z.object({
+  datasetId: z.string(),
+  chartType: z.enum(["bar","line","pie","scatter","funnel","radar"]).optional().default('bar'),
+  title: z.string().optional(),
+}));
+
+const tableRef = z.preprocess((v) => {
+  if (typeof v === 'string') return { datasetId: v };
+  return v;
+}, z.object({
+  datasetId: z.string(),
+  title: z.string().optional(),
+}));
+
+const statsProv = z.object({
+  "统计口径": z.string().optional().default(''),
+  "数据截止": z.string().optional().default(''),
+}).passthrough().optional().default({});
+
+const TemplateSchemas = {
+  simple_metric: z.object({
+    template: z.literal("simple_metric"),
+    overview: z.string(),
+    keyNumbers: z.array(keyNumberItem),
+    selectedCharts: z.array(chartRef).optional().default([]),
+    selectedTables: z.array(tableRef).optional().default([]),
+    statisticsProvenance: statsProv,
+  }).passthrough(),
+
+  ranking: z.object({
+    template: z.literal("ranking"),
+    overview: z.string(),
+    keyNumbers: z.array(keyNumberItem),
+    attentionPoints: z.array(attentionItem).optional().default([]),
+    followUpSuggestions: z.array(z.string()).optional().default([]),
+    selectedCharts: z.array(chartRef).optional().default([]),
+    selectedTables: z.array(tableRef).optional().default([]),
+    statisticsProvenance: statsProv,
+    forecastDisclaimer: z.string().nullable().default(null),
+  }).passthrough(),
+
+  overview: z.object({
+    template: z.literal("overview"),
+    overview: z.string(),
+    keyNumbers: z.array(keyNumberItem),
+    selectedCharts: z.array(chartRef).optional().default([]),
+    selectedTables: z.array(tableRef).optional().default([]),
+    statisticsProvenance: statsProv,
+    forecastDisclaimer: z.string().nullable().default(null),
+  }).passthrough(),
+
+  warning: z.object({
+    template: z.literal("warning"),
+    overview: z.string(),
+    attentionPoints: z.array(attentionItem),
+    followUpSuggestions: z.array(z.string()).optional().default([]),
+    selectedTables: z.array(tableRef).optional().default([]),
+    selectedCharts: z.array(chartRef).optional().default([]),
+    statisticsProvenance: statsProv,
+  }).passthrough(),
+
+  diagnosis: z.object({
+    template: z.literal("diagnosis"),
+    overview: z.string(),
+    keyNumbers: z.array(keyNumberItem).optional().default([]),
+    attentionPoints: z.array(attentionItem),
+    followUpSuggestions: z.array(z.string()).optional().default([]),
+    selectedCharts: z.array(chartRef).optional().default([]),
+    selectedTables: z.array(tableRef).optional().default([]),
+    statisticsProvenance: statsProv,
+  }).passthrough(),
+
+  general: z.object({
+    template: z.literal("general"),
+    markdown: z.string(),
+    statisticsProvenance: statsProv,
+  }).passthrough(),
+};
+
+const TemplateOutput = z.discriminatedUnion("template", [
+  TemplateSchemas.simple_metric,
+  TemplateSchemas.ranking,
+  TemplateSchemas.overview,
+  TemplateSchemas.warning,
+  TemplateSchemas.diagnosis,
+  TemplateSchemas.general,
+]);
 
 function buildTableFromRows(rawRows) {
   if (!rawRows || rawRows.length === 0) return { columns: [], rows: [] };
 
   // 从第一行自动检测列名
   const sample = rawRows[0];
-  const skipKeys = new Set(['task_id', 'task_name', 'dimension', 'dimensions', '_total', 'error', 'success', 'signature']);
-  const colKeys = Object.keys(sample).filter(k => !k.startsWith('_') && !skipKeys.has(k) && typeof sample[k] !== 'object');
+
+  // 展开 dimensions 对象为独立列（如 { store: "R123" } → 门店列）
+  let dimKeys = [];
+  if (sample.dimensions && typeof sample.dimensions === 'object') {
+    dimKeys = Object.keys(sample.dimensions);
+  }
+
+  const skipKeys = new Set(['task_id', 'dimension', 'dimensions', '_total', 'error', 'success', 'signature']);
+  const metricKeys = Object.keys(sample).filter(k => !k.startsWith('_') && !skipKeys.has(k) && typeof sample[k] !== 'object');
+  const colKeys = [...dimKeys, ...metricKeys];
   if (colKeys.length === 0) return { columns: [], rows: [] };
 
   const COL_NAME_MAP = {
     completion_rate: '完成率%', completed_count: '已完成', total_count: '总计',
     crisis_p0_rate: 'P0预警%', crisis_p1_rate: 'P1预警%', crisis_p2_rate: 'P2预警%', crisis_p3_rate: 'P3预警%',
-    learning_rate: '学习率%', avg_completion_time_hours: '平均完成耗时h', read_rate: '阅读率%', read_count: '已阅读', start_delay_rate: '延时率%',
+    learning_rate: '学习率%', avg_completion_time_hours: '平均耗时h', read_rate: '阅读率%', read_count: '已阅读', start_delay_rate: '延时率%',
     store: '门店', store_name: '门店', region: '区域', rtm: 'RTM',
     channel_l3: '大区', channel_l4: '业态', dealer_name: '经销商',
-    stage: 'key', label: '阶段', name: '名称', count: '人数',
+    task_name: '任务名称', priority: '优先级', platform: '平台', deadline: '截止日期', learning_count: '学习人数',
+    task_title: '任务名称', due_date: '截止日期', urgency_level: '优先级',
+    in_progress_count: '进行中', pending_count: '待开始',
+    stage: '阶段', label: '阶段', name: '名称', count: '人数',
     sharePercent: '占比%', dropPercent: '流失率%', dropWidth: '流失宽度',
   };
+
+  function formatCellValue(k, v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number') return v;
+    const s = String(v);
+    // ISO 日期格式化：2026-05-19T16:00:00.000Z → 2026-05-19
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) {
+      return s.slice(0, 10);
+    }
+    return s;
+  }
+
   // 用映射名，保留 keys 对应关系
   const colNames = colKeys.map(k => COL_NAME_MAP[k] || k);
-  const rows = rawRows.slice(0, 20).map(row =>
-    colKeys.map(k => {
-      const v = row[k];
-      if (v === null || v === undefined) return '';
-      return typeof v === 'number' ? v : String(v);
-    })
-  );
+  const rows = rawRows.slice(0, 20).map(row => {
+    const dims = row.dimensions && typeof row.dimensions === 'object' ? row.dimensions : {};
+    return colKeys.map(k => {
+      if (dimKeys.includes(k)) return formatCellValue(k, dims[k]);
+      return formatCellValue(k, row[k]);
+    });
+  });
 
   return { columns: colNames, rows };
 }
@@ -125,17 +225,18 @@ const getFcModel = () => fcModel;
 
 const finalResponseStep = async (state, config) => {
   const span = startNodeSpan(state, 'FinalResponseStep', { mode: state.mode, intent: state.intent });
-  // 工具模式有结果时，忽略 FC LLM 的内联回复，强制走结构化输出
   let response = "";
   const hasToolResults = Object.keys(state.toolResults || {}).length > 0;
-  if (state.mode !== "tool" || !hasToolResults) {
-    response = state.reply_markdown || state.finalResponse || "";
+  const fcDirectReply = !hasToolResults && state.mode === 'tool' ? (state.reply_markdown || state.finalResponse || '') : '';
+
+  if (!hasToolResults && state.mode !== 'tool') {
+    response = state.reply_markdown || state.finalResponse || '';
   }
 
   if (!response) {
     if (state.mode === "deny") {
       response = "### ⚠️ 请求被拒绝\n\n抱歉，Executive Chat 目前仅支持**只读查询**。我无法帮您执行修改数据、发送催办通知或直接处理业务流等操作。\n\n💡 *建议您可以在系统中手动处理，或询问我当前的数据完成情况。*";
-    } else if ((state.mode === "chat" || state.mode === "chat_only" || state.intent === "chat_only") && Object.keys(state.toolResults || {}).length === 0) {
+    } else if (state.mode === "chat" || state.mode === "chat_only" || state.intent === "chat_only") {
       console.log(`[FinalResponseStep] 检测到纯聊天意图，调用大模型进行回复...`);
       const emitter = config?.configurable?.sseEmitter;
       const llm = getFcModel();
@@ -233,7 +334,7 @@ const finalResponseStep = async (state, config) => {
 
           // 预处理：修复常见 LLM 输出偏差
           if (rawJson.keyNumbers) {
-            rawJson.keyNumbers.forEach(k => { if (k.unit === null) delete k.unit; });
+            rawJson.keyNumbers.forEach(k => { if (k.unit === null || k.unit === '') delete k.unit; });
           }
           if (rawJson.attentionPoints) {
             rawJson.attentionPoints = rawJson.attentionPoints.map(p => {
@@ -246,46 +347,45 @@ const finalResponseStep = async (state, config) => {
             rawJson.statisticsProvenance = { "统计口径": rawJson.statisticsProvenance, "数据截止": "" };
           }
 
-          const parsed = FinalResponseOutput.parse(rawJson);
+          const parsed = TemplateOutput.parse(rawJson);
 
-          // 代码解析 LLM 选中的图表和表格：按 datasetId 匹配实际数据，LLM 不能伪造数据
+          // 代码解析 LLM 选中的图表和表格：按 datasetId 匹配实际数据
           const datasetMap = new Map();
           for (const ds of plottableDatasets) datasetMap.set(ds.id, ds);
 
-          const resolvedCharts = (parsed.selectedCharts || [])
-            .filter(sc => datasetMap.has(sc.datasetId))
-            .map(sc => {
-              const ds = datasetMap.get(sc.datasetId);
-              return {
-                type: sc.chartType,
-                title: sc.title || ds.title,
-                xAxis: ds.xAxis,
-                series: ds.series,
-              };
+          const sc = parsed.template !== 'general' ? (parsed.selectedCharts || []) : [];
+          const st = parsed.template !== 'general' ? (parsed.selectedTables || []) : [];
+
+          const resolvedCharts = sc
+            .filter(c => datasetMap.has(c.datasetId))
+            .map(c => {
+              const ds = datasetMap.get(c.datasetId);
+              return { type: c.chartType, title: c.title || ds.title, xAxis: ds.xAxis, series: ds.series };
             });
 
-          const resolvedTables = (parsed.selectedTables || [])
-            .filter(st => datasetMap.has(st.datasetId))
-            .map(st => {
-              const ds = datasetMap.get(st.datasetId);
+          const resolvedTables = st
+            .filter(t => datasetMap.has(t.datasetId))
+            .map(t => {
+              const ds = datasetMap.get(t.datasetId);
               const { columns, rows } = buildTableFromRows(ds.rawRows || []);
-              return {
-                title: st.title || ds.title,
-                columns,
-                rows,
-              };
+              return { title: t.title || ds.title, columns, rows };
             });
 
-          // 最终输出：LLM 文字 + 代码生成的 chart + 代码生成的 table
+          // 最终输出：template + LLM 文字 + 代码生成的 chart/table
           response = JSON.stringify({
-            overview: parsed.overview,
-            keyNumbers: parsed.keyNumbers,
-            attentionPoints: parsed.attentionPoints,
-            followUpSuggestions: parsed.followUpSuggestions,
-            visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
-            tables: resolvedTables.length > 0 ? resolvedTables : null,
+            template: parsed.template,
+            ...(parsed.template === 'general'
+              ? { markdown: parsed.markdown }
+              : {
+                  overview: parsed.overview,
+                  keyNumbers: parsed.keyNumbers,
+                  attentionPoints: 'attentionPoints' in parsed ? parsed.attentionPoints : [],
+                  followUpSuggestions: 'followUpSuggestions' in parsed ? parsed.followUpSuggestions : [],
+                  visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
+                  tables: resolvedTables.length > 0 ? resolvedTables : null,
+                  forecastDisclaimer: 'forecastDisclaimer' in parsed ? parsed.forecastDisclaimer : null,
+                }),
             statisticsProvenance: parsed.statisticsProvenance,
-            forecastDisclaimer: parsed.forecastDisclaimer,
           });
 
           endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
@@ -293,6 +393,52 @@ const finalResponseStep = async (state, config) => {
           console.error('[FinalResponseStep] 结构化输出失败，降级到渲染器:', err.message);
           endGeneration(gen, { output: maskPII(preview(err.message)), level: 'WARNING', statusMessage: err.message, model: 'deepseek-chat' });
           response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || '抱歉，查询过程中遇到了问题。';
+        }
+      } else if (fcDirectReply) {
+        // 无工具调用时 FC LLM 直接回复了 Markdown，用结构化 LLM 重组为模板 JSON
+        console.log('[FinalResponseStep] FC 直接回复，重组为模板 JSON...');
+        const llm = getStructuredModel();
+        const traceId = config?.configurable?.traceId;
+        const client = getClient();
+        const gen = client && traceId
+          ? client.generation({ traceId, name: 'FinalResponse_Reformat', model: 'deepseek-chat', input: maskPII(fcDirectReply.slice(0, 200)), metadata: { mode: 'tool_no_call' } })
+          : NOOP_TRACE.generation({ name: 'FinalResponse_Reformat' });
+
+        const reformatPrompt = promptRegistry.get('final_response') +
+          `\n\n用户问题: ${state.userMessage}\n\n以下是一段 Markdown 分析文本，请将其转换为结构化 JSON（先选 template 再填字段）:\n\n${fcDirectReply.slice(0, 3000)}`;
+
+        try {
+          let rawText = '';
+          const stream = await llm.stream([
+            new SystemMessage(reformatPrompt),
+            new HumanMessage('输出严格的 JSON 对象。')
+          ], { signal: config?.signal });
+          for await (const chunk of stream) {
+            const delta = typeof chunk.content === 'string' ? chunk.content : '';
+            if (delta) rawText += delta;
+          }
+          let rawJson;
+          try { rawJson = JSON.parse(rawText); } catch (_) {
+            try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
+          }
+          const parsed = TemplateOutput.parse(rawJson);
+          response = JSON.stringify({
+            template: parsed.template,
+            ...(parsed.template === 'general'
+              ? { markdown: parsed.markdown }
+              : {
+                  overview: parsed.overview,
+                  keyNumbers: parsed.keyNumbers,
+                  attentionPoints: 'attentionPoints' in parsed ? parsed.attentionPoints : [],
+                  followUpSuggestions: 'followUpSuggestions' in parsed ? parsed.followUpSuggestions : [],
+                }),
+            statisticsProvenance: parsed.statisticsProvenance,
+          });
+          endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
+        } catch (err) {
+          console.error('[FinalResponseStep] 重组失败，降级为原始 Markdown:', err.message);
+          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'WARNING', statusMessage: err.message, model: 'deepseek-chat' });
+          response = fcDirectReply;
         }
       } else {
         response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || "抱歉，我暂时无法回答这个问题，或者执行过程中遇到了错误。请稍后重试或尝试缩小查询范围。";

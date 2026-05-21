@@ -7,7 +7,7 @@ const { fc_LlmToolCallStep } = require("./nodes/fc_LlmToolCallStep");
 const { fc_CheckDuplicate } = require("./nodes/fc_CheckDuplicate");
 const { fc_ExecuteTool } = require("./nodes/fc_ExecuteTool");
 const { fc_MergeToolResults } = require("./nodes/fc_MergeToolResults");
-const { fc_Escalate } = require("./nodes/fc_Escalate");
+
 const { humanInTheLoopGate } = require("./nodes/humanInTheLoopGate");
 const { finalResponseStep } = require("./nodes/finalResponseStep");
 const { persistAndEmit } = require("./nodes/persistAndEmit");
@@ -44,7 +44,8 @@ const routeAfterCheckDuplicate = (state) => {
 };
 
 const routeAfterExecute = (state) => {
-  if (state.escalate_count >= 1) return "fc_Escalate";
+  if (state.hitl_status === 'pending_interrupt') return "HumanInTheLoopGate";
+  if (state.escalate_count >= 1) return "FinalResponseStep";
   return "fc_MergeToolResults";
 };
 
@@ -54,11 +55,6 @@ const routeAfterMerge = (state) => {
     return "FinalResponseStep";
   }
   return "fc_CheckSteps";
-};
-
-const routeAfterEscalate = (state) => {
-  if (state.fc_next_action === "continue") return "fc_LlmToolCallStep";
-  return "FinalResponseStep";
 };
 
 const routeAfterHumanInTheLoop = (state) => {
@@ -78,7 +74,7 @@ const buildGraph = () => {
     .addNode("fc_CheckDuplicate", wn("fc_CheckDuplicate", fc_CheckDuplicate))
     .addNode("fc_ExecuteTool", wn("fc_ExecuteTool", fc_ExecuteTool))
     .addNode("fc_MergeToolResults", wn("fc_MergeToolResults", fc_MergeToolResults))
-    .addNode("fc_Escalate", wn("fc_Escalate", fc_Escalate))
+
     .addNode("HumanInTheLoopGate", wn("HumanInTheLoopGate", humanInTheLoopGate))
     .addNode("FinalResponseStep", wn("FinalResponseStep", finalResponseStep))
     .addNode("PersistAndEmit", wn("PersistAndEmit", persistAndEmit));
@@ -110,16 +106,12 @@ const buildGraph = () => {
 
   workflow.addConditionalEdges("fc_ExecuteTool", wr("fc_ExecuteTool", routeAfterExecute), {
     "fc_MergeToolResults": "fc_MergeToolResults",
-    "fc_Escalate": "fc_Escalate",
+
+    "HumanInTheLoopGate": "HumanInTheLoopGate",
   });
 
   workflow.addConditionalEdges("fc_MergeToolResults", wr("fc_MergeToolResults", routeAfterMerge), {
     "fc_CheckSteps": "fc_CheckSteps",
-    "FinalResponseStep": "FinalResponseStep",
-  });
-
-  workflow.addConditionalEdges("fc_Escalate", wr("fc_Escalate", routeAfterEscalate), {
-    "fc_LlmToolCallStep": "fc_LlmToolCallStep",
     "FinalResponseStep": "FinalResponseStep",
   });
 
@@ -142,6 +134,5 @@ module.exports = {
   routeAfterCheckDuplicate,
   routeAfterExecute,
   routeAfterMerge,
-  routeAfterEscalate,
   routeAfterHumanInTheLoop,
 };

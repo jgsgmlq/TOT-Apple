@@ -20,28 +20,24 @@ const { normalizeIntent } = require('./intents');
 
 const MAX_ROWS_PREVIEW = 8;
 
-function _safeParse(raw) {
-  if (raw == null) return null;
-  if (typeof raw === 'object') return raw;
-  if (typeof raw !== 'string') return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
+const { normalizeToolResults } = require('./shared/normalizeToolResults');
 
-// 把 toolResults map 拍平成 [{ toolName, data, error }]，data 是 best-effort 解析后的对象/数组
+// 把 toolResults map 拍平成 [{ toolName, raw, parsed, error }]，兼容旧 renderer 接口
 function _flattenToolResults(toolResults) {
   const out = [];
   for (const [, entry] of Object.entries(toolResults || {})) {
     if (!entry) continue;
-    const inner = _safeParse(entry.data);
+    let parsed = entry.data;
+    if (typeof parsed === 'string') {
+      try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+    } else if (typeof parsed !== 'object') {
+      parsed = null;
+    }
     out.push({
       toolName: entry.toolName || null,
       raw: entry,
-      parsed: inner,
-      error: entry.error || (inner && inner.error) || null,
+      parsed,
+      error: entry.error || (parsed && parsed.error) || null,
     });
   }
   return out;

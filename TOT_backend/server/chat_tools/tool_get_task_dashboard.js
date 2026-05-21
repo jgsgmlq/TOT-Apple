@@ -64,7 +64,8 @@ module.exports = {
         overall_metrics: {
           total_count: overview.totalAssignments,
           completed_count: overview.completedCount,
-          uncompleted_count: overview.pendingCount + (overview.inProgressCount || 0),
+          in_progress_count: overview.inProgressCount || 0,
+          pending_count: overview.pendingCount || 0,
           completion_rate: overview.completionRate,
           learning_rate: overview.taskReadRate || overview.taskReachRate || 0
         },

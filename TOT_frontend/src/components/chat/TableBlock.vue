@@ -1,6 +1,6 @@
 <template>
   <div v-if="table && table.rows && table.rows.length >= 2" class="table-block">
-    <div class="table-title">📋 {{ table.title }}</div>
+    <div class="table-title">{{ table.title }}</div>
 
     <div v-if="isFunnel" class="funnel-view">
       <div v-for="(row, i) in table.rows" :key="i">
@@ -35,7 +35,7 @@ const props = defineProps<{
   table: { title: string; columns: string[]; rows: string[][] } | null | undefined;
 }>();
 
-const barColors = ['#90caf9', '#a5d6a7', '#ffcc80', '#ef9a9a'];
+const barColors = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#fc8452'];
 
 const isFunnel = computed(() => {
   if (!props.table) return false;
@@ -58,16 +58,17 @@ function dropRate(i: number) {
 </script>
 
 <style lang="less" scoped>
-.table-block { margin-bottom: 12px; }
-.table-title { font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px; }
+.table-block { margin-bottom: 20px; }
+.table-title { font-weight: 600; font-size: 13px; color: #1a1f36; margin-bottom: 10px; }
 .funnel-bar-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 2px; }
-.funnel-label { font-size: 13px; }
-.funnel-value { font-weight: 600; font-size: 13px; }
-.funnel-bar { height: 10px; background: #e0e0e0; border-radius: 5px; margin-bottom: 2px; }
+.funnel-label { font-size: 13px; color: #1a1f36; }
+.funnel-value { font-weight: 600; font-size: 13px; color: #5f6b7a; }
+.funnel-bar { height: 10px; background: #f0f2f5; border-radius: 5px; margin-bottom: 2px; }
 .funnel-fill { height: 10px; border-radius: 5px; }
-.funnel-drop { text-align: center; font-size: 11px; color: #c62828; margin-bottom: 6px; }
+.funnel-drop { text-align: center; font-size: 11px; color: #dc2626; margin-bottom: 6px; }
 .compact-table { width: 100%; border-collapse: collapse; font-size: 13px;
-  th { background: #f5f5f5; padding: 8px; text-align: left; border-bottom: 1px solid #e0e0e0; }
-  td { padding: 8px; border-bottom: 1px solid #f0f0f0; }
+  th { background: #f8f9fb; padding: 10px 14px; text-align: left; border-bottom: 2px solid #e2e6ed; color: #5f6b7a; font-weight: 600; font-size: 11px; }
+  td { padding: 10px 14px; border-bottom: 1px solid #f0f2f5; color: #1a1f36; }
+  tr:last-child td { border-bottom: none; }
 }
 </style>

@@ -5,7 +5,7 @@
       class="insight-item"
       :class="'insight-' + getLevel(p)"
     >
-      <span class="insight-icon">{{ getIcon(p) }}</span>
+      <span class="insight-marker"></span>
       <span class="insight-text">{{ getText(p) }}</span>
     </div>
   </div>
@@ -19,23 +19,29 @@ defineProps<{
 function getLevel(p: string | { level: string; text: string }) {
   return typeof p === 'string' ? 'info' : (p.level || 'info');
 }
-function getIcon(p: string | { level: string; text: string }) {
-  const l = getLevel(p);
-  return l === 'warning' ? '⚠️' : l === 'positive' ? '✅' : 'ℹ️';
-}
 function getText(p: string | { level: string; text: string }) {
   return typeof p === 'string' ? p : (p.text || '');
 }
 </script>
 
 <style lang="less" scoped>
-.insight-list { margin-bottom: 12px; }
+.insight-list { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
 .insight-item {
-  padding: 8px 10px; margin-bottom: 4px; border-radius: 6px; font-size: 13px;
-  border-left: 3px solid;
-  &.insight-warning { background: #fff3e0; border-color: #e65100; }
-  &.insight-info { background: #e3f2fd; border-color: #1565c0; }
-  &.insight-positive { background: #e8f5e9; border-color: #2e7d32; }
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 16px; font-size: 13px; line-height: 1.5;
+  border-radius: 6px;
+  &.insight-warning { background: #fef4e6; }
+  &.insight-info { background: #f8f9fb; }
+  &.insight-positive { background: #ecfdf5; }
 }
-.insight-icon { margin-right: 6px; }
+.insight-marker {
+  flex-shrink: 0;
+  width: 7px; height: 7px; border-radius: 50%; margin-top: 5px;
+  .insight-warning & { background: #d97706; }
+  .insight-info & { background: #2563eb; }
+  .insight-positive & { background: #059669; }
+}
+.insight-text { color: #1a1f36; }
 </style>

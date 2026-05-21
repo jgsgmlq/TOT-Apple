@@ -2,8 +2,8 @@
   <div class="executive-login">
     <div class="executive-login__card">
       <div class="executive-login__brand">
-        <img :src="websiteConfig.loginImage" alt="" class="executive-login__logo" />
-        <h1 class="executive-login__title">TOT - Executive Chat</h1>
+        <LogoMark />
+        <h1 class="executive-login__title">Ops Forge &mdash; Executive Chat</h1>
         <p class="executive-login__sub">请使用您的专属主管账号登录</p>
 
         <!-- 账号密码提醒小字 -->
@@ -56,7 +56,7 @@
   import { useUserStore } from '@/store/modules/user';
   import { ResultEnum } from '@/enums/httpEnum';
   import { HQ_ENTRY_KEY } from '@/constants/entry';
-  import { websiteConfig } from '@/config/website.config';
+  import LogoMark from '@/components/common/LogoMark.vue';
 
   const formRef = ref();
   const loading = ref(false);

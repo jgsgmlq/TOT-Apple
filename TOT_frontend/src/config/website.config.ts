@@ -1,8 +1,8 @@
-import platformIcon from '@/assets/icons/platform_icon.svg';
+import platformIcon from '@/assets/icons/opsforge-logo.png';
 
 export const websiteConfig = Object.freeze({
-  title: 'TOT',
+  title: 'Ops Forge',
   logo: platformIcon,
   loginImage: platformIcon,
-  loginDesc: 'TOT 业务管理平台',
+  loginDesc: 'Ops Forge 业务管理平台',
 });

@@ -37,12 +37,16 @@ const SAFETY_GATEWAY_PROMPT = `你是一个培训管理系统安全网关。严�
 【ambiguity 歧义检测】
 - 问题清晰明确时，ambiguity 设为 null
 - 以下情况标记为歧义：
-  1. missing_task_ref：问题需要指定任务但没提任务名（如"完成率多少"）
-  2. vague_task_ref：使用了代词或模糊指代（如"那个任务""上次那个"）
-  3. missing_context：问题过于简短缺少信息（如"查一下""帮我看看"）
-- 歧义时 fill question 字段向用户追问，candidates 填候选任务列表
-- "华东区 iPhone 17 培训完成率" → 清晰完整，ambiguity=null
-- "好的""行" → 确认语，mode=chat, ambiguity=null`;
+  1. missing_task_ref：用户明确在问「某个特定任务」的细节（如"XX任务的完成率""这个任务的门店排名"），但没指明具体是哪个任务。此时才标记
+  2. vague_task_ref：使用了代词（如"上次那个""它"）
+  3. missing_context：问题过于简短缺少信息（如"查一下"）
+- **以下泛查询不是歧义，直接 mode=tool, ambiguity=null**：
+  · "有哪些任务快过期了""哪些门店做的最好""整体进度怎么样"
+  · "完成率最高的门店""跟上周比怎么样""最近趋势"
+  · "有哪些任务逾期了""P0优先级的任务有哪些"
+  · 这些查询不依赖特定任务，调用工具即可回答，不需要追问
+- 歧义时 fill question 字段向用户追问
+- "华东区 iPhone 17 培训完成率" → 具体到某个任务，清晰完整 → ambiguity=null`;
 
 
 module.exports = { SAFETY_GATEWAY_VERSION, SAFETY_GATEWAY_PROMPT };

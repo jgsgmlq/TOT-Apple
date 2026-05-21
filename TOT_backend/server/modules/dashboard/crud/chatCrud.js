@@ -18,6 +18,10 @@ async function updateSessionActive(id) {
   await run('UPDATE chat_session SET last_active_at = NOW(3) WHERE id = ?', [id]);
 }
 
+async function updateSessionTitle(id, title) {
+  await run('UPDATE chat_session SET title = ? WHERE id = ?', [title, id]);
+}
+
 async function insertMessage({ id, sessionId, role, contentText, contentJson, intentType, toolCallsJson, toolCallId, clientMessageId }) {
   await run(
     `INSERT INTO chat_message (id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at)
@@ -88,7 +92,7 @@ async function getLatestDispatchedTask() {
 }
 
 module.exports = {
-  createSession, getSession, updateSessionActive,
+  createSession, getSession, updateSessionActive, updateSessionTitle,
   insertMessage, getMessages, getMessageByClientId,
   insertFeedback, deleteFeedback,
   getLastAssistantMessage, getMessageById, deleteMessage, getMessageCount,

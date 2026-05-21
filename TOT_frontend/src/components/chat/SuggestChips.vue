@@ -1,6 +1,6 @@
 <template>
   <div v-if="items.length" class="suggest-chips">
-    <span class="suggest-title">💡 建议追问：</span>
+    <span class="suggest-title">继续追问</span>
     <div class="chips-wrap">
       <span
         v-for="(s, i) in items" :key="i"
@@ -17,12 +17,13 @@ defineEmits<{ select: [text: string] }>();
 </script>
 
 <style lang="less" scoped>
-.suggest-chips { margin-top: 8px; }
-.suggest-title { font-size: 12px; color: #888; margin-bottom: 6px; display: block; }
+.suggest-chips { margin-top: 16px; }
+.suggest-title { font-size: 11px; color: #8f99a8; margin-bottom: 8px; display: block; font-weight: 600; }
 .chips-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
-  flex-shrink: 0; background: #e8eaf6; padding: 6px 14px; border-radius: 16px;
-  font-size: 12px; cursor: pointer; transition: background .15s;
-  &:hover { background: #c5cae9; }
+  flex-shrink: 0; background: #f8f9fb; padding: 8px 16px; border-radius: 6px;
+  font-size: 13px; cursor: pointer; transition: all .15s; color: #5f6b7a;
+  border: 1px solid #e2e6ed;
+  &:hover { background: #eff3ff; border-color: #2563eb; color: #2563eb; }
 }
 </style>

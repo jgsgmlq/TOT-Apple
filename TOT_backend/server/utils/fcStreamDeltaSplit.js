@@ -30,6 +30,10 @@ function findFcPreambleSplitIndex(s) {
   if (/^(#{1,6}\s|\||```[a-z]*\s|[-*]\s|\d+\.\s)/i.test(tLead)) {
     return leadingOffset;
   }
+  // 3b) 流式传输中开头可能是孤立的 #/##/###（还没收到空格和后续文本），不切分
+  if (/^#{1,6}$/.test(tLead.trim())) {
+    return -1;
+  }
 
   // 4) 思考前言后首个空行
   const blank = s.match(/\n[ \t]*\n/);
@@ -73,9 +77,20 @@ function createFcStreamDeltaSplitter(onDelta) {
     }
 
     if (splitIdx === -1) {
-      const piece = acc.slice(forwarded);
-      if (piece) onDelta(piece, { phase: 'reasoning' });
-      forwarded = acc.length;
+      // 未找到分界时，向前 emit；但保留尾部可能是 markdown 标题前缀的片段（如 #、##）
+      const pending = acc.slice(forwarded);
+      const lastLine = pending.split(/\n/).pop();
+      const trailMatch = lastLine.match(/^\s*#{1,6}$/);
+      if (trailMatch) {
+        const idx = pending.length - trailMatch[0].length;
+        if (idx > 0) {
+          onDelta(pending.slice(0, idx), { phase: 'reasoning' });
+          forwarded += idx;
+        }
+      } else {
+        if (pending) onDelta(pending, { phase: 'reasoning' });
+        forwarded = acc.length;
+      }
       return;
     }
 

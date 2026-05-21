@@ -80,6 +80,7 @@ const ExecChatGraphState = Annotation.Root({
   finalMessageId: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   finalResponse: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   reply_markdown: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
+  sessionTitle: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
   reply_structured: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
 
   // ─── 人在回路 (HITL) ───

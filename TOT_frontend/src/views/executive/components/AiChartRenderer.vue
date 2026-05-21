@@ -34,7 +34,7 @@
       title: {
         text: title,
         left: 'center',
-        textStyle: { fontSize: 14, color: '#334155' },
+        textStyle: { fontSize: 14, color: '#5f6b7a', fontWeight: 600 },
       },
       tooltip: {
         trigger: type === 'pie' ? 'item' : 'axis',
@@ -52,7 +52,7 @@
         bottom: 0,
         itemWidth: 10,
         itemHeight: 10,
-        textStyle: { fontSize: 12, color: '#64748b' },
+        textStyle: { fontSize: 12, color: '#5f6b7a' },
       },
       dataZoom: isCartesian ? [{ type: 'inside', start: 0, end: 100 }] : undefined,
     };
@@ -62,32 +62,72 @@
         type === 'scatter'
           ? {
               type: 'value',
-              splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } },
-              axisLine: { lineStyle: { color: '#cbd5e1' } },
+              splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f0f2f5' } },
+              axisLine: { lineStyle: { color: '#e2e6ed' } },
             }
           : {
               type: 'category',
               data: xAxis,
-              axisLabel: { interval: 'auto', rotate: 30, color: '#64748b' },
-              axisLine: { lineStyle: { color: '#cbd5e1' } },
+              axisLabel: { interval: 'auto', rotate: 30, color: '#5f6b7a' },
+              axisLine: { lineStyle: { color: '#e2e6ed' } },
             };
 
       option.yAxis = {
         type: 'value',
-        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f1f5f9' } },
-        axisLabel: { color: '#64748b' },
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f0f2f5' } },
+        axisLabel: { color: '#8f99a8' },
       };
     }
 
     const highlights = (props.data as any).highlights || [];
 
-    option.series = series.map((s) => {
+    // Precision Dashboard 色板（色盲友好）
+    const SERIES_PALETTE = [
+      '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed',
+      '#0891b2', '#db2777', '#4f46e5', '#65a30d', '#ea580c',
+    ];
+
+    // 检测是否需要双 Y 轴：series 中有不同的 yAxisIndex
+    const hasDualAxis = series.some((s: any) => s.yAxisIndex === 1);
+
+    if (hasDualAxis) {
+      option.yAxis = [
+        {
+          type: 'value',
+          name: '%',
+          splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f0f2f5' } },
+          axisLabel: { color: '#5f6b7a' },
+        },
+        {
+          type: 'value',
+          name: '#',
+          splitLine: { show: false },
+          axisLabel: { color: '#8f99a8' },
+        },
+      ];
+    }
+
+    option.series = series.map((s, idx) => {
       const item: any = {
         name: s.name || '',
-        type: ['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar', // fallback
+        type: ['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar',
         data: s.data || [],
-        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 }, // Add rounded top corners to bars
+        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 },
       };
+
+      // 双 Y 轴：系列可指定使用右轴
+      if (hasDualAxis && (s as any).yAxisIndex === 1) {
+        item.yAxisIndex = 1;
+      }
+
+      // 颜色：优先用系列自己的颜色，其次调色板
+      if (!type.includes('pie')) {
+        const seriesColor = (s as any).color;
+        item.itemStyle = {
+          ...item.itemStyle,
+          color: seriesColor || SERIES_PALETTE[idx % SERIES_PALETTE.length],
+        };
+      }
 
       if (type === 'pie') {
         item.radius = ['40%', '70%'];
@@ -102,14 +142,12 @@
         item.symbolSize = 6;
       }
 
-      // 动态高亮逻辑 (Safely handle highlights array index)
+      // 动态高亮：将高亮的 dataIndex 标为强调色
       if (highlights.length && type === 'bar') {
+        const baseColor = (s as any).color || SERIES_PALETTE[idx % SERIES_PALETTE.length];
         item.itemStyle.color = (params: any) => {
-          return highlights.includes(params.dataIndex) ? '#f59e0b' : '#3b82f6';
+          return highlights.includes(params.dataIndex) ? '#f59e0b' : baseColor;
         };
-      } else if (type === 'bar') {
-        // default uniform color for bars if no highlights
-        item.itemStyle.color = '#3b82f6';
       }
 
       return item;

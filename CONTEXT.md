@@ -47,6 +47,24 @@ suggestions → 有则渲染
 - 简单查询（如「这个任务多少人」）LLM 应返回空数组
 - 复杂分析（如门店排名对比）LLM 应产出有意义的 warn/info/positive 条目
 
+## 输出模板体系
+
+LLM 先输出 `template` 字段选择模板，再按对应 schema 输出内容。General 兜底。
+
+| 模板 | 场景 | 组件 |
+|------|------|------|
+| `simple_metric` | 简单数字查询 | overview + keyNumbers（大字） |
+| `ranking` | 排名对比 | overview + chart/table + attentionPoints |
+| `overview` | 总体概况 | overview + keyNumbers + funnel |
+| `warning` | 预警排查 | overview + table + attentionPoints（突出） |
+| `diagnosis` | 数据诊断 | overview + 归因分析 + 下钻建议 + chart/table |
+| `general` | 兜底 | 自由 Markdown，无 Zod schema 校验 |
+
+## 思考过程全局统一
+
+- 流式逐字展示 + 结构化链路展示，所有模板共用
+- 目的：前期调试可视化 Agent 决策链
+
 ## 数据契约
 
 - Chart 数据格式与前端 `ChartData` 类型一致：`{ type, title?, xAxis?, series }`

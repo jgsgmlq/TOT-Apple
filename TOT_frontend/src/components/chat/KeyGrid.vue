@@ -5,7 +5,7 @@
       class="key-cell"
     >
       <span class="key-value" :style="{ color: cellColor(k) }">
-        {{ k.value }}<small v-if="k.unit" style="font-size:12px;color:#888;font-weight:400;">&nbsp;{{ k.unit }}</small>
+        {{ k.value }}<small v-if="k.unit" class="key-unit">&nbsp;{{ k.unit }}</small>
       </span>
       <span class="key-label">{{ k.label }}</span>
     </div>
@@ -18,33 +18,42 @@ defineProps<{
 }>();
 
 function cellColor(k: { label: string; value: string | number }) {
-  if (k.label.includes('完成') && !k.label.includes('未')) return '#2e7d32';
-  if (k.label.includes('未完成')) return '#c62828';
-  return '#1a1a2e';
+  if (k.label.includes('完成') && !k.label.includes('未')) return '#059669';
+  if (k.label.includes('未完成') || k.label.includes('预警')) return '#dc2626';
+  return '#1a1f36';
 }
 </script>
 
 <style lang="less" scoped>
 .key-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-  gap: 6px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
 }
 .key-cell {
   text-align: center;
-  padding: 10px 4px;
-  border-radius: 8px;
-  background: #f8f9fa;
+  padding: 16px 12px;
+  background: #f8f9fb;
+  border-radius: 6px;
 }
 .key-value {
   display: block;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.key-unit {
+  font-size: 13px;
+  color: #8f99a8;
+  font-weight: 400;
 }
 .key-label {
+  display: block;
   font-size: 11px;
-  color: #888;
-  margin-top: 2px;
+  color: #8f99a8;
+  margin-top: 6px;
+  font-weight: 500;
 }
 </style>

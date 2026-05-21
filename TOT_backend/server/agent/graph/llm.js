@@ -14,11 +14,11 @@ const routerModel = new ChatOpenAI({
 });
 
 const fcModel = new ChatOpenAI({
-  modelName: "deepseek-chat",
+  modelName: process.env.DEEPSEEK_REASONER === 'true' ? "deepseek-reasoner" : "deepseek-chat",
   apiKey,
   configuration: { baseURL },
   temperature: 0.1,
-  maxTokens: 2048,
+  maxTokens: process.env.DEEPSEEK_REASONER === 'true' ? 4096 : 2048,
   streaming: true,
 });
 

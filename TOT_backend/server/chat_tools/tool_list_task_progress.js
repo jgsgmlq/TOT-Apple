@@ -8,13 +8,13 @@ module.exports = {
     type: 'function',
     function: {
       name: 'list_task_progress',
-      description: '批量查询多个任务的进度摘要。当用户问"有哪些任务""哪些比较紧急"时使用。',
+      description: '批量查询多个任务的进度摘要。默认自动排除已截止的过期任务。查"有哪些任务"时可直接调用无需参数。查"快过期"时用 filters: {days_to_deadline_max: 7}。查"全部含已过期"时用 status: "all"。',
       parameters: {
         type: 'object',
         properties: {
           task_ids: { type: 'array', items: { type: 'string' }, description: '任务标识列表；不传则返回全部进行中的任务' },
           status: { type: 'string', enum: ['active', 'ended', 'all'], description: '过滤任务状态，默认 active' },
-          filters: { type: 'object', description: '筛选条件: {completion_rate_max: 0.5, days_to_deadline_max: 3}' },
+          filters: { type: 'object', description: '筛选条件: {completion_rate_max: 0.5, completion_rate_min: 0, days_to_deadline_max: 3}' },
           sort_by: { type: 'string', enum: ['deadline', 'completion_rate', 'priority', 'created_at'], description: '排序字段' },
           sort_order: { type: 'string', enum: ['asc', 'desc'], description: '排序方向，默认 desc' }
         }
@@ -64,10 +64,33 @@ module.exports = {
       rows.sort((a, b) => String(a.deadline || '').localeCompare(String(b.deadline || '')) * order);
     }
 
+    const now = new Date();
+    const nowTs = now.getTime();
+
     let filtered = rows;
+    // 默认行为：查询 active 任务时自动排除已截止的（due_date < now）
+    if (args.status !== 'ended' && args.status !== 'all') {
+      filtered = filtered.filter(r => {
+        if (!r.deadline) return true; // 无截止日期的不排除
+        const d = new Date(r.deadline);
+        return isNaN(d.getTime()) || d.getTime() >= nowTs;
+      });
+    }
+
     if (args.filters) {
       if (args.filters.completion_rate_max != null) {
         filtered = filtered.filter(r => r.completion_rate <= args.filters.completion_rate_max);
+      }
+      if (args.filters.completion_rate_min != null) {
+        filtered = filtered.filter(r => r.completion_rate >= args.filters.completion_rate_min);
+      }
+      if (args.filters.days_to_deadline_max != null) {
+        const maxDate = new Date(nowTs + args.filters.days_to_deadline_max * 86400000);
+        filtered = filtered.filter(r => {
+          if (!r.deadline) return false;
+          const d = new Date(r.deadline);
+          return !isNaN(d.getTime()) && d <= maxDate;
+        });
       }
     }
 

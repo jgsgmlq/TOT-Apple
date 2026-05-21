@@ -367,21 +367,25 @@ async function executeByName(toolName, params, regionScope) {
     // 2) 参数 schema 校验（结构化 violations，不再 throw）
     const argCheck = validateToolArgs(toolName, meta.schema, params);
     if (!argCheck.ok) {
-      const first = argCheck.violations[0];
-      const err = new Error(`Invalid parameters: ${first.message}`);
-      err.code = 'INVALID_PARAMETERS';
-      err.violations = argCheck.violations;
-      throw err;
+      return {
+        error: {
+          code: 'INVALID_PARAMETERS',
+          message: `Invalid parameters: ${argCheck.violations[0].message}`,
+          violations: argCheck.violations,
+        }
+      };
     }
 
     // 3) 角色/区域权限校验（结构化 violations，不再 throw）
     const authCheck = authorizeToolCall(toolName, meta, sessionContext);
     if (!authCheck.ok) {
-      const first = authCheck.violations[0];
-      const err = new Error(first.message);
-      err.code = 'PERMISSION_DENIED';
-      err.violations = authCheck.violations;
-      throw err;
+      return {
+        error: {
+          code: 'PERMISSION_DENIED',
+          message: authCheck.violations[0].message,
+          violations: authCheck.violations,
+        }
+      };
     }
 
     // 4) 执行与超时保护

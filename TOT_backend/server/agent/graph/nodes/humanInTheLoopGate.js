@@ -16,8 +16,11 @@ const humanInTheLoopGate = async (state) => {
     try { span.event({ name: 'HITL_Interrupt', input: payload?.reason, metadata: { type: payload?.type } }); } catch {}
   }
 
-  // 缺任务参数时，查询任务列表作为候选
-  if (payload?.type === 'missing_task_ref') {
+  // FC 循环内的 ask_user 中断：payload 已有 question + options，不需要补全
+  const isFcClarification = payload?.type === 'fc_clarification' || payload?.source === 'fc_loop';
+
+  // 缺任务参数时，查询任务列表作为候选（非 FC 内部中断）
+  if (!isFcClarification && payload?.type === 'missing_task_ref') {
     try {
       const taskCrud = require('../../../modules/task/crud/taskCrud');
       const tasks = await taskCrud.getTaskList({ statuses: ['dispatched', 'active'] });
@@ -68,6 +71,28 @@ const humanInTheLoopGate = async (state) => {
   const userText = typeof normalized?.user_text === 'string' && normalized.user_text.trim()
     ? normalized.user_text.trim()
     : (typeof normalized?.value === 'string' ? normalized.value.trim() : '');
+
+  // FC 循环内 HITL：resume 后把用户回答注入 FC 循环继续
+  if (isFcClarification) {
+    if (isCancel) {
+      endSpan(span, { output: 'fc_hitl_cancel' });
+      return {
+        hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
+        pending_tool_calls: [], fc_next_action: 'finalize',
+        messages: [new AIMessage({ content: '用户取消了本次澄清。请根据已有数据直接总结回答。' })]
+      };
+    }
+    endSpan(span, { output: 'fc_hitl_continue' });
+    const selectedText = typeof normalized?.value === 'string' && normalized.value.trim()
+      ? normalized.value.trim()
+      : (normalized?.selected_option_id || JSON.stringify(normalized));
+    const replyMsg = `用户回复: ${selectedText}。请基于这个信息继续刚才的工具调用，完成用户最初的问题。`;
+    return {
+      hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
+      fc_next_action: '', // 由 fc_CheckSteps 递增 step 后继续
+      messages: [new HumanMessage(replyMsg)]
+    };
+  }
 
   if (isCancel) {
     endSpan(span, { output: 'cancel' });

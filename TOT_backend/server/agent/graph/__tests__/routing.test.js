@@ -73,8 +73,8 @@ describe("Route functions (v2)", () => {
     test("escalate_count < 1 → merge", () => {
       expect(routeAfterExecute({ escalate_count: 0 })).toBe("fc_MergeToolResults");
     });
-    test("escalate_count >= 1 → escalate", () => {
-      expect(routeAfterExecute({ escalate_count: 1 })).toBe("fc_Escalate");
+    test("escalate_count >= 1 → FinalResponseStep", () => {
+      expect(routeAfterExecute({ escalate_count: 1 })).toBe("FinalResponseStep");
     });
   });
 

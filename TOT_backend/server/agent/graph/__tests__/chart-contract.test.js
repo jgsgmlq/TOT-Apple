@@ -87,3 +87,31 @@ describe('extractPlottableData 输出契约', () => {
     expect(funnel.xAxis.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('query_metric rows 格式（格式 3: parsed.rows）', () => {
+  test('从 { rows: [...] } 格式提取 dataset', () => {
+    const tr = {
+      call_x: {
+        data: JSON.stringify({
+          task_id: 'TASK_1',
+          task_name: '测试任务',
+          dimension: 'store',
+          rows: [
+            { dimensions: { store: 'R001' }, completion_rate: 80, completed_count: 8, total_count: 10 },
+            { dimensions: { store: 'R002' }, completion_rate: 30, completed_count: 3, total_count: 10 },
+            { dimensions: { store: 'R003' }, completion_rate: 10, completed_count: 1, total_count: 10 },
+          ],
+        }),
+        toolName: 'query_metric',
+      },
+    };
+    const datasets = extractPlottableData(tr);
+    // 应该有 ranking 数据集
+    const ranking = datasets.filter(d => d.kind === 'ranking');
+    expect(ranking.length).toBeGreaterThanOrEqual(1);
+    const ds = ranking[0];
+    // xAxis 应该是门店 ID（来自 dimensions.store）
+    expect(ds.xAxis).toEqual(expect.arrayContaining(['R001', 'R002', 'R003']));
+    expect(ds.series[0].data).toHaveLength(3);
+  });
+});

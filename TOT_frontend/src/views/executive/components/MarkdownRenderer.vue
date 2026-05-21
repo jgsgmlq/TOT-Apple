@@ -35,7 +35,7 @@
 
     <!-- 追问建议区 -->
     <div v-if="extractedSuggestions.length" class="exec-follow">
-      <div class="exec-follow-title">💡 建议追问：</div>
+      <div class="exec-follow-title">继续追问</div>
       <div class="exec-follow-bubbles">
         <n-button
           v-for="(sug, si) in extractedSuggestions"
@@ -142,35 +142,32 @@
 
 <style lang="less" scoped>
   .markdown-renderer {
-    line-height: 1.7;
+    line-height: 1.65;
     word-break: break-word;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-      Arial, sans-serif;
-    color: #334155; /* Modern, softer dark gray for less eye strain */
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #1a1f36;
 
     .reasoning-box {
       margin-bottom: 16px;
       background: transparent;
-      border-radius: 8px;
-      transition: all 0.3s ease;
 
       .reasoning-header {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 12px;
-        background: #f1f5f9; /* Subtle gray background */
-        border-radius: 6px;
-        font-size: 13px;
+        padding: 4px 10px;
+        background: #f1f3f6;
+        border-radius: 4px;
+        font-size: 12px;
         font-weight: 500;
-        color: #64748b; /* Muted text color */
+        color: #8f99a8;
         cursor: pointer;
         user-select: none;
         transition: background 0.2s ease, color 0.2s ease;
 
         &:hover {
-          background: #e2e8f0;
-          color: #334155;
+          background: #e2e6ed;
+          color: #5f6b7a;
         }
 
         .reasoning-icon {
@@ -189,19 +186,18 @@
 
       .reasoning-content-wrapper {
         margin-top: 8px;
-        padding-left: 4px; /* Slight indent to align with header visual weight */
+        padding-left: 4px;
       }
 
       .reasoning-content {
         padding: 12px 16px;
-        font-size: 13.5px;
-        color: #64748b;
-        background: #f8fafc;
-        border-left: 3px solid #cbd5e1; /* Subtle blockquote style border */
-        border-radius: 0 8px 8px 0;
+        font-size: 13px;
+        color: #5f6b7a;
+        background: #f8f9fb;
         white-space: pre-wrap;
         line-height: 1.6;
-        font-style: normal; /* Removed italic for better readability of long text */
+        border-radius: 6px;
+        margin-top: 8px;
       }
     }
 
@@ -211,139 +207,99 @@
       :deep(p) {
         margin-top: 0;
         margin-bottom: 1em;
-
-        &:last-child {
-          margin-bottom: 0;
-        }
+        &:last-child { margin-bottom: 0; }
       }
 
       :deep(strong) {
         font-weight: 600;
-        color: #0f172a; /* Darker bold text for contrast */
+        color: #1a1f36;
+      }
+
+      :deep(h1), :deep(h2), :deep(h3), :deep(h4) {
+        color: #1a1f36;
       }
 
       /* Lists */
-      :deep(ul),
-      :deep(ol) {
-        margin-top: 0;
-        margin-bottom: 1em;
-        padding-left: 24px;
-
-        li {
-          margin-bottom: 0.25em;
-          &::marker {
-            color: #94a3b8; /* Softer bullet points */
-          }
+      :deep(ul), :deep(ol) {
+        margin-top: 0; margin-bottom: 1em; padding-left: 24px;
+        li { margin-bottom: 0.25em;
+          &::marker { color: #8f99a8; }
         }
       }
 
       /* Blockquotes */
       :deep(blockquote) {
-        margin: 1em 0;
-        padding: 12px 16px;
-        color: #475569;
-        background: #f8fafc;
-        border-left: 4px solid #e2e8f0;
-        border-radius: 0 8px 8px 0;
-
-        p {
-          margin-bottom: 0;
-        }
+        margin: 1em 0; padding: 12px 16px;
+        color: #5f6b7a; background: #f8f9fb;
+        border-radius: 6px;
+        p { margin-bottom: 0; }
       }
 
       /* Inline Code & Code Blocks */
       :deep(code) {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
-          'Courier New', monospace;
+        font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
         font-size: 0.875em;
         padding: 0.2em 0.4em;
-        background-color: #f1f5f9;
-        color: #ef4444; /* Standard subtle red for inline code */
-        border-radius: 4px;
+        background-color: #f1f3f6;
+        color: #dc2626;
+        border-radius: 3px;
       }
 
       :deep(pre) {
-        margin: 1em 0;
-        padding: 16px;
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        overflow-x: auto;
-
+        margin: 1em 0; padding: 16px;
+        background-color: #f8f9fb;
+        border: 1px solid #e2e6ed;
+        border-radius: 6px; overflow-x: auto;
         code {
-          background-color: transparent;
-          padding: 0;
-          color: #334155; /* Reset color inside pre */
-          font-size: 0.85em;
+          background-color: transparent; padding: 0;
+          color: #1a1f36; font-size: 0.85em;
         }
       }
 
       /* Tables */
       :deep(table) {
-        width: 100%;
-        margin: 1.5em 0;
-        border-collapse: separate;
-        border-spacing: 0;
-        border-radius: 8px;
-        overflow: hidden;
-        border: 1px solid #e2e8f0;
+        width: 100%; margin: 1.5em 0;
+        border-collapse: separate; border-spacing: 0;
+        border-radius: 6px; overflow: hidden;
+        border: 1px solid #e2e6ed;
 
-        th,
-        td {
-          padding: 10px 16px;
-          text-align: left;
-          border-bottom: 1px solid #e2e8f0;
-          border-right: 1px solid #e2e8f0;
-
-          &:last-child {
-            border-right: none;
-          }
+        th, td {
+          padding: 10px 16px; text-align: left;
+          border-bottom: 1px solid #e2e6ed;
+          border-right: 1px solid #e2e6ed;
+          &:last-child { border-right: none; }
         }
-
-        tr:last-child td {
-          border-bottom: none;
-        }
-
+        tr:last-child td { border-bottom: none; }
         th {
-          background-color: #f8fafc;
-          font-weight: 600;
-          color: #1e293b;
+          background-color: #f8f9fb;
+          font-weight: 600; color: #5f6b7a;
+          font-size: 11px;
         }
-
         tbody tr {
           background-color: #ffffff;
-          &:nth-child(even) {
-            background-color: #fcfcfd;
-          }
+          &:nth-child(even) { background-color: #fafbfc; }
         }
       }
     }
 
     .exec-charts {
       margin: 20px 0;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+      display: flex; flex-direction: column; gap: 16px;
     }
 
     .exec-chart-item {
       background: #ffffff;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-      border: 1px solid #f1f5f9;
+      border-radius: 6px; padding: 20px;
+      border: 1px solid #e2e6ed;
     }
 
     .exec-follow {
-      margin-top: 24px;
-      padding-top: 16px;
-      border-top: 1px solid #f1f5f9;
+      margin-top: 24px; padding-top: 16px;
+      border-top: 1px solid #e2e6ed;
 
       .exec-follow-title {
-        font-size: 13px;
-        color: #64748b;
-        margin-bottom: 12px;
-        font-weight: 500;
+        font-size: 12px; color: #5f6b7a;
+        margin-bottom: 12px; font-weight: 600;
       }
 
       .exec-follow-bubbles {
@@ -353,24 +309,19 @@
       }
 
       .exec-follow-chip {
-        background: #ffffff;
-        color: #0ea5e9;
-        border: 1px solid #e0f2fe;
+        background: #f8f9fb;
+        color: #5f6b7a;
+        border: 1px solid #e2e6ed;
         font-size: 13px;
         transition: all 0.2s ease;
-
-        &:hover {
-          background: #f0f9ff;
-          border-color: #bae6fd;
-        }
+        &:hover { background: #eff3ff; border-color: #2563eb; color: #2563eb; }
       }
     }
 
     .streaming-cursor {
       display: inline-block;
-      width: 6px;
-      height: 15px;
-      background: #3b82f6; /* Modern Blue */
+      width: 6px; height: 15px;
+      background: #2563eb;
       border-radius: 3px;
       margin-left: 4px;
       vertical-align: baseline;

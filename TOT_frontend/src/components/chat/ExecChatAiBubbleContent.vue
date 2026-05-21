@@ -30,7 +30,7 @@
         </li>
       </ul>
       <div v-if="(replyContent || partialReply)!.followUpSuggestions?.length" class="exec-follow">
-        💡 {{ (replyContent || partialReply)!.followUpSuggestions!.join(' / ') }}
+        {{ (replyContent || partialReply)!.followUpSuggestions!.join(' / ') }}
       </div>
     </div>
     <pre v-else-if="jsonStream" class="exec-json-fallback">{{ jsonStream }}</pre>

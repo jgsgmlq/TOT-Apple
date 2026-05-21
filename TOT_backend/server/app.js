@@ -159,7 +159,7 @@ server.listen(PORT, '0.0.0.0', () => {
 // Langfuse v3 SDK 走后台批量上报，直接进程退出会丢最后一批 trace（见
 // `docs/plans/2026-04-23-agent-execution-telemetry.md` §5.8）。SIGTERM/SIGINT
 // 到达时触发一次带 5s 超时的 flushAsync，再关闭 HTTP server 与退出。
-const { getClient: getLangfuseClient } = require('./modules/common/utils/tracer');
+const { getClient: getLangfuseClient } = require('./utils/tracer');
 const logger = require('./modules/common/utils/logger');
 
 let shuttingDown = false;

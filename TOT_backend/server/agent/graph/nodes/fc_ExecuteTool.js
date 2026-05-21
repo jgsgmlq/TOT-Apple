@@ -32,6 +32,30 @@ const fc_ExecuteTool = async (state, config) => {
   const pendingToolCalls = state.pending_tool_calls || [];
   if (pendingToolCalls.length === 0) return { fc_next_action: 'merge' };
 
+  // ask_user 工具 → 中断 FC 循环，走 HITL
+  const askUserCall = pendingToolCalls.find(tc => {
+    const n = chatToolsService.normalizeToolName(tc?.name || '');
+    return n === 'ask_user';
+  });
+  if (askUserCall) {
+    const args = askUserCall.args || {};
+    console.log(`[fc_ExecuteTool] ask_user: ${args.question?.slice(0, 80)}`);
+    return {
+      fc_next_action: 'hitl',
+      hitl_status: 'pending_interrupt',
+      interrupt_payload: {
+        type: 'fc_clarification',
+        question: args.question || '请补充更多信息',
+        candidates: [],
+        options: Array.isArray(args.options) ? args.options : [],
+        source: 'fc_loop',
+      },
+      // 将 ask_user 的 tool_call 结果也写入，方便 merge
+      toolResults: { [askUserCall.id]: { data: JSON.stringify({ asked: true }), signature: null } },
+      pending_tool_calls: [],
+    };
+  }
+
   const toolResults = {};
   const calledTools = [];
   let denyShortCircuit = null;

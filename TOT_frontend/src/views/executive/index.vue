@@ -16,8 +16,8 @@
         @expand="desktopSidebarCollapsed = false"
       >
         <div class="sider-logo">
-          <img :src="websiteConfig.logo" alt="logo" class="logo-img" />
-          <span v-show="!desktopSidebarCollapsed" class="logo-text">TOT</span>
+          <LogoMark />
+          <span v-show="!desktopSidebarCollapsed" class="logo-text">Ops Forge</span>
         </div>
 
         <div class="sider-header">
@@ -85,7 +85,7 @@
       <n-drawer v-model:show="showMobileSidebar" placement="left" :width="280">
         <div class="executive-sider mobile-sider-inner">
           <div class="sider-logo">
-            <img :src="websiteConfig.logo" alt="logo" class="logo-img" />
+            <LogoMark />
             <span class="logo-text">Executive Chat</span>
           </div>
           <div class="sider-header">
@@ -156,7 +156,7 @@
                 </n-icon>
               </template>
             </div>
-            <h2 class="header-title">Executive Chat</h2>
+            <h2 class="header-title">{{ headerTitle }}</h2>
           </div>
           <div class="header-actions">
             <div class="voice-switch-wrap" title="开启后与回答同步朗读（百炼 TTS）">
@@ -180,7 +180,7 @@
         <div class="chat-body custom-scroll" ref="chatBodyRef">
           <n-spin :show="isLoadingHistory" style="min-height: 120px">
             <div v-if="messages.length === 0 && !isLoadingHistory" class="empty-chat">
-              <h3>Hi! {{ displayName }} 👋✨</h3>
+              <h3>{{ displayName }}，有什么可以帮你？</h3>
               <p>作为你的智能助手，我可以为你答疑解惑～</p>
 
               <div class="preset-questions">
@@ -228,71 +228,85 @@
                     <span>{{ TOOL_DISPLAY_NAMES[msg.activeToolName] || '正在查询…' }}</span>
                   </div>
 
-                  <!-- 思考过程（流式/结束后统一展示） -->
+                  <!-- 决策链（工具调用序列，调试用） -->
+                  <div v-if="msg.done && msg._toolCalls?.length" class="exec-chain-wrap">
+                    <div class="exec-chain-title">Agent 决策链</div>
+                    <div class="exec-chain-items">
+                      <span v-for="(t, i) in msg._toolCalls" :key="i" class="exec-chain-step">
+                        {{ TOOL_DISPLAY_NAMES[t] || t }}
+                        <span v-if="i < msg._toolCalls.length - 1" class="exec-chain-arrow">→</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- 思考过程 -->
                   <div v-if="msg.thinking" class="exec-thinking-wrap">
-                    <n-collapse :default-expanded-names="['think']">
+                    <n-collapse>
                       <n-collapse-item title="思考过程" name="think">
-                        <div class="exec-thinking-body">{{ msg.thinking }}</div>
+                        <div class="exec-thinking-body">
+                          {{ msg.thinking }}
+                        </div>
                       </n-collapse-item>
                     </n-collapse>
                   </div>
 
-                  <!-- 正文：Markdown / 概述 -->
+                  <!-- ===== 模板分支渲染 ===== -->
+                  <!-- General 模板：纯 Markdown -->
                   <MarkdownRenderer
-                    v-if="!(msg.replyContent?.overview) && (msg.streamContent || msg.content)"
+                    v-if="msg.replyContent?.template === 'general' && msg.replyContent?.markdown"
+                    :content="msg.replyContent.markdown"
+                    :thinking="undefined"
+                    :streaming="false"
+                    @suggestion-click="fillComposerWithSuggestion"
+                  />
+
+                  <!-- 结构化模板 -->
+                  <template v-else-if="msg.replyContent?.template && msg.replyContent.template !== 'general'">
+                    <!-- Overview — 警告模板用更醒目的样式 -->
+                    <div v-if="msg.replyContent.overview"
+                      :class="msg.replyContent.template === 'warning' ? 'hero-card hero-card--warning' : 'hero-card'">
+                      {{ msg.replyContent.overview }}
+                    </div>
+
+                    <!-- 图表 -->
+                    <div v-if="msg.replyContent.visualizations?.length" class="exec-charts"
+                      :class="{ 'exec-charts--multiple': msg.replyContent.visualizations.length > 1 }">
+                      <AiChartRenderer v-for="(chart, ci) in msg.replyContent.visualizations" :key="ci" :data="chart" class="exec-chart-item" />
+                    </div>
+
+                    <div v-if="msg.replyContent.forecastDisclaimer" class="exec-disclaimer">{{ msg.replyContent.forecastDisclaimer }}</div>
+
+                    <!-- KeyNumbers — 简单指标模板大字展示 -->
+                    <KeyGrid v-if="msg.replyContent.keyNumbers?.length" :items="msg.replyContent.keyNumbers"
+                      :large="msg.replyContent.template === 'simple_metric'" />
+
+                    <!-- 表格 -->
+                    <template v-if="msg.replyContent.tables?.length">
+                      <TableBlock v-for="(tbl, ti) in msg.replyContent.tables" :key="ti" :table="tbl" />
+                    </template>
+                    <TableBlock v-else-if="msg.replyContent.table" :table="msg.replyContent.table" />
+
+                    <!-- 洞察 → warning/diagnosis 模板突出 -->
+                    <InsightList v-if="msg.replyContent.attentionPoints?.length" :items="msg.replyContent.attentionPoints"
+                      :prominent="msg.replyContent.template === 'warning' || msg.replyContent.template === 'diagnosis'" />
+
+                    <!-- 追问 -->
+                    <SuggestChips v-if="msg.replyContent.followUpSuggestions?.length" :items="msg.replyContent.followUpSuggestions" @select="fillComposerWithSuggestion" />
+                  </template>
+
+                  <!-- 流式中的 Markdown 渲染（无 replyContent 时） -->
+                  <MarkdownRenderer
+                    v-else-if="!msg.replyContent && (msg.streamContent || msg.content)"
                     :content="msg.streamContent || msg.content"
                     :thinking="undefined"
                     :streaming="!msg.done"
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
-                  <!-- 有结构化内容时按需渲染各组件 -->
-                  <template v-if="msg.replyContent">
-                    <!-- Overview Hero 卡片 -->
-                    <div v-if="msg.replyContent.overview" class="hero-card">
-                      {{ msg.replyContent.overview }}
+                  <!-- 数据溯源 -->
+                  <div v-if="provFooterContent(msg.replyContent?.statisticsProvenance)" class="exec-prov-footer">
+                    {{ provFooterContent(msg.replyContent.statisticsProvenance) }}
                     </div>
-
-                    <!-- 图表 — 有则渲染 -->
-                    <div
-                      v-if="msg.replyContent.visualizations?.length"
-                      class="exec-charts"
-                      :class="{ 'exec-charts--multiple': msg.replyContent.visualizations.length > 1 }"
-                    >
-                      <AiChartRenderer
-                        v-for="(chart, ci) in msg.replyContent.visualizations"
-                        :key="ci"
-                        :data="chart"
-                        class="exec-chart-item"
-                      />
-                    </div>
-
-                    <div v-if="msg.replyContent.forecastDisclaimer" class="exec-disclaimer">
-                      {{ msg.replyContent.forecastDisclaimer }}
-                    </div>
-
-                    <!-- 关键指标 — 有则渲染 -->
-                    <KeyGrid v-if="msg.replyContent.keyNumbers?.length" :items="msg.replyContent.keyNumbers" />
-
-                    <!-- 表格 — 有则渲染（tables 优先，table 兜底旧格式） -->
-                    <template v-if="msg.replyContent.tables?.length">
-                      <TableBlock v-for="(tbl, ti) in msg.replyContent.tables" :key="ti" :table="tbl" />
-                    </template>
-                    <TableBlock v-else-if="msg.replyContent.table" :table="msg.replyContent.table" />
-
-                    <!-- 洞察 — 有则渲染 -->
-                    <InsightList v-if="msg.replyContent.attentionPoints?.length" :items="msg.replyContent.attentionPoints" />
-
-                    <!-- 追问 — 有则渲染 -->
-                    <SuggestChips v-if="msg.replyContent.followUpSuggestions?.length" :items="msg.replyContent.followUpSuggestions" @select="fillComposerWithSuggestion" />
-
-                    <!-- 数据溯源 -->
-                    <div v-if="msg.replyContent.statisticsProvenance" class="exec-prov-footer">
-                      <span v-for="(val, key) in msg.replyContent.statisticsProvenance" :key="key">
-                        {{ key }}: {{ val }}
-                      </span>
-                    </div>
-                  </template>
 
                   <!-- AI Feedback Actions -->
                   <div v-if="msg.role === 'ai' && msg.id" class="message-actions">
@@ -437,7 +451,7 @@
     AudioOutlined,
     LoadingOutlined,
   } from '@vicons/antd';
-  import { websiteConfig } from '@/config/website.config';
+  
   import { useUserStore } from '@/store/modules/user';
   import AiChartRenderer from './components/AiChartRenderer.vue';
   import MarkdownRenderer from './components/MarkdownRenderer.vue';
@@ -445,6 +459,7 @@
   import InsightList from '@/components/chat/InsightList.vue';
   import TableBlock from '@/components/chat/TableBlock.vue';
   import SuggestChips from '@/components/chat/SuggestChips.vue';
+import LogoMark from '@/components/common/LogoMark.vue';
   import {
     createChatSession,
     streamExecutiveChatMessage,
@@ -516,6 +531,16 @@
     isFeedbackLoading?: boolean;
   }
 
+  /** 将 statisticsProvenance 对象转为脚注风格的标注文字 */
+  function provFooterContent(sp: Record<string, string> | null | undefined): string {
+    if (!sp || typeof sp !== 'object') return '';
+    const parts: string[] = [];
+    if (sp['统计口径']?.trim()) parts.push(`统计口径：${sp['统计口径'].trim()}`);
+    if (sp['数据来源']?.trim()) parts.push(`数据来源：${sp['数据来源'].trim()}`);
+    if (sp['数据截止']?.trim()) parts.push(`数据截止：${sp['数据截止'].trim()}`);
+    return parts.join('  ');
+  }
+
   const FALLBACK_PRESETS = [
     'Q1新品培训完成率？',
     '现在有什么问题需要关注？',
@@ -535,6 +560,11 @@
   const avatarText = computed(() => {
     const name = displayName.value;
     return name ? Array.from(name)[0].toUpperCase() : '主';
+  });
+
+  const headerTitle = computed(() => {
+    const cur = historyList.value.find((h) => h.id === sessionId.value);
+    return cur?.title || 'Executive Chat';
   });
 
   const onLogout = () => {
@@ -757,13 +787,13 @@
         lastMsg2.content = result.markdownContent || formatReplyContentText(result.replyContent);
         lastMsg2.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg2.replyContent = result.replyContent;
+        (lastMsg2 as any)._toolCalls = (result as any)._toolMeta?.toolNames || [];
       }
-      const titleShort2 = (typeof resolvedValue === 'string' ? resolvedValue : String(resolvedValue || '查询')).slice(0, 28);
+      const aiTitle2 = (result as any).sessionTitle as string | undefined;
+      const titleShort2 = aiTitle2 || (typeof resolvedValue === 'string' ? resolvedValue : String(resolvedValue || '查询')).slice(0, 28);
       const existing2 = historyList.value.find((h) => h.id === sid);
       if (existing2) {
-        if (existing2.title === '新对话' || !existing2.title.trim()) {
-          existing2.title = titleShort2;
-        }
+        existing2.title = titleShort2;
       } else {
         historyList.value.unshift({ id: sid, title: titleShort2 });
       }
@@ -1157,13 +1187,14 @@
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
         lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
+        // 保存工具调用链（调试用）
+        (lastMsg as any)._toolCalls = (result as any)._toolMeta?.toolNames || [];
       }
-      const titleShort = question.length > 28 ? `${question.slice(0, 28)}…` : question;
+      const aiTitle = (result as any).sessionTitle as string | undefined;
+      const titleShort = aiTitle || (question.length > 28 ? `${question.slice(0, 28)}…` : question);
       const existing = historyList.value.find((h) => h.id === sid);
       if (existing) {
-        if (existing.title === '新对话' || !existing.title.trim()) {
-          existing.title = titleShort;
-        }
+        existing.title = titleShort;
       } else {
         historyList.value.unshift({ id: sid, title: titleShort });
       }
@@ -1317,6 +1348,13 @@
             currentMsg.thinking = payload.thinking || undefined;
             currentMsg.done = true;
             currentMsg.replyContent = data.replyContent ?? null;
+            // 更新侧栏标题
+            const sid = sessionId.value;
+            const aiTitle = (data as any).sessionTitle as string | undefined;
+            if (aiTitle && sid) {
+              const existing = historyList.value.find((h) => h.id === sid);
+              if (existing) { existing.title = aiTitle; persistSidebar(); }
+            }
           }
           scrollToBottom();
         },
@@ -1357,18 +1395,17 @@
   .executive-container {
     height: 100vh;
     width: 100vw;
-    background-color: #ffffff;
+    background-color: var(--bg-1);
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-      Arial, sans-serif;
+    font-family: var(--font-sans);
   }
 
   .executive-sider {
-    background: #f5f5f7;
-    border-right: 1px solid rgba(0, 0, 0, 0.05);
+    background: var(--bg-1);
+    border-right: 1px solid var(--border-0);
 
     :deep(.n-layout-sider-scroll-container) {
-      background: #f5f5f7;
+      background: var(--bg-1);
     }
 
     .sider-logo {
@@ -1388,8 +1425,9 @@
       .logo-text {
         font-size: 18px;
         font-weight: 700;
-        color: #1f2937;
+        color: var(--text-0);
         letter-spacing: 0.5px;
+        font-family: var(--font-sans);
       }
     }
 
@@ -1398,14 +1436,23 @@
     }
 
     .new-chat-btn {
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       font-weight: 600;
       height: 40px;
-      box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
+      background: var(--text-0) !important;
+      border-color: var(--text-0) !important;
+      color: var(--bg-0) !important;
+
+      &:hover {
+        background: #3d3830 !important;
+        border-color: #3d3830 !important;
+      }
     }
 
     .new-chat-btn-icon {
-      box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
+      background: var(--text-0) !important;
+      border-color: var(--text-0) !important;
+      color: var(--bg-0) !important;
     }
 
     &.executive-sider--narrow {
@@ -1428,36 +1475,38 @@
     }
 
     .history-title {
-      font-size: 12px;
-      color: #6b7280;
+      font-size: 11px;
+      color: var(--text-2);
       margin-bottom: 12px;
       padding-left: 4px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .chat-list {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 2px;
 
       .chat-item {
         display: flex;
         align-items: center;
         padding: 10px 12px;
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         cursor: pointer;
-        color: #4b5563;
+        color: var(--text-1);
         transition: all 0.2s ease;
         gap: 12px;
 
         &:hover {
-          background: #f3f4f6;
-          color: #111827;
+          background: var(--accent-muted);
+          color: var(--text-0);
         }
 
         &.active {
-          background: #eff6ff;
-          color: #1d4ed8;
+          background: var(--accent-muted);
+          color: var(--accent);
           font-weight: 500;
         }
 
@@ -1496,9 +1545,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: saturate(180%) blur(20px);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    background: rgba(250,247,242,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-0);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -1507,8 +1556,9 @@
       margin: 0;
       font-size: 17px;
       font-weight: 600;
-      color: #1d1d1f;
-      letter-spacing: -0.374px;
+      color: var(--text-0);
+      font-family: var(--font-sans);
+      letter-spacing: -0.2px;
     }
 
     .header-actions {
@@ -1534,9 +1584,9 @@
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-    border: 2px solid #ffffff;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+    background: var(--bg-0);
+    border: 1.5px solid var(--border-1);
+    box-shadow: var(--shadow-card);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1544,7 +1594,7 @@
     transition: transform 0.2s, box-shadow 0.2s;
 
     &:hover {
-      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.25);
+      box-shadow: var(--shadow-md);
     }
 
     &:active {
@@ -1553,8 +1603,8 @@
 
     .avatar-text {
       font-size: 16px;
-      font-weight: 800;
-      color: #2563eb;
+      font-weight: 700;
+      color: var(--accent);
       user-select: none;
     }
   }
@@ -1564,15 +1614,16 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    color: #dc2626;
+    color: var(--text-1);
     font-weight: 500;
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     transition: background 0.2s;
 
     &:hover,
     &:active {
-      background: #fef2f2;
+      background: var(--accent-muted);
+      color: var(--accent);
     }
   }
 
@@ -1591,45 +1642,52 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      color: #1d1d1f;
+      color: var(--text-0);
       text-align: center;
+      padding-top: 6vh;
 
       h3 {
         line-height: 1.47;
-        letter-spacing: -0.374px;
+        margin: 0 0 16px;
+        font-family: var(--font-sans);
+        font-weight: 400;
+        font-size: 28px;
+        color: var(--text-0);
+      }
+
+      p {
         margin: 0 0 40px;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-          Arial, sans-serif;
+        color: var(--text-1);
+        font-size: 15px;
       }
 
       .preset-questions {
         display: flex;
         flex-direction: column;
         align-items: flex-start;
-        gap: 12px;
+        gap: 14px;
         width: fit-content;
 
         .preset-bubble {
           padding: 10px 20px;
-          background: #f5f5f7;
-          border: 1px solid transparent;
-          border-radius: 980px;
+          background: var(--bg-0);
+          border: 1px solid var(--border-0);
+          border-radius: var(--radius-lg);
           font-size: 14px;
           font-weight: 400;
-          color: #1d1d1f;
+          color: var(--text-1);
           cursor: pointer;
           transition: all 0.2s ease;
-          letter-spacing: -0.374px;
-          font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-            Arial, sans-serif;
+          font-family: var(--font-sans);
 
           &:hover {
-            background: #ededf2;
-            color: #0071e3;
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-muted);
           }
 
           &:active {
-            background: #e5e5ea;
+            background: var(--accent-muted);
           }
         }
       }
@@ -1638,16 +1696,18 @@
     .message-row {
       display: flex;
       gap: 16px;
-      max-width: 85%;
+      max-width: 90%;
 
       &.is-user {
         align-self: flex-end;
         flex-direction: row-reverse;
 
         .message-content {
-          background: #0071e3;
+          background: var(--accent);
           color: #ffffff;
-          border-radius: 18px 4px 18px 18px;
+          border-radius: 6px;
+          padding: 10px 16px;
+          font-size: 14px;
         }
       }
 
@@ -1655,20 +1715,18 @@
         align-self: flex-start;
 
         .message-content {
-          background: #f5f5f7;
-          color: #1d1d1f;
-          border-radius: 4px 18px 18px 18px;
-          border: none;
+          background: var(--bg-0);
+          color: var(--text-0);
+          border-radius: 6px;
+          border: 1px solid var(--border-0);
+          padding: 20px 24px;
         }
       }
 
       .message-content {
-        padding: 12px 16px;
         font-size: 15px;
-        line-height: 1.47;
-        letter-spacing: -0.374px;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-          Arial, sans-serif;
+        line-height: 1.6;
+        font-family: var(--font-sans);
         word-wrap: break-word;
         white-space: pre-wrap;
 
@@ -1691,20 +1749,15 @@
 
         .exec-structured {
           .hero-card {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: #fff; padding: 14px 16px; border-radius: 12px;
-            margin-bottom: 12px; font-size: 15px; line-height: 1.6;
+            background: var(--bg-0);
+            color: var(--text-0);
+            padding: 20px 24px;
+            margin-bottom: 20px; font-size: 15px; line-height: 1.65;
+            border-left: 3px solid var(--accent);
           }
 
           &.exec-structured--stream {
             opacity: 0.92;
-          }
-
-
-
-          .exec-prov-footer {
-            font-size: 11px; color: #aaa; text-align: right; margin-top: 8px;
-            display: flex; gap: 12px; justify-content: flex-end;
           }
 
           .exec-charts {
@@ -1737,10 +1790,10 @@
           }
 
           .exec-chart-item {
-            background: #ffffff;
-            border-radius: 12px;
-            padding: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            background: var(--bg-0);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            border: 1px solid var(--border-0);
           }
 
           .exec-chart-loading {
@@ -1756,11 +1809,10 @@
           .exec-disclaimer {
             margin: 8px 0;
             padding: 8px 12px;
-            background: #fff9db;
-            color: #f08c00;
-            border-radius: 6px;
+            background: var(--accent-muted);
+            color: #b45309;
             font-size: 12px;
-            border-left: 3px solid #f08c00;
+            font-style: italic;
           }
 
           .exec-provenance {
@@ -1846,7 +1898,11 @@
           color: #555;
         }
 
-.exec-json-fallback {
+        .exec-prov-footer {
+          font-size: 11px; color: #94a3b8; text-align: right; margin-top: 10px;
+        }
+
+        .exec-json-fallback {
           margin: 0;
           padding: 10px;
           background: rgba(0, 0, 0, 0.04);
@@ -1865,8 +1921,8 @@
 
   .chat-footer {
     padding: 20px 32px;
-    background: #ffffff;
-    border-top: 1px solid rgba(0, 0, 0, 0.05);
+    background: var(--bg-0);
+    border-top: 1px solid var(--border-0);
 
     .input-wrapper {
       position: relative;
@@ -1882,68 +1938,66 @@
       }
 
       :deep(.n-input) {
-        border-radius: 12px;
+        border-radius: var(--radius-lg);
         padding: 6px;
-        background: #fafafc;
-        border: 1px solid rgba(0, 0, 0, 0.08);
+        background: var(--bg-1);
+        border: 1px solid var(--border-0);
         font-size: 15px;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-          Arial, sans-serif;
+        font-family: var(--font-sans);
         box-shadow: none;
 
         &:hover,
         &.n-input--focus {
-          background: #ffffff;
-          border-color: #0071e3;
-          box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.2);
+          background: var(--bg-0);
+          border-color: var(--accent);
+          box-shadow: 0 0 0 2px rgba(194,65,12,0.12);
         }
       }
 
       .send-btn {
         flex-shrink: 0;
-        border-radius: 980px;
+        border-radius: var(--radius-md);
         height: 44px;
         padding: 0 24px;
         font-weight: 600;
-        background-color: #0071e3;
-        color: #ffffff;
+        background-color: var(--text-0);
+        color: var(--bg-0);
         border: none;
-        font-size: 15px;
-        letter-spacing: -0.374px;
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-          Arial, sans-serif;
+        font-size: 14px;
+        font-family: var(--font-sans);
         transition: background-color 0.2s ease;
 
         &:hover {
-          background-color: #0077ed;
+          background-color: #3d3830;
         }
 
         &:active {
-          background-color: #ededf2;
-          color: #0071e3;
+          background-color: var(--bg-1);
+          color: var(--text-0);
+          border: 1px solid var(--border-0);
         }
 
         &.n-button--disabled {
-          background-color: #fafafc;
-          color: rgba(0, 0, 0, 0.48);
-          border: 1px solid rgba(0, 0, 0, 0.04);
+          background-color: var(--bg-1);
+          color: var(--text-2);
+          border: 1px solid var(--border-0);
         }
       }
 
       .send-btn--stop {
-        background-color: #f5f5f7;
-        color: #1f2937;
-        border: 1px solid rgba(0, 0, 0, 0.1);
+        background-color: var(--bg-1);
+        color: var(--text-0);
+        border: 1px solid var(--border-0);
         box-shadow: none;
 
         &:hover {
-          background-color: #e8e8ed;
-          color: #0f172a;
+          background-color: var(--border-0);
+          color: var(--text-0);
         }
 
         &:active {
-          background-color: #d2d2d7;
-          color: #0f172a;
+          background-color: var(--border-1);
+          color: var(--text-0);
         }
       }
     }
@@ -1951,11 +2005,9 @@
     .footer-tip {
       text-align: center;
       font-size: 12px;
-      color: rgba(0, 0, 0, 0.48);
+      color: var(--text-2);
       margin-top: 16px;
-      letter-spacing: -0.12px;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica,
-        Arial, sans-serif;
+      font-family: var(--font-sans);
     }
   }
 
@@ -2077,8 +2129,8 @@
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-    border: 1px solid rgba(37, 99, 235, 0.15);
+    background: var(--bg-0);
+    border: 1.5px solid var(--border-1);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2102,28 +2154,73 @@
   }
 
   .exec-tool-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-    color: #2563eb;
-    font-size: 13px;
-    font-weight: 500;
-    background: rgba(37, 99, 235, 0.05);
-    padding: 6px 12px;
-    border-radius: 6px;
-    width: fit-content;
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+    color: #2563eb; font-size: 13px; font-weight: 500;
+    background: rgba(37, 99, 235, 0.05); padding: 6px 12px; border-radius: 6px; width: fit-content;
   }
+
+  .exec-chain-wrap { margin-bottom: 12px; }
+  .exec-chain-title { font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+  .exec-chain-items { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: #64748b; }
+  .exec-chain-step { background: #f8fafc; padding: 2px 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
+  .exec-chain-arrow { color: #cbd5e1; margin: 0 2px; }
+
+  .hero-card--warning { background: #fef4e6 !important; color: #9a3412 !important; border-left: 3px solid #d97706 !important; }
 </style>
 
 <style>
-.clarify-panel { margin-bottom: 8px !important; padding: 14px 16px !important; border: 1px solid #e0e0e0 !important; background: #fff !important; border-radius: 12px !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; }
-.clarify-title { font-size: 14px !important; font-weight: 600 !important; color: #333 !important; margin-bottom: 12px !important; }
-.clarify-cards { display: flex !important; flex-direction: column !important; gap: 8px !important; margin-bottom: 12px !important; }
-.clarify-card { padding: 10px 14px !important; border: 1px solid #e0e0e0 !important; border-radius: 8px !important; cursor: pointer !important; background: #f8f9fa !important; transition: all 0.15s !important; }
-.clarify-card:hover { border-color: #667eea !important; background: #f0f2ff !important; }
-.clarify-card-title { font-size: 13px !important; font-weight: 600 !important; }
-.clarify-card-meta { font-size: 11px !important; color: #888 !important; margin-top: 4px !important; display: flex !important; gap: 12px !important; }
+:root {
+  /* Background */
+  --bg-0: #ffffff;
+  --bg-1: #f8f9fb;
+  --bg-2: #f1f3f6;
+  /* Text */
+  --text-0: #1a1f36;
+  --text-1: #5f6b7a;
+  --text-2: #8f99a8;
+  --text-inv: #ffffff;
+  /* Accent — trust blue,只在行动元素出现 */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-muted: #eff3ff;
+  /* Semantic — 数据状态，精准投放 */
+  --positive: #059669;
+  --caution: #d97706;
+  --negative: #dc2626;
+  --info: #0891b2;
+  /* Border */
+  --border-0: #e2e6ed;
+  --border-1: #f0f2f5;
+  /* Chart — 色盲友好10色板 */
+  --chart-0: #2563eb;
+  --chart-1: #059669;
+  --chart-2: #d97706;
+  --chart-3: #dc2626;
+  --chart-4: #7c3aed;
+  --chart-5: #0891b2;
+  --chart-6: #db2777;
+  --chart-7: #4f46e5;
+  --chart-8: #65a30d;
+  --chart-9: #ea580c;
+  /* Shadow */
+  --shadow-card: 0 1px 3px rgba(26,31,54,0.06);
+  --shadow-md: 0 4px 12px rgba(26,31,54,0.08);
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  /* Font */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.clarify-panel { margin-bottom: 12px !important; padding: 16px 20px !important; border: 1px solid var(--border-0) !important; background: var(--bg-0) !important; border-radius: var(--radius-md) !important; box-shadow: var(--shadow-card) !important; }
+.clarify-title { font-size: 14px !important; font-weight: 600 !important; color: var(--text-0) !important; margin-bottom: 14px !important; }
+.clarify-cards { display: flex !important; flex-direction: column !important; gap: 8px !important; margin-bottom: 14px !important; }
+.clarify-card { padding: 12px 16px !important; border: 1px solid var(--border-0) !important; border-radius: var(--radius-md) !important; cursor: pointer !important; background: var(--bg-1) !important; transition: all 0.15s !important; }
+.clarify-card:hover { border-color: var(--accent) !important; background: var(--accent-muted) !important; }
+.clarify-card-title { font-size: 13px !important; font-weight: 600 !important; color: var(--text-0) !important; }
+.clarify-card-meta { font-size: 11px !important; color: var(--text-1) !important; margin-top: 6px !important; display: flex !important; gap: 12px !important; }
 .clarify-actions { display: flex !important; justify-content: flex-end !important; }
 </style>
 

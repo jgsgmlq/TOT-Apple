@@ -54,6 +54,7 @@ function buildExecutiveMessageApiData(result) {
       const parsed = JSON.parse(md);
       if (parsed && typeof parsed.overview === 'string') {
         replyContent = {
+          template: parsed.template || 'overview',
           overview: parsed.overview,
           keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
           attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
@@ -63,6 +64,14 @@ function buildExecutiveMessageApiData(result) {
           ...(parsed.forecastDisclaimer ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
           ...(parsed.table && !Array.isArray(parsed.tables) ? { table: parsed.table } : {}),
           ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
+        };
+      }
+      // general template
+      if (parsed && parsed.template === 'general' && typeof parsed.markdown === 'string') {
+        replyContent = {
+          template: 'general',
+          markdown: parsed.markdown,
+          ...(parsed.statisticsProvenance ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
         };
       }
     } catch (_) { /* not JSON, keep as plain markdown */ }
@@ -91,8 +100,17 @@ function buildExecutiveMessageApiData(result) {
  */
 function buildReplyContentFromStructured(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
-  if (!parsed.overview && !parsed.keyNumbers && !parsed.attentionPoints && !parsed.followUpSuggestions) return null;
+  // general 模板：有 template + markdown 就够
+  if (parsed.template === 'general' && typeof parsed.markdown === 'string') {
+    return {
+      template: 'general',
+      markdown: parsed.markdown,
+      ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
+    };
+  }
+  if (!parsed.template && !parsed.overview && !parsed.keyNumbers && !parsed.attentionPoints && !parsed.followUpSuggestions) return null;
   return {
+    template: parsed.template || 'overview',
     overview: parsed.overview || '',
     keyNumbers: Array.isArray(parsed.keyNumbers) ? parsed.keyNumbers : [],
     attentionPoints: Array.isArray(parsed.attentionPoints) ? parsed.attentionPoints : [],
@@ -113,6 +131,8 @@ function buildSseFinalPayload(result, sessionId, requestId, responseTime, timest
     data: {
       messageId: result?.messageId || nanoid(),
       ...payload,
+      _toolMeta: result?._toolMeta || null,
+      sessionTitle: result?.sessionTitle || null,
       responseTime,
       contextId: sessionId,
       timestamp,
@@ -695,7 +715,8 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
       _safetyCheck: finalState.safety,
       markdownContent: finalMarkdown,
       replyContent: null,
-      _toolMeta: { toolCalls: [] }
+      sessionTitle: finalState.sessionTitle || null,
+      _toolMeta: { toolNames: (finalState.calledTools || []).filter(Boolean), toolCallCount: finalState.fc_super_step_count || 0 }
     };
 
     const responseTime = Date.now() - startMs;
@@ -870,7 +891,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       _safetyCheck: finalState.safety,
       markdownContent: finalMarkdown,
       replyContent: null,
-      _toolMeta: { toolCalls: [] }
+      sessionTitle: finalState.sessionTitle || null,
+      _toolMeta: { toolNames: (finalState.calledTools || []).filter(Boolean), toolCallCount: finalState.fc_super_step_count || 0 }
     };
 
     const responseTime = Date.now() - startMs;
@@ -883,6 +905,8 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       data: {
         messageId: assistMsgId,
         ...buildExecutiveMessageApiData(result),
+        _toolMeta: result?._toolMeta || null,
+        sessionTitle: result?.sessionTitle || null,
         responseTime,
         contextId: sessionId,
         timestamp: formatNowSqliteLocal(),

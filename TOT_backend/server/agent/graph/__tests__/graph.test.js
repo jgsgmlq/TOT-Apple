@@ -25,7 +25,6 @@ describe("Executive Chat Graph", () => {
       "fc_CheckDuplicate",
       "fc_ExecuteTool",
       "fc_MergeToolResults",
-      "fc_Escalate",
       "humanInTheLoopGate",
       "finalResponseStep",
       "persistAndEmit",

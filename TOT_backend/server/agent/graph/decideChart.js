@@ -8,30 +8,15 @@
  * LLM 可以在 Markdown 中自由追加额外的 ```echarts 代码块来覆盖或补充。
  */
 
+const { normalizeToolResults } = require('./shared/normalizeToolResults');
+
 const MAX_BARS = 12; // 柱状图最多显示条数
 
 // ─── helpers ──────────────────────────────────────────────────────────
 
 function _parseResults(toolResults) {
-  const rows = [];
-  for (const entry of Object.values(toolResults || {})) {
-    if (!entry || entry.error) continue;
-    let data = entry.data;
-    if (typeof data === 'string') {
-      try { data = JSON.parse(data); } catch { continue; }
-    }
-    if (!data || typeof data !== 'object') continue;
-    // 包装在 { data: [...] } 或裸数组
-    const arr = Array.isArray(data) ? data : (Array.isArray(data.data) ? data.data : null);
-    if (arr) { rows.push(...arr); continue; }
-    // 单条对象（如区域 summary）
-    if (data.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
-      rows.push(data.data);
-      continue;
-    }
-    if (!Array.isArray(data.data)) rows.push(data);
-  }
-  return rows;
+  const datasets = normalizeToolResults(toolResults);
+  return datasets.flatMap(ds => ds.rows);
 }
 
 function _fmt(v) {
