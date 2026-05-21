@@ -12,6 +12,12 @@ const persistAndEmit = async (state, config) => {
   const replyContent = state.reply_markdown || state.finalResponse || "";
   const assistMsgId = nanoid();
 
+  if (process.env.TEST_MOCK_MODE === 'true') {
+    console.log(`[PersistAndEmit] mock 模式: 跳过 DB 持久化, msgId=${assistMsgId}`);
+    endSpan(span, { output: `mock:msgId=${assistMsgId}`, metadata: { contentBytes: replyContent.length } });
+    return { finalMessageId: assistMsgId, reply_markdown: replyContent };
+  }
+
   console.log(`[PersistAndEmit] 正在持久化会话 ${sessionId} 的机器人回复...`);
 
   try {

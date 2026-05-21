@@ -37,7 +37,10 @@ const FINAL_RESPONSE_PROMPT = `你是培训数据分析师。根据工具查询�
   示例：{ "level": "warning", "text": "P0预警2人，距ddl仅剩24h，需立即催办" }
 - table：完成漏斗、对比排名、名单时使用（≥2行+≥2列）。title 必填，columns 用中文。
   不要用 table 展示预警级别分布！
-- visualizations：有 ≥3 个对比实体且差异 ≥5% 时，使用 AVAILABLE CHART DATA。
+- selectedCharts：引用 AVAILABLE CHART DATASETS 中的 datasetId 来画图。
+  每项填 { "datasetId": "rank_xxx", "chartType": "bar", "title": "门店完成率排名" }。
+  chartType 可选 bar|line|pie|scatter|funnel|radar。有 ≥3 个对比实体时推荐使用。
+  没有合适的数据集或不需要画图时传 []。
 - followUpSuggestions：2-3 个自然的下一步问题。
 - statisticsProvenance：始终填。
 

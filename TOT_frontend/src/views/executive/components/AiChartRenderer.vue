@@ -23,9 +23,12 @@
   const { setOptions } = useECharts(chartRef as any);
 
   const options = computed(() => {
-    const { type = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
+    const { type: rawType = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
 
-    const isCartesian = ['bar', 'line', 'scatter'].includes(type);
+    // 后端可能返回 funnel/radar 等类型，前端 ECharts 降级到同类笛卡尔图
+    const SUPPORTED = ['bar', 'line', 'pie', 'scatter'];
+    const type = SUPPORTED.includes(rawType) ? rawType : 'bar';
+    const isCartesian = type !== 'pie';
 
     const option: any = {
       title: {

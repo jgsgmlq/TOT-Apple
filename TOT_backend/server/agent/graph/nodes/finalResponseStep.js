@@ -6,6 +6,7 @@ const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
 const { renderToolResultsMarkdown } = require('../renderers');
+const { extractPlottableData } = require('../shared/extractPlottableData');
 const { fcModel } = require('../llm');
 const { ChatOpenAI } = require("@langchain/openai");
 
@@ -38,11 +39,11 @@ const FinalResponseOutput = z.object({
     text: z.string().default(""),
   }).catchall(z.any())).default([]),
   followUpSuggestions: z.array(z.string()).default([]),
-  visualizations: z.array(z.object({
-    type: z.enum(["bar", "line", "pie"]),
+  selectedCharts: z.array(z.object({
+    datasetId: z.string(),
+    chartType: z.enum(["bar","line","pie","scatter","funnel","radar"]),
     title: z.string(),
-    option: z.record(z.any()),
-  })).nullable().default(null),
+  })).default([]),
   statisticsProvenance: z.object({
     "统计口径": z.string(),
     "数据截止": z.string(),
@@ -163,15 +164,22 @@ const finalResponseStep = async (state, config) => {
         const toolItems = prepareToolData(state.toolResults);
         const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
 
-        // decideChart 已生成的图表数据
-        const { decideChart } = require('../decideChart');
-        const suggestedChart = decideChart(state.toolResults || {}, state.intent);
-        const chartBlock = suggestedChart
-          ? '\n\nAVAILABLE CHART DATA (可修改 title/colors，但不要编造数据):\n' + JSON.stringify(suggestedChart, null, 2)
-          : '';
+        // 代码提取所有可画图的数据集，LLM 只选不编
+        const plottableDatasets = extractPlottableData(state.toolResults || {});
+        let datasetsBlock = '';
+        if (plottableDatasets.length > 0) {
+          const summary = plottableDatasets.map(ds => ({
+            id: ds.id,
+            kind: ds.kind,
+            title: ds.title,
+            suggest: ds.preferChartType,  // 建议的 chartType，可覆盖
+            labelCount: ds.xAxis?.length || 0,
+          }));
+          datasetsBlock = '\n\nAVAILABLE CHART DATASETS (引用 datasetId，默认使用 suggest 的 chartType 即可，chartType 可选 bar|line|pie|scatter|funnel|radar，do not fabricate data):\n' + JSON.stringify(summary, null, 2);
+        }
 
         const prompt = promptRegistry.get('final_response');
-        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}\n${chartBlock}`;
+        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}${datasetsBlock}`;
 
         try {
           // 静默生成结构化 JSON，不在流中逐字推送
@@ -197,12 +205,10 @@ const finalResponseStep = async (state, config) => {
           if (rawJson.attentionPoints) {
             rawJson.attentionPoints = rawJson.attentionPoints.map(p => {
               if (typeof p === 'string') return { level: 'info', text: p };
-              // LLM 可能把内容写到 message 而非 text
               const text = p.text || p.message || p.content || '';
               return { level: p.level || 'info', text };
             });
           }
-          // LLM 可能把 statisticsProvenance 输出为字符串而非对象
           if (typeof rawJson.statisticsProvenance === 'string') {
             rawJson.statisticsProvenance = { "统计口径": rawJson.statisticsProvenance, "数据截止": "" };
           }
@@ -211,13 +217,36 @@ const finalResponseStep = async (state, config) => {
               row.map(cell => String(cell ?? ''))
             );
           }
-          if (rawJson.visualizations === null) delete rawJson.visualizations;
 
           const parsed = FinalResponseOutput.parse(rawJson);
 
-          response = JSON.stringify(parsed);
+          // 代码解析 LLM 选中的图表：按 datasetId 匹配实际数据，LLM 不能伪造数据
+          const datasetMap = new Map();
+          for (const ds of plottableDatasets) datasetMap.set(ds.id, ds);
+          const resolvedCharts = (parsed.selectedCharts || [])
+            .filter(sc => datasetMap.has(sc.datasetId))
+            .map(sc => {
+              const ds = datasetMap.get(sc.datasetId);
+              return {
+                type: sc.chartType,
+                title: sc.title || ds.title,
+                xAxis: ds.xAxis,
+                series: ds.series,
+              };
+            });
 
-          // 不通过 SSE delta 推送 JSON——结构化内容统一由 done 事件的 replyContent 传递
+          // 最终输出：LLM 文字 + 代码生成的 chart
+          response = JSON.stringify({
+            overview: parsed.overview,
+            keyNumbers: parsed.keyNumbers,
+            attentionPoints: parsed.attentionPoints,
+            followUpSuggestions: parsed.followUpSuggestions,
+            visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
+            statisticsProvenance: parsed.statisticsProvenance,
+            forecastDisclaimer: parsed.forecastDisclaimer,
+            table: parsed.table,
+          });
+
           endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
         } catch (err) {
           console.error('[FinalResponseStep] 结构化输出失败，降级到渲染器:', err.message);
