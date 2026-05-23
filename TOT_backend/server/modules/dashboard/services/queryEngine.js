@@ -111,10 +111,8 @@ async function fetchTaskContext(taskId, query) {
   const emailIds = [...new Set(queues.map(q => q.email_id))];
 
   let mpsRows = [];
-  if (task && task.task_week) {
-    mpsRows = await mysqlCrud.getMyPalProgressByWeek(task.task_week);
-  } else if (emailIds.length > 0) {
-    mpsRows = await mysqlCrud.getMyPalProgressByEmails(emailIds);
+  if (emailIds.length > 0) {
+    mpsRows = await mysqlCrud.getMyPalProgressByEmails(emailIds, 10000);
   }
 
   const confirmedRows = taskId && emailIds.length > 0
@@ -137,6 +135,88 @@ async function fetchTaskContext(taskId, query) {
  * @returns {Promise<Object>} overview 汇总数据
  */
 async function getOverviewBoardData(query) {
+  const { taskId } = query;
+  const task = taskId ? await mysqlCrud.getTaskById(taskId) : null;
+  if (!task) return emptyOverview();
+
+  // task_week 为 null 时 SQL 子查询无法匹配 MPS，降级
+  if (!task.task_week) {
+    return getOverviewBoardDataFallback(query);
+  }
+
+  let stats;
+  try {
+    stats = await mysqlCrud.getTaskOverviewStats(taskId, task.task_week);
+  } catch (err) {
+    console.warn('[getOverviewBoardData] SQL stats failed, fallback:', err.message);
+    return getOverviewBoardDataFallback(query);
+  }
+
+  if (!stats || stats.total_assignments === 0) return emptyOverview();
+
+  const total = stats.total_assignments;
+  const dueMs = task.due_date ? new Date(task.due_date).getTime() : 0;
+  const now = Date.now();
+
+  const completedCnt = stats.completed_count || 0;
+  const inProgCnt    = stats.in_progress_count || 0;
+  const pendingCnt   = total - completedCnt - inProgCnt;
+  const overdueCnt   = (task.due_date && dueMs < now) ? (total - completedCnt) : 0;
+
+  const p0N = stats.p0_count || 0;
+  const p1N = stats.p1_count || 0;
+  const p2N = stats.p2_count || 0;
+  const p3N = stats.p3_count || 0;
+  const newN = total - (p0N + p1N + p2N + p3N);
+
+  const completionRate    = total > 0 ? parseFloat(((100 * completedCnt) / total).toFixed(2)) : 0;
+  const participationRate = total > 0 ? parseFloat(((100 * (inProgCnt + completedCnt)) / total).toFixed(2)) : 0;
+  const remainingSeconds  = task.due_date ? Math.max(0, Math.floor((dueMs - now) / 1000)) : 0;
+  const warningCount      = { new: newN, p3: p3N, p2: p2N, p1: p1N, p0: p0N };
+
+  return {
+    totalAssignments: total,
+    pushUserCount: total,
+    employeeReadCount: total,
+    managerReadCount: total,
+    totalReadCount: total,
+
+    completionRate,
+    completedCount: completedCnt,
+    onTimeCompletionRate: 0,
+    avgCompletionTimeHours: 0,
+
+    taskReachRate: participationRate,
+    taskReadRate: participationRate,
+    nudgeConversionRate: completionRate,
+
+    crisisNewRate: total > 0 ? parseFloat(((100 * newN) / total).toFixed(2)) : 0,
+    crisisP3Rate: total > 0 ? parseFloat(((100 * p3N) / total).toFixed(2)) : 0,
+    crisisP2Rate: total > 0 ? parseFloat(((100 * p2N) / total).toFixed(2)) : 0,
+    crisisP1Rate: total > 0 ? parseFloat(((100 * p1N) / total).toFixed(2)) : 0,
+    crisisP0Rate: total > 0 ? parseFloat(((100 * p0N) / total).toFixed(2)) : 0,
+
+    inProgressCount: inProgCnt,
+    pendingCount: pendingCnt,
+    overdueCount: overdueCnt,
+    warningCount,
+
+    confirmedCount: 0,
+    confirmationRate: 0,
+    nudgeSeverityCounts: warningCount,
+
+    completionRateDelta: 0,
+    remainingSeconds,
+
+    platform: null,
+    updatedAt: formatNowSqliteLocal(),
+    learningCount: inProgCnt,
+    readCount: total,
+    readRate: participationRate,
+  };
+}
+
+async function getOverviewBoardDataFallback(query) {
   const { taskId } = query;
   const { task, queues, mpsRows, confirmedSet, reminderMap } = await fetchTaskContext(taskId, query);
 
@@ -945,6 +1025,7 @@ async function getStoreRankBoardData(query) {
 module.exports = {
   // Board-data functions
   getOverviewBoardData,
+  getOverviewBoardDataFallback,
   getFunnelData,
   getFunnelBoardData,
   getAlertFunnelData,
