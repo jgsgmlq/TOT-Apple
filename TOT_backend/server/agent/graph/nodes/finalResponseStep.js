@@ -7,6 +7,7 @@ const promptRegistry = require('../../../prompts/registry');
 const { extractPlottableData } = require('../shared/extractPlottableData');
 const { BlocksOutput } = require('../shared/blocksSchema');
 const { fcModel, getStructuredModel } = require('../llm');
+const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
 const trace = require('../shared/runTrace');
 
 const MAX_REPAIR_ATTEMPTS = 2;
@@ -176,7 +177,6 @@ const finalResponseStep = async (state, config) => {
         ? client.generation({ traceId, name: 'FinalResponse_ChatReply', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { intent: 'chat_only' } })
         : NOOP_TRACE.generation({ name: 'FinalResponse_ChatReply' });
 
-      const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
       const conversationBlock = renderConversation(state.conversation || []);
       const longTermBlock = renderLongTerm(state.long_term_memories || '');
 
