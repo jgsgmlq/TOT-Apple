@@ -2,7 +2,7 @@
 
 const { z } = require("zod");
 const { SystemMessage, HumanMessage } = require("@langchain/core/messages");
-const { renderMemoryBlock } = require("../shared/memoryBlock");
+const { renderConversation, renderLongTerm } = require("../shared/memoryBlock");
 const { getClient, endGeneration, endSpan, maskPII, preview, promptHash, NOOP_TRACE } = require("../../../utils/tracer");
 const { startNodeSpan } = require("../shared/spanHelper");
 const promptRegistry = require("../../../prompts/registry");
@@ -36,12 +36,21 @@ function correctMode(parsed) {
   return parsed.mode;
 }
 
+const trace = require("../shared/runTrace");
+
 async function safetyGateway(state, config) {
+  const emitter = config?.configurable?.sseEmitter;
+  trace.nodeEnter(emitter, state, 'SafetyGateway');
   const span = startNodeSpan(state, 'SafetyGateway', { userMessage: (state.userMessage || '').slice(0, 80) });
   console.log(`[SafetyGateway] 分析用户消息: ${(state.userMessage || '').slice(0, 80)}`);
 
-  const memoryBlock = renderMemoryBlock(state.memory_snippets);
   const schemaDefinition = promptRegistry.get("safety_gateway");
+  const conversationBlock = renderConversation(state.conversation || []);
+  const longTermBlock = renderLongTerm(state.long_term_memories || '');
+
+  // 上下文块用 HumanMessage 包装，与 SystemMessage 指令隔离
+  const contextParts = [conversationBlock, longTermBlock].filter(Boolean);
+  const contextBlock = contextParts.length > 0 ? '[系统上下文]\n' + contextParts.join('\n\n') : '';
 
   const traceId = config?.configurable?.traceId;
   const client = getClient();
@@ -49,18 +58,11 @@ async function safetyGateway(state, config) {
     ? client.generation({ traceId, name: "SafetyGateway", model: "deepseek-chat", input: maskPII(state.userMessage), metadata: { promptVersion: promptRegistry.version("safety_gateway"), promptHash: promptHash(schemaDefinition) } })
     : NOOP_TRACE.generation({ name: "SafetyGateway" });
 
-  const recentHistory = (state.messages || []).filter(m => {
-    const t = m._getType ? m._getType() : "";
-    return t === "human" || t === "ai";
-  }).slice(-4);
-  const historyCtx = recentHistory.length > 1
-    ? `\n\nRECENT CONVERSATION:\n${recentHistory.map(m => `${m._getType() === "human" ? "User" : "Assistant"}: ${typeof m.content === "string" ? m.content.slice(0, 300) : ""}`).join("\n")}`
-    : "";
-
-  const messages = [
-    new SystemMessage(schemaDefinition + historyCtx),
-    new HumanMessage(state.userMessage)
-  ];
+  const messages = [new SystemMessage(schemaDefinition)];
+  if (contextBlock) {
+    messages.push(new HumanMessage(contextBlock));
+  }
+  messages.push(new HumanMessage(state.userMessage));
 
   try {
     const structuredModel = routerModel.withStructuredOutput(SafetyGatewayOutput, {
@@ -93,6 +95,13 @@ async function safetyGateway(state, config) {
       } : null,
     };
     endSpan(span, { output: `mode=${mode}`, metadata: { mode, ambiguity: ambiguity?.type || null } });
+    trace.decision(emitter, state, `mode=${mode}`, parsed.reason || '', {
+      node: 'SafetyGateway',
+      task_ref: parsed.extracted.task_ref,
+      org_ref: parsed.extracted.org_ref,
+      ambiguity: ambiguity?.type || null,
+    });
+    trace.nodeExit(emitter, state, 'SafetyGateway', { mode, ambiguity: ambiguity?.type || null });
     return result;
   } catch (err) {
     console.error(`[SafetyGateway] 失败，降级为 tool:`, err.message);
@@ -103,6 +112,7 @@ async function safetyGateway(state, config) {
       model: "deepseek-chat",
     });
     endSpan(span, { output: `fallback:tool`, level: "WARNING", metadata: { error: err.message } });
+    trace.nodeExit(emitter, state, 'SafetyGateway', { mode: 'tool', fallback: true, error: err.message });
     return {
       mode: "tool",
       extracted_task_ref: null,
@@ -114,4 +124,4 @@ async function safetyGateway(state, config) {
   }
 }
 
-module.exports = { safetyGateway };
+module.exports = { safetyGateway, correctMode };

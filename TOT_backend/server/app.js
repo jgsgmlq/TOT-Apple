@@ -75,7 +75,6 @@ app.use('/api/v1/events',      require('./modules/task/routes/reminderRoutes'));
 app.use('/api/v1/nudges',      require('./modules/task/routes/reminderRoutes'));
 app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/dashboardRoutes'));
 app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/insightRoutes'));
-app.use('/api/v1/dashboard',   require('./modules/dashboard/routes/agentRoutes'));
 app.use('/api/v1/mypal',       require('./modules/mypal/routes/mypalRoutes'));
 app.use('/api/v1/open-sync',   require('./modules/task/routes/openSyncRoutes'));
 app.use('/api/v1/chat',        require('./routes/chat'));
@@ -89,12 +88,21 @@ app.use('/api/v1/admin/learners', require('./modules/admin/routes/learnerRoutes'
 app.use('/api/v1/data-import',    require('./modules/admin/routes/resellerhqRoutes'));
 app.use('/api/v1/data-import/campaign', require('./modules/admin/routes/campaignRoutes'));
 
-if (process.env.MYPAL_MOCK === '1') {
-  app.use('/api/v1/mypal/mock', require('./modules/mypal/routes/mypalMockRoutes'));
-}
-
 // ─── 统一错误处理（最后挂载）────────────────────────────────────────────────────
 app.use(errorHandler);
+
+// ─── 启动记忆 Worker ───
+const { startMemoryWorker } = require('./agent/queue/bullMqWorker');
+
+startMemoryWorker().then(worker => {
+  if (worker) {
+    console.log('[app] Memory Worker 已启动');
+  } else {
+    console.warn('[app] Memory Worker 未启动（Redis 不可用，将降级为 no-op）');
+  }
+}).catch(err => {
+  console.warn('[app] Memory Worker 启动失败（非致命）:', err.message);
+});
 
 // ─── HTTP + WebSocket 服务器 ───────────────────────────────────────────────────
 const server = http.createServer(app);
@@ -120,7 +128,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 const { startAutoNudgeScheduler } = require('./jobs/autoNudgeScheduler');
-const { startDashboardAgentScheduler } = require('./jobs/dashboardAgentScheduler');
+const { MysqlSaver } = require('./agent/graph/checkpoint/mysqlSaver');
 
 function firstLanIPv4() {
   const nets = os.networkInterfaces();
@@ -149,10 +157,11 @@ function printStartupBanner(port) {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   printStartupBanner(PORT);
+  // Agent graph checkpoint 表 DDL，应用启动时确保一次
+  MysqlSaver.ensureTables().catch(err => console.error('[startup] checkpoint DDL failed:', err.message));
   startAutoNudgeScheduler();
-  startDashboardAgentScheduler();
 });
 
 // ─── Graceful shutdown: Langfuse flush ──────────────────────────────────────

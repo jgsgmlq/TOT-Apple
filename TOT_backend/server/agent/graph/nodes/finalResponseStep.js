@@ -2,143 +2,23 @@
 
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
 const { startNodeSpan } = require('../shared/spanHelper');
-const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
-const { renderToolResultsMarkdown } = require('../renderers');
 const { extractPlottableData } = require('../shared/extractPlottableData');
-const { fcModel } = require('../llm');
-const { ChatOpenAI } = require("@langchain/openai");
+const { BlocksOutput } = require('../shared/blocksSchema');
+const { fcModel, getStructuredModel } = require('../llm');
+const trace = require('../shared/runTrace');
 
-// 结构化输出用 streaming 模型 (json_mode)
-const getStructuredModel = () => {
-  const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-  const baseURL = process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1";
-  return new ChatOpenAI({
-    modelName: "deepseek-chat",
-    apiKey,
-    configuration: { baseURL },
-    temperature: 0.1,
-    maxTokens: 2048,
-    streaming: true,
-    modelKwargs: { response_format: { type: "json_object" } },
-  });
-};
+const MAX_REPAIR_ATTEMPTS = 2;
 
-const { z } = require("zod");
-
-// ─── 模板体系 ──────────────────────────────────────────────────────────
-
-const keyNumberItem = z.object({
-  label: z.string(),
-  value: z.union([z.string(), z.number()]),
-  unit: z.string().optional(),
-});
-
-const attentionItem = z.object({
-  level: z.enum(["warning", "info", "positive"]),
-  text: z.string(),
-}).catchall(z.any());
-
-// LLM 可能直接传字符串 "rank_xxx" 或对象 {datasetId: "rank_xxx"}
-const chartRef = z.preprocess((v) => {
-  if (typeof v === 'string') return { datasetId: v };
-  return v;
-}, z.object({
-  datasetId: z.string(),
-  chartType: z.enum(["bar","line","pie","scatter","funnel","radar"]).optional().default('bar'),
-  title: z.string().optional(),
-}));
-
-const tableRef = z.preprocess((v) => {
-  if (typeof v === 'string') return { datasetId: v };
-  return v;
-}, z.object({
-  datasetId: z.string(),
-  title: z.string().optional(),
-}));
-
-const statsProv = z.object({
-  "统计口径": z.string().optional().default(''),
-  "数据截止": z.string().optional().default(''),
-}).passthrough().optional().default({});
-
-const TemplateSchemas = {
-  simple_metric: z.object({
-    template: z.literal("simple_metric"),
-    overview: z.string(),
-    keyNumbers: z.array(keyNumberItem),
-    selectedCharts: z.array(chartRef).optional().default([]),
-    selectedTables: z.array(tableRef).optional().default([]),
-    statisticsProvenance: statsProv,
-  }).passthrough(),
-
-  ranking: z.object({
-    template: z.literal("ranking"),
-    overview: z.string(),
-    keyNumbers: z.array(keyNumberItem),
-    attentionPoints: z.array(attentionItem).optional().default([]),
-    followUpSuggestions: z.array(z.string()).optional().default([]),
-    selectedCharts: z.array(chartRef).optional().default([]),
-    selectedTables: z.array(tableRef).optional().default([]),
-    statisticsProvenance: statsProv,
-    forecastDisclaimer: z.string().nullable().default(null),
-  }).passthrough(),
-
-  overview: z.object({
-    template: z.literal("overview"),
-    overview: z.string(),
-    keyNumbers: z.array(keyNumberItem),
-    selectedCharts: z.array(chartRef).optional().default([]),
-    selectedTables: z.array(tableRef).optional().default([]),
-    statisticsProvenance: statsProv,
-    forecastDisclaimer: z.string().nullable().default(null),
-  }).passthrough(),
-
-  warning: z.object({
-    template: z.literal("warning"),
-    overview: z.string(),
-    attentionPoints: z.array(attentionItem),
-    followUpSuggestions: z.array(z.string()).optional().default([]),
-    selectedTables: z.array(tableRef).optional().default([]),
-    selectedCharts: z.array(chartRef).optional().default([]),
-    statisticsProvenance: statsProv,
-  }).passthrough(),
-
-  diagnosis: z.object({
-    template: z.literal("diagnosis"),
-    overview: z.string(),
-    keyNumbers: z.array(keyNumberItem).optional().default([]),
-    attentionPoints: z.array(attentionItem),
-    followUpSuggestions: z.array(z.string()).optional().default([]),
-    selectedCharts: z.array(chartRef).optional().default([]),
-    selectedTables: z.array(tableRef).optional().default([]),
-    statisticsProvenance: statsProv,
-  }).passthrough(),
-
-  general: z.object({
-    template: z.literal("general"),
-    markdown: z.string(),
-    statisticsProvenance: statsProv,
-  }).passthrough(),
-};
-
-const TemplateOutput = z.discriminatedUnion("template", [
-  TemplateSchemas.simple_metric,
-  TemplateSchemas.ranking,
-  TemplateSchemas.overview,
-  TemplateSchemas.warning,
-  TemplateSchemas.diagnosis,
-  TemplateSchemas.general,
-]);
+// ─── 表格构建 ──────────────────────────────────────────────────────────────
 
 function buildTableFromRows(rawRows) {
   if (!rawRows || rawRows.length === 0) return { columns: [], rows: [] };
 
-  // 从第一行自动检测列名
   const sample = rawRows[0];
+  if (!sample || typeof sample !== 'object') return { columns: [], rows: [] };
 
-  // 展开 dimensions 对象为独立列（如 { store: "R123" } → 门店列）
   let dimKeys = [];
   if (sample.dimensions && typeof sample.dimensions === 'object') {
     dimKeys = Object.keys(sample.dimensions);
@@ -160,20 +40,19 @@ function buildTableFromRows(rawRows) {
     in_progress_count: '进行中', pending_count: '待开始',
     stage: '阶段', label: '阶段', name: '名称', count: '人数',
     sharePercent: '占比%', dropPercent: '流失率%', dropWidth: '流失宽度',
+    user_id: '用户ID', email: '邮箱', name: '姓名', completion_status: '状态',
+    dealer: '经销商', l3: '大区', l4: '业态',
+    alert_level: '预警级别', alert_result: '催办结果', alerted_at: '催办时间',
   };
 
   function formatCellValue(k, v) {
     if (v === null || v === undefined) return '';
     if (typeof v === 'number') return v;
     const s = String(v);
-    // ISO 日期格式化：2026-05-19T16:00:00.000Z → 2026-05-19
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) {
-      return s.slice(0, 10);
-    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) return s.slice(0, 10);
     return s;
   }
 
-  // 用映射名，保留 keys 对应关系
   const colNames = colKeys.map(k => COL_NAME_MAP[k] || k);
   const rows = rawRows.slice(0, 20).map(row => {
     const dims = row.dimensions && typeof row.dimensions === 'object' ? row.dimensions : {};
@@ -185,6 +64,8 @@ function buildTableFromRows(rawRows) {
 
   return { columns: colNames, rows };
 }
+
+// ─── 工具数据准备 ──────────────────────────────────────────────────────────
 
 function prepareToolData(toolResults) {
   const items = [];
@@ -206,7 +87,6 @@ function prepareToolData(toolResults) {
 const sanitizeUserFacingMarkdown = (content) => {
   const text = typeof content === 'string' ? content : '';
   if (!text) return text;
-
   if (text.startsWith('SYSTEM_ERROR:') || text.includes('SYSTEM_ERROR')) {
     const reason = text.replace(/^SYSTEM_ERROR:\s*/i, '').replace(/工具参数校验失败[。.]?\s*/g, '');
     if (reason.includes('区域范围限定') || reason.includes('regions') || reason.includes('rtm')) {
@@ -217,29 +97,78 @@ const sanitizeUserFacingMarkdown = (content) => {
     }
     return '抱歉，查询过程中遇到了问题。请尝试缩小查询范围，或换个方式重新描述您的问题。';
   }
-
   return text;
 };
 
-const getFcModel = () => fcModel;
+// ─── Blocks 解析与组装 ─────────────────────────────────────────────────────
+
+function resolveChart(block, datasetMap) {
+  const ds = datasetMap.get(block.datasetId);
+  if (!ds) return null;
+  return {
+    type: block.chartType || 'bar',
+    title: block.title || ds.title,
+    xAxis: ds.xAxis,
+    series: ds.series,
+  };
+}
+
+function resolveTable(block, datasetMap) {
+  const ds = datasetMap.get(block.datasetId);
+  if (!ds) return null;
+  const { columns, rows } = buildTableFromRows(ds.rawRows || []);
+  if (columns.length === 0 && rows.length === 0) return null;
+  return { title: block.title || ds.title, columns, rows };
+}
+
+function extractContentText(blocks) {
+  const parts = [];
+  for (const block of blocks) {
+    if (block.type === 'markdown') {
+      parts.push(block.content);
+    } else if (block.type === 'keyNumbers') {
+      for (const item of block.items) {
+        parts.push(`${item.label}: ${item.value}${item.unit || ''}`);
+      }
+    } else if (block.type === 'insights') {
+      for (const item of block.items) {
+        parts.push(`[${item.level}] ${item.text}`);
+      }
+    }
+  }
+  return parts.join('\n');
+}
+
+function getLatestToolExecuteAt(toolResults) {
+  let latest = null;
+  for (const [, entry] of Object.entries(toolResults || {})) {
+    const ts = entry?.executedAt;
+    if (ts && (!latest || ts > latest)) latest = ts;
+  }
+  return latest;
+}
+
+// ─── 主节点 ────────────────────────────────────────────────────────────────
 
 const finalResponseStep = async (state, config) => {
+  const emitter = config?.configurable?.sseEmitter;
   const span = startNodeSpan(state, 'FinalResponseStep', { mode: state.mode, intent: state.intent });
-  let response = "";
+  trace.nodeEnter(emitter, state, 'FinalResponseStep', { mode: state.mode, hasToolResults: Object.keys(state.toolResults || {}).length > 0 });
+
+  let response = '';
   const hasToolResults = Object.keys(state.toolResults || {}).length > 0;
-  const fcDirectReply = !hasToolResults && state.mode === 'tool' ? (state.reply_markdown || state.finalResponse || '') : '';
 
   if (!hasToolResults && state.mode !== 'tool') {
     response = state.reply_markdown || state.finalResponse || '';
   }
 
   if (!response) {
-    if (state.mode === "deny") {
+    if (state.mode === 'deny') {
       response = "### ⚠️ 请求被拒绝\n\n抱歉，Executive Chat 目前仅支持**只读查询**。我无法帮您执行修改数据、发送催办通知或直接处理业务流等操作。\n\n💡 *建议您可以在系统中手动处理，或询问我当前的数据完成情况。*";
-    } else if (state.mode === "chat" || state.mode === "chat_only" || state.intent === "chat_only") {
-      console.log(`[FinalResponseStep] 检测到纯聊天意图，调用大模型进行回复...`);
-      const emitter = config?.configurable?.sseEmitter;
-      const llm = getFcModel();
+    } else if (state.mode === 'chat' || state.mode === 'chat_only' || state.intent === 'chat_only') {
+      console.log('[FinalResponseStep] 检测到纯聊天意图，调用大模型进行回复...');
+      const chatEmitter = config?.configurable?.sseEmitter;
+      const llm = fcModel;
 
       const traceId = config?.configurable?.traceId;
       const client = getClient();
@@ -247,12 +176,13 @@ const finalResponseStep = async (state, config) => {
         ? client.generation({ traceId, name: 'FinalResponse_ChatReply', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { intent: 'chat_only' } })
         : NOOP_TRACE.generation({ name: 'FinalResponse_ChatReply' });
 
-      const chatContext = (state.messages || []).filter(m => {
-        const t = m._getType ? m._getType() : '';
-        return t === 'human' || t === 'ai';
-      }).slice(-7, -1);
-      const contextBlock = chatContext.length > 0
-        ? `\n\nRecent conversation context:\n${chatContext.map(m => `${m._getType() === 'human' ? 'User' : 'Assistant'}: ${typeof m.content === 'string' ? m.content.slice(0, 300) : ''}`).join('\n')}`
+      const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
+      const conversationBlock = renderConversation(state.conversation || []);
+      const longTermBlock = renderLongTerm(state.long_term_memories || '');
+
+      const contextParts = [conversationBlock, longTermBlock].filter(Boolean);
+      const contextBlock = contextParts.length > 0
+        ? '\n\n' + contextParts.join('\n\n')
         : '';
 
       const chatPrompt = promptRegistry.get('chat_reply') + contextBlock;
@@ -262,14 +192,13 @@ const finalResponseStep = async (state, config) => {
           new SystemMessage(chatPrompt),
           new HumanMessage(state.userMessage)
         ]);
-
-        response = "";
+        response = '';
         for await (const chunk of stream) {
           const deltaText = typeof chunk.content === 'string' ? chunk.content : '';
           if (deltaText) {
             response += deltaText;
-            if (emitter && typeof emitter.handleLLMNewToken === 'function') {
-              emitter.handleLLMNewToken(deltaText, { isReasoning: false });
+            if (chatEmitter && typeof chatEmitter.handleLLMNewToken === 'function') {
+              chatEmitter.handleLLMNewToken(deltaText, { isReasoning: false });
             }
           }
         }
@@ -277,51 +206,55 @@ const finalResponseStep = async (state, config) => {
       } catch (err) {
         console.error('[FinalResponseStep] 闲聊回复生成失败:', err);
         endGeneration(chatGen, { output: maskPII(preview(err.message)), level: 'ERROR', statusMessage: err.message, model: 'deepseek-chat', metadata: { intent: 'chat_only' } });
-        response = "你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。";
+        response = '你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。';
       }
     } else {
-      // tool mode: FC loop 结束，有工具查询结果。调用 LLM 生成结构化输出
-      const toolResultKeys = Object.keys(state.toolResults || {});
-      if (toolResultKeys.length > 0) {
-        console.log('[FinalResponseStep] 工具查询完成，调用 FinalResponse LLM (structured)...');
-        const emitter = config?.configurable?.sseEmitter;
-        const llm = getStructuredModel();
-        const traceId = config?.configurable?.traceId;
-        const client = getClient();
-        const gen = client && traceId
-          ? client.generation({ traceId, name: 'FinalResponse_Structured', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
-          : NOOP_TRACE.generation({ name: 'FinalResponse_Structured' });
+      // ── tool mode: BlocksOutput + repair loop ──────────────────────────
+      const llm = getStructuredModel();
+      const traceId = config?.configurable?.traceId;
+      const client = getClient();
+      const gen = client && traceId
+        ? client.generation({ traceId, name: 'FinalResponse_Structured', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
+        : NOOP_TRACE.generation({ name: 'FinalResponse_Structured' });
 
-        const toolItems = prepareToolData(state.toolResults);
-        const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
+      const toolItems = prepareToolData(state.toolResults);
+      const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
 
-        // 代码提取所有可画图的数据集，LLM 只选不编
-        const plottableDatasets = extractPlottableData(state.toolResults || {});
-        let datasetsBlock = '';
-        if (plottableDatasets.length > 0) {
-          const summary = plottableDatasets.map(ds => ({
-            id: ds.id,
-            kind: ds.kind,
-            title: ds.title,
-            suggest: ds.preferChartType,  // 建议的 chartType，可覆盖
-            labelCount: ds.xAxis?.length || 0,
-          }));
-          datasetsBlock = '\n\nAVAILABLE DATASETS (通过 selectedCharts/selectedTables 的 datasetId 引用，do not fabricate data):\n' + JSON.stringify(summary, null, 2);
-        }
+      const plottableDatasets = extractPlottableData(state.toolResults || {});
+      let datasetsBlock = '';
+      if (plottableDatasets.length > 0) {
+        const summary = plottableDatasets.map(ds => ({
+          id: ds.id,
+          title: ds.title,
+          labelCount: ds.xAxis?.length || 0,
+          sampleRows: ds.sampleRows || [],
+        }));
+        datasetsBlock = '\n\nAVAILABLE DATASETS (通过 chart/table block 的 datasetId 引用，不要编造):\n' + JSON.stringify(summary, null, 2);
+      }
 
-        const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-        const nowBlock = `\n\nCONTEXT:\n- 当前时间: ${dataTimestamp}\n- 请用此时间填充 statisticsProvenance."数据截止"字段`;
+      const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      const intent = state.intent || '';
+      const nowBlock = '\n\nCONTEXT:\n- 当前时间: ' + dataTimestamp + '\n- 用户意图倾向: ' + intent + '（仅供理解上下文，以实际工具查询结果为准）';
 
-        const prompt = promptRegistry.get('final_response');
-        const fullPrompt = prompt + `\n\n用户问题: ${state.userMessage}\n\n工具查询结果:\n${resultsText}${datasetsBlock}${nowBlock}`;
+      const prompt = promptRegistry.get('final_response');
+      const fullPrompt = prompt
+        + '\n\n' + renderConversation(state.conversation || [])
+        + '\n\n' + renderLongTerm(state.long_term_memories || '')
+        + '\n\n用户问题: ' + state.userMessage
+        + '\n\n工具查询结果:\n' + resultsText + datasetsBlock + nowBlock;
 
+      let parsed = null;
+      let lastError = '';
+
+      for (let attempt = 0; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
         try {
-          // 静默生成结构化 JSON，不在流中逐字推送
-          // 解析后通过 replyContent 在 done 事件中传给前端一次性渲染
           let rawText = '';
+          const repairSuffix = attempt > 0
+            ? '\n\n上次输出校验失败，错误如下:\n' + lastError + '\n请修正后重新输出。'
+            : '';
           const stream = await llm.stream([
-            new SystemMessage(fullPrompt),
-            new HumanMessage('输出严格的 JSON 对象。')
+            new SystemMessage(fullPrompt + repairSuffix),
+            new HumanMessage('输出严格的 JSON 对象，包含 "blocks" 数组。')
           ], { signal: config?.signal });
           for await (const chunk of stream) {
             const delta = typeof chunk.content === 'string' ? chunk.content : '';
@@ -332,121 +265,102 @@ const finalResponseStep = async (state, config) => {
             try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
           }
 
-          // 预处理：修复常见 LLM 输出偏差
-          if (rawJson.keyNumbers) {
-            rawJson.keyNumbers.forEach(k => { if (k.unit === null || k.unit === '') delete k.unit; });
+          parsed = BlocksOutput.safeParse(rawJson);
+          console.log('[FinalResponseStep] attempt=' + attempt + ' success=' + parsed.success + ' blocks=' + (parsed.success ? parsed.data.blocks.length : 0) + ' rawLen=' + rawText.length);
+          if (!parsed.success) {
+            console.log('[FinalResponseStep] Zod error:', JSON.stringify(parsed.error?.issues || parsed.error?.message).substring(0, 300));
+            console.log('[FinalResponseStep] Raw (first 500):', rawText.substring(0, 500));
           }
-          if (rawJson.attentionPoints) {
-            rawJson.attentionPoints = rawJson.attentionPoints.map(p => {
-              if (typeof p === 'string') return { level: 'info', text: p };
-              const text = p.text || p.message || p.content || '';
-              return { level: p.level || 'info', text };
-            });
+          if (parsed.success && parsed.data.blocks.length > 0) {
+            const datasetIds = new Set(plottableDatasets.map(d => d.id));
+            const orphanIds = parsed.data.blocks
+              .filter(b => (b.type === 'chart' || b.type === 'table') && !datasetIds.has(b.datasetId))
+              .map(b => b.datasetId);
+            if (orphanIds.length > 0) {
+              lastError = '以下 datasetId 不在 AVAILABLE DATASETS 中: ' + orphanIds.join(', ') + '。可用的: ' + [...datasetIds].join(', ');
+              continue;
+            }
+            break;
+          } else {
+            lastError = parsed.success
+              ? 'blocks 数组为空'
+              : JSON.stringify(parsed.error.issues || parsed.error.message);
           }
-          if (typeof rawJson.statisticsProvenance === 'string') {
-            rawJson.statisticsProvenance = { "统计口径": rawJson.statisticsProvenance, "数据截止": "" };
-          }
-
-          const parsed = TemplateOutput.parse(rawJson);
-
-          // 代码解析 LLM 选中的图表和表格：按 datasetId 匹配实际数据
-          const datasetMap = new Map();
-          for (const ds of plottableDatasets) datasetMap.set(ds.id, ds);
-
-          const sc = parsed.template !== 'general' ? (parsed.selectedCharts || []) : [];
-          const st = parsed.template !== 'general' ? (parsed.selectedTables || []) : [];
-
-          const resolvedCharts = sc
-            .filter(c => datasetMap.has(c.datasetId))
-            .map(c => {
-              const ds = datasetMap.get(c.datasetId);
-              return { type: c.chartType, title: c.title || ds.title, xAxis: ds.xAxis, series: ds.series };
-            });
-
-          const resolvedTables = st
-            .filter(t => datasetMap.has(t.datasetId))
-            .map(t => {
-              const ds = datasetMap.get(t.datasetId);
-              const { columns, rows } = buildTableFromRows(ds.rawRows || []);
-              return { title: t.title || ds.title, columns, rows };
-            });
-
-          // 最终输出：template + LLM 文字 + 代码生成的 chart/table
-          response = JSON.stringify({
-            template: parsed.template,
-            ...(parsed.template === 'general'
-              ? { markdown: parsed.markdown }
-              : {
-                  overview: parsed.overview,
-                  keyNumbers: parsed.keyNumbers,
-                  attentionPoints: 'attentionPoints' in parsed ? parsed.attentionPoints : [],
-                  followUpSuggestions: 'followUpSuggestions' in parsed ? parsed.followUpSuggestions : [],
-                  visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
-                  tables: resolvedTables.length > 0 ? resolvedTables : null,
-                  forecastDisclaimer: 'forecastDisclaimer' in parsed ? parsed.forecastDisclaimer : null,
-                }),
-            statisticsProvenance: parsed.statisticsProvenance,
-          });
-
-          endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
         } catch (err) {
-          console.error('[FinalResponseStep] 结构化输出失败，降级到渲染器:', err.message);
-          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'WARNING', statusMessage: err.message, model: 'deepseek-chat' });
-          response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || '抱歉，查询过程中遇到了问题。';
+          lastError = err.message;
         }
-      } else if (fcDirectReply) {
-        // 无工具调用时 FC LLM 直接回复了 Markdown，用结构化 LLM 重组为模板 JSON
-        console.log('[FinalResponseStep] FC 直接回复，重组为模板 JSON...');
-        const llm = getStructuredModel();
-        const traceId = config?.configurable?.traceId;
-        const client = getClient();
-        const gen = client && traceId
-          ? client.generation({ traceId, name: 'FinalResponse_Reformat', model: 'deepseek-chat', input: maskPII(fcDirectReply.slice(0, 200)), metadata: { mode: 'tool_no_call' } })
-          : NOOP_TRACE.generation({ name: 'FinalResponse_Reformat' });
+      }
 
-        const reformatPrompt = promptRegistry.get('final_response') +
-          `\n\n用户问题: ${state.userMessage}\n\n以下是一段 Markdown 分析文本，请将其转换为结构化 JSON（先选 template 再填字段）:\n\n${fcDirectReply.slice(0, 3000)}`;
+      if (parsed && parsed.success && parsed.data.blocks.length > 0) {
+        const datasetMap = new Map();
+        for (const ds of plottableDatasets) datasetMap.set(ds.id, ds);
 
-        try {
-          let rawText = '';
-          const stream = await llm.stream([
-            new SystemMessage(reformatPrompt),
-            new HumanMessage('输出严格的 JSON 对象。')
-          ], { signal: config?.signal });
-          for await (const chunk of stream) {
-            const delta = typeof chunk.content === 'string' ? chunk.content : '';
-            if (delta) rawText += delta;
+        const resolvedCharts = [];
+        const resolvedTables = [];
+        const cleanBlocks = [];
+
+        for (const block of parsed.data.blocks) {
+          if (block.type === 'chart') {
+            const resolved = resolveChart(block, datasetMap);
+            if (resolved) { resolvedCharts.push(resolved); cleanBlocks.push(block); }
+          } else if (block.type === 'table') {
+            const resolved = resolveTable(block, datasetMap);
+            if (resolved) { resolvedTables.push(resolved); cleanBlocks.push(block); }
+          } else {
+            cleanBlocks.push(block);
           }
-          let rawJson;
-          try { rawJson = JSON.parse(rawText); } catch (_) {
-            try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
-          }
-          const parsed = TemplateOutput.parse(rawJson);
-          response = JSON.stringify({
-            template: parsed.template,
-            ...(parsed.template === 'general'
-              ? { markdown: parsed.markdown }
-              : {
-                  overview: parsed.overview,
-                  keyNumbers: parsed.keyNumbers,
-                  attentionPoints: 'attentionPoints' in parsed ? parsed.attentionPoints : [],
-                  followUpSuggestions: 'followUpSuggestions' in parsed ? parsed.followUpSuggestions : [],
-                }),
-            statisticsProvenance: parsed.statisticsProvenance,
-          });
-          endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
-        } catch (err) {
-          console.error('[FinalResponseStep] 重组失败，降级为原始 Markdown:', err.message);
-          endGeneration(gen, { output: maskPII(preview(err.message)), level: 'WARNING', statusMessage: err.message, model: 'deepseek-chat' });
-          response = fcDirectReply;
         }
+
+        const provenance = parsed.data._provenance || {};
+        const toolCutoff = getLatestToolExecuteAt(state.toolResults);
+        const dataCutoff = toolCutoff
+          ? new Date(toolCutoff).toISOString().replace('T', ' ').slice(0, 19)
+          : dataTimestamp;
+        const _provenance = {
+          scope: provenance['统计口径'] || '',
+          cutoff: dataCutoff,
+        };
+
+        const _datasets = {};
+        for (const ds of plottableDatasets) {
+          _datasets[ds.id] = {
+            chart: { type: 'bar', title: ds.title, xAxis: ds.xAxis, series: ds.series },
+            table: { columns: [], rows: [] },
+          };
+          const t = buildTableFromRows(ds.rawRows || []);
+          if (t.columns.length > 0) _datasets[ds.id].table = t;
+        }
+
+        const contentText = extractContentText(cleanBlocks);
+
+        response = JSON.stringify({
+          blocks: cleanBlocks,
+          visualizations: resolvedCharts.length > 0 ? resolvedCharts : null,
+          tables: resolvedTables.length > 0 ? resolvedTables : null,
+          _provenance,
+          _datasets,
+          _contentText: contentText,
+        });
+
+        endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
       } else {
-        response = renderToolResultsMarkdown(state.toolResults || {}, state.intent) || "抱歉，我暂时无法回答这个问题，或者执行过程中遇到了错误。请稍后重试或尝试缩小查询范围。";
+        response = '抱歉，查询过程中遇到了问题，请稍后重试或尝试缩小查询范围。';
+        endGeneration(gen, { output: maskPII(preview(response)), level: 'WARNING', statusMessage: lastError, model: 'deepseek-chat' });
       }
     }
   }
 
   response = sanitizeUserFacingMarkdown(response);
+
+  let exitMeta = { bytes: response.length };
+  try {
+    const rj = JSON.parse(response);
+    if (rj.blocks) exitMeta.blocks = rj.blocks.length;
+    if (rj.tables) exitMeta.tables = rj.tables.length;
+    if (rj.visualizations) exitMeta.charts = rj.visualizations.length;
+  } catch (_) { /* plain text */ }
+
+  trace.nodeExit(emitter, state, 'FinalResponseStep', exitMeta);
   endSpan(span, { output: preview(response), metadata: { responseBytes: response.length } });
 
   return {
@@ -456,4 +370,4 @@ const finalResponseStep = async (state, config) => {
   };
 };
 
-module.exports = { finalResponseStep, sanitizeUserFacingMarkdown };
+module.exports = { finalResponseStep, sanitizeUserFacingMarkdown, buildTableFromRows, prepareToolData };

@@ -35,13 +35,32 @@ function finishTrace(trace, opts = {}) {
 // §5.10：Prompt 版本标识，升级 System Prompt 时同步 bump。
 const MEMORY_PROMPT_VERSION = 'executive-chat-memory/v4.0';
 
-const MEMORY_SYSTEM_PROMPT = `你是一个记忆专家。分析对话，提取出用户长期的业务定义或偏好（例如"我不关注华北区数据"、"我偏好柱状图"）。
+const MEMORY_SYSTEM_PROMPT = `你是一个记忆专家。分析对话内容，提取值得长期保留的信息。
 
-要求：
-1. 仅提取事实性偏好。
-2. 如果发现新记忆与已知冲突，标记为 UPDATE；否则标记为 ADD。
-3. 输出格式必须是合法的 JSON 数组，如：[{ "type": "bias", "content": "...", "action": "ADD" }]
-4. 如果没有值得记忆的内容，返回空数组 []。`;
+【三类记忆】
+1. user（用户偏好）：用户的个人习惯和偏好
+   - "偏好柱状图展示数据"
+   - "默认关注华东区域的数据"
+   - "习惯按门店粒度查看结果"
+
+2. feedback（行为反馈）：用户明确表达的对 Agent 行为的纠正或期望
+   - "对比分析时要自动给出排名"
+   - "P3级别的预警不需要提醒我"
+   - "不要每次都列Top5，有时需要全量名单"
+
+3. project（业务上下文）：关于当前培训业务的客观事实
+   - "iPhone 17 新品培训是P0重点任务"
+   - "华东区域包含直营店"
+   - "Q2考核重点是学习率而非完成率"
+
+【规则】
+- 仅提取事实性偏好和明确的业务信息
+- 如果发现新记忆与已知冲突，标记 action=UPDATE，否则 ADD
+- 输出格式必须是合法 JSON 数组，每项包含 type(user/feedback/project)、content、action(ADD/UPDATE)
+- 如没有值得记忆的内容，返回空数组 []
+
+输出示例：
+[{"type":"user","content":"偏好柱状图而非饼图","action":"ADD"},{"type":"project","content":"iPhone 17 培训是P0任务","action":"ADD"}]`;
 
 const MEMORY_PROMPT_HASH = promptHash(MEMORY_SYSTEM_PROMPT);
 
@@ -209,7 +228,24 @@ async function getMemories(userId) {
   `, [userId]);
   if (!rows || !rows.length) return '';
 
-  return rows.map(r => `- [${r.memory_type}] ${r.content}`).join('\n');
+  // 按类型分组
+  const groups = { user: [], feedback: [], project: [], other: [] };
+  for (const r of rows) {
+    const type = r.memory_type || 'other';
+    if (groups[type]) {
+      groups[type].push(r.content);
+    } else {
+      groups.other.push(`[${type}] ${r.content}`);
+    }
+  }
+
+  const parts = [];
+  if (groups.user.length) parts.push('[user]\n' + groups.user.map(s => '- ' + s).join('\n'));
+  if (groups.feedback.length) parts.push('[feedback]\n' + groups.feedback.map(s => '- ' + s).join('\n'));
+  if (groups.project.length) parts.push('[project]\n' + groups.project.map(s => '- ' + s).join('\n'));
+  if (groups.other.length) parts.push('[other]\n' + groups.other.join('\n'));
+
+  return parts.join('\n\n');
 }
 
 /**

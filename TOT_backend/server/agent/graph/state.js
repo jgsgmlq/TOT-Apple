@@ -16,7 +16,7 @@ const { Annotation } = require("@langchain/langgraph");
  *   entities_confidence /
  *   meta_fallback_count
  *
- *   memory_snippets                     ← LoadContext
+ *   conversation / long_term_memories    ← LoadContext
  *
  *   fc_super_step_count                 ← fc_CheckSteps
  *   fc_next_action                      ← 各 FC 节点（每次循环写自己的下一步）
@@ -56,10 +56,11 @@ const ExecChatGraphState = Annotation.Root({
   entities_raw: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
   entities_confidence: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
 
-  // ─── 记忆注入 (LoadContext) ───
-  // 注：之前还有一个 memoryContext（预格式化字符串），已移除；
-  // 使用点（router prompt、fc llm prompt）按需从 memory_snippets 渲染。
-  memory_snippets: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  // ─── 会话级上下文 (LoadContext) ───
+  conversation: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+
+  // ─── 长期记忆 (LoadContext) ───
+  long_term_memories: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
 
   // ─── 工具执行与 FC 循环 ───
   toolResults: Annotation({
@@ -95,6 +96,12 @@ const ExecChatGraphState = Annotation.Root({
   meta_trace_id: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   meta_routing_tier: Annotation({ reducer: (x, y) => y ?? x, default: () => "" }),
   meta_fallback_count: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
+
+  // 运行追踪日志（每个 node 在 enter/exit 时追加，最终写入 content_json._trace）
+  trace_log: Annotation({
+    reducer: (x, y) => (x || []).concat(y || []),
+    default: () => []
+  }),
 
   // ─── SafetyGateway 输出 ───
   extracted_task_ref: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),

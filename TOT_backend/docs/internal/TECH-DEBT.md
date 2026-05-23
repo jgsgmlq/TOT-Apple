@@ -2,6 +2,71 @@
 
 记录已知问题、根因尚未定位但暂时搁置的项。新增条目按时间倒序。
 
+> 配置参数、数据链路图表、设计决策等业务资产见 [`docs/task/`](../task/)：
+> - [config-reference.md](../task/config-reference.md) — 环境变量、模型参数、Prompt 版本
+> - [data-pipeline.md](../task/data-pipeline.md) — Tool↔SQL表映射、JOIN 关系
+> - [open-questions.md](../task/open-questions.md) — 待澄清问题、设计决策
+
+---
+
+## 2026-05-22 — platform_scope 存储格式不一致
+
+**症状**
+- Agent 返回任务列表时，部分任务显示平台（如 "MyPal"），部分显示为空
+- 用户问"有的任务有平台标注，有的没有"
+
+**根因**
+- MySQL `task_publish.platform_scope` 列存储格式不统一：
+  - `'["MyPal"]'` — JSON 数组字符串（可被 `JSON.parse` 正常解析）
+  - `'mypal'` — 纯字符串（`JSON.parse` 抛异常，被 catch 吞掉返回 null）
+- 涉及文件：`tool_list_task_progress.js:47`、`tool_search_task.js:44`
+
+**未修原因**
+- 优先处理更紧急的 issue，暂不修
+- 修复方向：工具层加兼容（解析失败时用原始字符串）+ 数据层统一格式
+
+---
+
+## 2026-05-22 — Agent Code Review 发现并修复的问题汇总
+
+**CRITICAL（已全部修复）**
+
+- ~~**C1 `tool_fetch_incomplete_persons.js` LEFT JOIN 退化**~~：`WHERE mps.passed_time IS NULL` 语义正确，但 LEFT JOIN → INNER JOIN 更清晰。
+- ~~**C2 `tool_query_metric.js` 响应结构 Breaking Change**~~：恢复 `task_name`/`platform`/`priority` 向后兼容字段。
+- ~~**C3 `schema.sql` 表名 `user_memories` vs `user_memory`**~~：对齐到 MySQL 实际表名 `user_memory`。
+- ~~**C4 `active` → `dispatched` 状态映射**~~：确认 `publish_status` CHECK 约束只有 `draft`/`dispatched`，旧代码用 `active` 才是 bug。
+
+**HIGH（已全部修复）**
+
+- ~~**H1 tool SQL 样板重复**~~：提取 `chat_tools/shared/pagination.js` 分页辅助函数。
+- ~~**H2 COL_NAME_MAP 缺少维护说明**~~：添加注释 + `rawRows[0]` 空值防护。
+- ~~**H3 llm.js 配置重复**~~：提取 `baseConfig`，工厂函数改为单例。
+- ~~**H4 MysqlSaver 每次请求执行 DDL**~~：静态 `ensureTables()` 在 app.js 启动时执行一次。
+- ~~**H5 chatCrud.getMessages() 无 SQL LIMIT**~~：SQL 层添加 LIMIT 参数。
+
+**遗留（未修）**
+
+- **`tool_fetch_alert_persons.js` `LOWER(ltr.reminder_level)` 使索引失效**：数据入库时统一小写存储可解，暂不改。
+- **`tool_search_task.js` platform 过滤在 JS 层而非 SQL 层**：分页可能不满，排序被破坏。涉及前后端联动，暂缓。
+- **`MysqlSaver._getRow` 子查询换 JOIN**：`list()` 大量调用时性能差，当前数据量小无影响。
+
+---
+
+## 2026-05-22 — 旧 Dashboard Agent 系统已清理
+
+**删除内容**
+- `agent/dashboard/` — 旧 PoC Agent 框架（641 行）
+- `services/dashboardAgentService.js` + `modules/dashboard/services/dashboardAgentService.js` — 重复服务
+- `modules/dashboard/services/analyzers/` + `services/dashboardSubAgents/` — 旧分析器（重复 2 套）
+- `modules/dashboard/routes/agentRoutes.js` + `routes/dashboardAgent.js` — 路由
+- `jobs/dashboardAgentScheduler.js` — 定时调度器
+- 根目录散落文件：`append_funnel_modal.js`、`update_funnel.js`、`old_index.vue` 等 10+ 个
+- `scripts/test-*` 损坏脚本 2 个（引用了已删除的 `chatAgentRunner`）
+
+**影响**
+- `GET /api/v1/dashboard/agent/diagnose` 接口已移除
+- Chat 对话（`/api/v1/chat/`）不受影响，eChat Agent 完整保留
+
 ---
 
 ## 2026-05-01 — Regenerate 请求被神秘 abort
@@ -24,6 +89,7 @@
 - 前端 `regenAbort` 是否仍被某段 JS 触发（用户 console 一直没贴出 `[regen]` 输出，无法判别）
 - 还是浏览器 fetch / vite dev proxy 在某种 race 下主动关 socket
 - 三个分支决定后续动作完全不同：
+
   | Console 输出 | 含义 | 下一步 |
   |---|---|---|
   | `regenAbort.abort() called` + stack | 前端某段 JS 主动 abort，stack 能定位 | 看 stack 修源头 |
@@ -43,7 +109,7 @@
    - `console.warn('[regen] handler entered')`
    - `regenAbort.signal.addEventListener('abort', () => console.warn(... stack))`
    - wrap `regenAbort.abort = (r) => { console.warn(... stack); orig(r) }`
-3. 复现 → 把 Console 完整输出收集起来再决定方向
+3. 复现 → 把 Console 输出完整收集起来再决定方向
 
 **相关代码**
 - [TOT_backend/server/services/chatService.js#L826-L841](../../TOT_backend/server/services/chatService.js) — abort 路径打标记 throw
@@ -58,6 +124,13 @@
 - ~~**Redis 未启动**~~：BullMQ producer/worker 已改为 lazy connect + 静默失败，不再每次请求吐三段 stack。本机可继续不开 Redis 工作（异步记忆任务被丢弃）
 - ~~**user_memories INSERT 字段错误**~~：`bullMqWorker.js` 已修正为正确的 `(id, user_id, memory_hash, memory_type, content, confidence_score)` + `ON CONFLICT(user_id, memory_hash) DO UPDATE` 走稳健 Upsert
 - ~~**DSML 流式闪现**~~：`fc_LlmToolCallStep` 已加 sliding-window 过滤，OPEN 标签出现就 hold 缓冲不 emit，CLOSE 后整段删除，前端不再看到乱码闪现
-- **dashboard-agent scheduler 报错**：`generateDashboardAgentInsight is not a function`，每小时刷一次。实现没跟上重构。**不在 executive chat scope，未修**
+- ~~**dashboard-agent scheduler 报错**~~：已整体删除旧的 Dashboard Agent 系统（`agent/dashboard/`、scheduler、analyzers 等）
 - **Langfuse LangGraph 节点内 callback 降级**：`getLangfuseCallback = () => null`，子调用 trace 不上报到 langfuse（顶层 trace 由 tracer.js 接管）。是已知 trade-off，要修需先解决 langfuse-langchain 版本兼容
 - **L2 `max_super_steps = 3` 是救场值**：如果 warning_query 这种意图频繁触发 step 3 才完成，说明它本质是 L3，应该改 complexity_score 或 intent → tier 映射，而不是把 L2 越调越大
+
+## 长期记忆表结构适配 (2026-05-23)
+
+`user_memory` 表目前只有一个 `memory_type VARCHAR` 字段，三种记忆类型（user/feedback/project）共用此字段。后续需要：
+1. 评估是否需要独立的类型枚举或关联表
+2. 记忆去重策略优化（当前 SHA256(content) 对相似语义不敏感）
+3. 记忆过期/衰减策略

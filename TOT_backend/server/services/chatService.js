@@ -1,21 +1,21 @@
 'use strict';
 
 const { nanoid }       = require('nanoid');
-const { getDb }    = require('../db');
+const { isGraphInterrupt } = require('@langchain/langgraph');
 const chatCrud = require('../modules/dashboard/crud/chatCrud');
 const mysql = require('../modules/common/db/mysql');
 const { formatNowSqliteLocal } = require('../utils/ddlAt');
 const logger = require('../utils/logger');
 const { compressAssistantContent } = require('../utils/chatHistoryCompress');
-const AGENT_MODE = process.env.CHAT_AGENT_MODE || 'function_calling';
 const chatSessionStateService = require('./chatSessionStateService');
 const chatMemoryService = require('./chatMemoryService');
 const { writeSseHeaders, startSseKeepalive, createSseSender } = require('../utils/sseResponse');
 const { createAgentTrace, endSpan, maskPII, preview, NOOP_TRACE } = require('../utils/tracer');
 const { buildGraph } = require('../agent/graph/graph');
-const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
+const { MysqlSaver } = require('../agent/graph/checkpoint/mysqlSaver');
 const { Langfuse } = require('langfuse');
 const { HumanMessage, AIMessage, ToolMessage } = require("@langchain/core/messages");
+const runTrace = require('../agent/graph/shared/runTrace');
 
 // ─── Region scope resolver ────────────────────────────────────────────────────
 function resolveRegionScope(reqUser) {
@@ -52,7 +52,23 @@ function buildExecutiveMessageApiData(result) {
     let replyContent = null;
     try {
       const parsed = JSON.parse(md);
+      // blocks 组件化格式（新）
+      if (parsed && Array.isArray(parsed.blocks) && parsed.blocks.length > 0) {
+        replyContent = {
+          blocks: parsed.blocks,
+          ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
+          ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
+          ...(parsed._provenance && typeof parsed._provenance === 'object' ? { _provenance: parsed._provenance } : {}),
+          ...(parsed._datasets && typeof parsed._datasets === 'object' ? { _datasets: parsed._datasets } : {}),
+        };
+      }
       if (parsed && typeof parsed.overview === 'string') {
+        // 旧格式 listItems → tables 兜底转换
+        let tables = Array.isArray(parsed.tables) ? parsed.tables : null;
+        if (!tables && Array.isArray(parsed.listItems) && parsed.listItems.length > 0) {
+          const rows = parsed.listItems.map((item) => [String(item).replace(/^\d+\.\s*/, '')]);
+          tables = [{ title: '明细', columns: ['内容'], rows }];
+        }
         replyContent = {
           template: parsed.template || 'overview',
           overview: parsed.overview,
@@ -62,8 +78,8 @@ function buildExecutiveMessageApiData(result) {
           ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
           ...(parsed.statisticsProvenance ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
           ...(parsed.forecastDisclaimer ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
-          ...(parsed.table && !Array.isArray(parsed.tables) ? { table: parsed.table } : {}),
-          ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
+          ...(parsed.table && !Array.isArray(tables) ? { table: parsed.table } : {}),
+          ...(tables ? { tables } : {}),
         };
       }
       // general template
@@ -100,6 +116,19 @@ function buildExecutiveMessageApiData(result) {
  */
 function buildReplyContentFromStructured(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
+
+  // blocks 组件化格式（新）
+  if (Array.isArray(parsed.blocks) && parsed.blocks.length > 0) {
+    return {
+      blocks: parsed.blocks,
+      ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
+      ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
+      ...(parsed._provenance && typeof parsed._provenance === 'object' ? { _provenance: parsed._provenance } : {}),
+      ...(parsed._datasets && typeof parsed._datasets === 'object' ? { _datasets: parsed._datasets } : {}),
+      ...(Array.isArray(parsed._trace) ? { _trace: parsed._trace } : {}),
+    };
+  }
+
   // general 模板：有 template + markdown 就够
   if (parsed.template === 'general' && typeof parsed.markdown === 'string') {
     return {
@@ -109,6 +138,15 @@ function buildReplyContentFromStructured(parsed) {
     };
   }
   if (!parsed.template && !parsed.overview && !parsed.keyNumbers && !parsed.attentionPoints && !parsed.followUpSuggestions) return null;
+
+  // 旧格式 listItems → tables 兜底转换：旧 Agent 把明细数据放在 listItems 字符串数组中，
+  // 前端只认 tables/table，不认 listItems。这里将其转为单列表格以保持向后兼容。
+  let tables = Array.isArray(parsed.tables) ? parsed.tables : null;
+  if (!tables && Array.isArray(parsed.listItems) && parsed.listItems.length > 0) {
+    const rows = parsed.listItems.map((item, i) => [String(item).replace(/^\d+\.\s*/, '')]);
+    tables = [{ title: '明细', columns: ['内容'], rows }];
+  }
+
   return {
     template: parsed.template || 'overview',
     overview: parsed.overview || '',
@@ -118,8 +156,9 @@ function buildReplyContentFromStructured(parsed) {
     ...(Array.isArray(parsed.visualizations) ? { visualizations: parsed.visualizations } : {}),
     ...(parsed.statisticsProvenance && typeof parsed.statisticsProvenance === 'object' ? { statisticsProvenance: parsed.statisticsProvenance } : {}),
     ...(typeof parsed.forecastDisclaimer === 'string' ? { forecastDisclaimer: parsed.forecastDisclaimer } : {}),
-    ...(parsed.table && typeof parsed.table === 'object' && !Array.isArray(parsed.tables) ? { table: parsed.table } : {}),
-    ...(Array.isArray(parsed.tables) ? { tables: parsed.tables } : {}),
+    ...(parsed.table && typeof parsed.table === 'object' && !Array.isArray(tables) ? { table: parsed.table } : {}),
+    ...(tables ? { tables } : {}),
+    ...(Array.isArray(parsed._trace) ? { _trace: parsed._trace } : {}),
   };
 }
 
@@ -431,9 +470,8 @@ async function loadFormattedHistory(sessionId, trace = null) {
   const t0 = Date.now();
   try {
     const limit = Number(process.env.CHAT_HISTORY_MAX_ROWS || 100);
-    const rows = await chatCrud.getMessages(sessionId);
-    const limited = rows.slice(0, limit);
-    const formatted = limited.map((r) => ({
+    const rows = await chatCrud.getMessages(sessionId, limit);
+    const formatted = rows.map((r) => ({
       role: r.role,
       content: r.role === 'assistant' ? compressAssistantContent(r.content_text) : r.content_text,
       tool_calls: r.tool_calls_json ? JSON.parse(r.tool_calls_json) : undefined,
@@ -500,7 +538,7 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
     userId: session.user_id,
     userMessage,
     scopeType: regionScope.type,
-    agentMode: AGENT_MODE,
+    agentMode: 'function_calling',
     entryKind: 'sendMessage',
   });
 
@@ -574,11 +612,6 @@ async function sendMessage(sessionId, userMessage, userId, req = {}) {
     },
   });
 
-  // 异步提取记忆
-  setImmediate(() => {
-    chatMemoryService.extract(sessionId).catch(e => logger.warn('memory_extract_error', { sessionId, error: e.message }));
-  });
-
   return {
     messageId: assistMsgId,
     ...buildExecutiveMessageApiData(result),
@@ -620,7 +653,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     userId: session.user_id,
     userMessage: "<resume_payload>",
     scopeType: regionScope.type,
-    agentMode: AGENT_MODE,
+    agentMode: 'function_calling',
     entryKind: 'resumeMessageStreamLangGraph',
   });
 
@@ -644,14 +677,16 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     handleToolEnd: (result) => {
       sseCtx.wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
     },
+    handleTrace: (traceEvent) => {
+      sseCtx.wrappedSend('trace', traceEvent);
+    },
     handleError: (message) => {
       sseCtx.wrappedSend('error', { message, code: 'CHAT_500' });
     }
   };
 
   try {
-    const sqliteDb = getDb();
-    const checkpointer = new SqliteSaver(sqliteDb);
+    const checkpointer = new MysqlSaver();
 
     const app = buildGraph().compile({ checkpointer });
 
@@ -676,6 +711,7 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
 
     // T1: 这里不再是传递 inputState 重新开始，而是使用 Command/Command 形式向状态机发送 resume 值
     // 传递 null 作为 inputState 代表我们继续图里已有的执行
+    runTrace.trackT0(threadId);
     const finalState = await app.invoke(
       new (require("@langchain/langgraph").Command)({ resume: resumePayload }),
       thread
@@ -730,6 +766,20 @@ async function resumeMessageStreamLangGraph(sessionId, resumePayload, threadId, 
     return result;
 
   } catch (err) {
+    // 识别 LangGraph interrupt() 抛出的 GraphInterrupt，走 clarify 流程而非 error
+    if (isGraphInterrupt(err)) {
+      const interrupts = err.interrupts || [];
+      const interruptPayload = interrupts[0]?.value || interrupts[0];
+      if (interruptPayload) {
+        const responseTime = Date.now() - startMs;
+        const timestamp = formatNowSqliteLocal();
+        sseCtx.wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+        sseCtx.wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
+        try { res.end(); } catch (_) {}
+        return { interrupted: true, interruptPayload };
+      }
+    }
+
     if (handleSseClientAbort(err, sseCtx, { trace, sessionId, loggerTag: 'chat_stream_langgraph_aborted' })) {
       return;
     }
@@ -780,7 +830,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     userId: session.user_id,
     userMessage,
     scopeType: regionScope.type,
-    agentMode: AGENT_MODE,
+    agentMode: 'function_calling',
     entryKind: options.entryKind || 'sendMessageStreamLangGraph',
   });
 
@@ -808,12 +858,14 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     },
     handleToolEnd: (result) => {
       sseCtx.wrappedSend('delta', { text: '', phase: 'tool_end', status: 'success' });
+    },
+    handleTrace: (traceEvent) => {
+      sseCtx.wrappedSend('trace', traceEvent);
     }
   };
 
   try {
-    const sqliteDb = getDb();
-    const checkpointer = new SqliteSaver(sqliteDb);
+    const checkpointer = new MysqlSaver();
 
     const app = buildGraph().compile({ checkpointer });
 
@@ -829,17 +881,12 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     const historyRows = await loadFormattedHistory(sessionId, trace);
     const historyMessages = historyToLangChainMessages(historyRows);
 
-    const allSessionMessages = await chatCrud.getMessages(sessionId);
-    const lastAssistantRow = [...allSessionMessages].reverse().find(m => m.role === 'assistant') || null;
-
     const inputState = {
       userMessage,
       sessionId,
       userId: session.user_id.toString(),
       regionScope,
       messages: historyMessages,
-      prevIntent: lastAssistantRow?.intent_type || '',
-      prevEntities: {}
     };
 
     const threadId = `${sessionId}:${nanoid()}`;
@@ -854,6 +901,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       signal: sseCtx.abortController.signal
     };
 
+    runTrace.trackT0(sessionId);
     const finalState = await app.invoke(inputState, thread);
 
     const interruptPayload = extractLangGraphInterrupt(finalState);
@@ -917,6 +965,20 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
     return result;
 
   } catch (err) {
+    // 识别 LangGraph interrupt() 抛出的 GraphInterrupt，走 clarify 流程而非 error
+    if (isGraphInterrupt(err)) {
+      const interrupts = err.interrupts || [];
+      const interruptPayload = interrupts[0]?.value || interrupts[0];
+      if (interruptPayload) {
+        const responseTime = Date.now() - startMs;
+        const timestamp = formatNowSqliteLocal();
+        sseCtx.wrappedSend('clarify', buildClarifySsePayload(interruptPayload, req.requestId, { threadId }));
+        sseCtx.wrappedSend('done', buildInterruptedDonePayload(interruptPayload, sessionId, req.requestId, responseTime, timestamp, { threadId }));
+        try { res.end(); } catch (_) {}
+        return { interrupted: true, interruptPayload };
+      }
+    }
+
     if (handleSseClientAbort(err, sseCtx, { trace, sessionId, loggerTag: 'chat_stream_langgraph_aborted' })) {
       // Abort 路径也要 throw，否则上层（如 regenerate wrapper）的 catch 不会触发，
       // 导致 restoreOldMessage 跳过、旧消息永久丢失、用户再点重新生成会 400。

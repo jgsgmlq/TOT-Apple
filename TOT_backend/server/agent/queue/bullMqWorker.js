@@ -2,10 +2,9 @@ const { Worker } = require('bullmq');
 const IORedis = require('ioredis');
 const crypto = require('crypto');
 const { nanoid } = require('nanoid');
-const { db } = require('../../db');
-const { ChatOpenAI } = require("@langchain/openai");
+const mysql = require('../../modules/common/db/mysql');
+const { getMemoryModel } = require("../graph/llm");
 const { SystemMessage } = require("@langchain/core/messages");
-// T5 阶段二: 点亮后台盲区，注入官方 CallbackHandler 捕获后台 Worker 消耗 Token 数量
 const { CallbackHandler } = require("langfuse-langchain");
 
 const getLangfuseCallback = (sessionId) => {
@@ -20,15 +19,7 @@ const getLangfuseCallback = (sessionId) => {
 };
 
 // 确保能拿到 LLM 客户端用来做记忆抽取
-const getMemoryLLM = () => new ChatOpenAI({
-  modelName: "deepseek-chat",
-  apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY,
-  configuration: {
-    baseURL: process.env.DEEPSEEK_API_BASE_URL || "https://api.deepseek.com/v1"
-  },
-  temperature: 0.1,
-  maxTokens: 512
-});
+const getMemoryLLM = () => getMemoryModel();
 
 /**
  * 提取并写入中期记忆的后台 Worker
@@ -62,11 +53,25 @@ async function startMemoryWorker() {
 
     try {
       // 1. 调用大模型，判断这段对话是否有值得记录的新“事实/偏好”
-      const prompt = `You are a memory extractor. Analyze the user's latest message and the bot's response.
-Extract any mid-term preference or explicit fact the user mentioned (e.g. "I only care about region X", "focus on product Y").
-If nothing is worth saving, output exactly "NONE". Otherwise, output a concise 1-sentence fact.
-User Message: "${userMessage}"
-Bot Response: "${finalResponse}"`;
+      const prompt = `你是一个记忆提取器。分析用户的问题和助手的回应，判断该轮对话是否值得纳入长期记忆。
+
+【值得记忆的内容】
+1. user（用户偏好）：用户体现出反复出现的数据偏好或交互习惯
+2. feedback（行为反馈）：用户明确对助手行为提出要求、纠正或期望
+3. project（业务上下文）：对话中涉及的具体培训业务信息
+
+【不值得记忆的内容】
+- 一次性的简单数据查询（如"华东完成率"）
+- 闲聊或问候
+- 无明确偏好的确认语（如"好的""行"）
+
+如果值得记忆，输出格式：
+{"type":"<user|feedback|project>","content":"具体内容"}
+
+如果不值得记忆，输出：NONE
+
+用户问题: "${userMessage}"
+助手回应: "${finalResponse}"`;
 
       const llm = getMemoryLLM();
       const lfCallback = getLangfuseCallback(event.payload.sessionId);
@@ -81,33 +86,38 @@ Bot Response: "${finalResponse}"`;
         await lfCallback.flushAsync().catch(() => {});
       }
 
-      const fact = res.content.trim();
-      
-      // 如果大模型觉得有必要记下来
-      if (fact && fact !== "NONE") {
-        console.log(`[Queue Worker] 萃取到新事实: ${fact}`);
+      const rawText = res.content.trim();
 
-        // 2. 真实落库 (向现有的 user_memories 表写入)
-        // 表 schema：id (PK NOT NULL) / user_id / memory_hash (NOT NULL, UNIQUE(user_id, memory_hash))
-        // / memory_type (default 'bias') / content (NOT NULL) / confidence_score (default 0.5)
-        // / created_at / updated_at（DB 默认）。
-        const memoryHash = crypto
-          .createHash('sha256')
-          .update(fact)
-          .digest('hex');
-        db.run(
-          `INSERT INTO user_memories (id, user_id, memory_hash, memory_type, content, confidence_score)
-           VALUES (?, ?, ?, 'fact', ?, 0.7)
-           ON CONFLICT(user_id, memory_hash) DO UPDATE SET
-             content = excluded.content,
-             confidence_score = excluded.confidence_score,
-             updated_at = datetime('now', 'localtime')`,
-          [nanoid(), userId, memoryHash, fact]
-        );
-        console.log(`[Queue Worker] 已成功将 ${userId} 的 fact 记忆写入 SQLite.`);
+      // 解析 memory JSON 或兼容旧格式
+      let memoryItem;
+      if (rawText && rawText !== "NONE") {
+        try {
+          memoryItem = JSON.parse(rawText);
+        } catch (_) {
+          memoryItem = { type: 'user', content: rawText };
+        }
+
+        if (memoryItem && memoryItem.content && memoryItem.content !== "NONE") {
+          console.log(`[Queue Worker] 萃取记忆 [${memoryItem.type}]: ${memoryItem.content}`);
+
+          const memoryHash = crypto
+            .createHash('sha256')
+            .update(memoryItem.content)
+            .digest('hex');
+          await mysql.run(
+            `INSERT INTO user_memory (id, user_id, memory_hash, memory_type, content, confidence_score)
+             VALUES (?, ?, ?, ?, ?, 0.7)
+             ON DUPLICATE KEY UPDATE
+               content = VALUES(content),
+               confidence_score = VALUES(confidence_score),
+               updated_at = NOW(3)`,
+            [nanoid(), userId, memoryHash, memoryItem.type, memoryItem.content]
+          );
+          console.log(`[Queue Worker] 已成功写入 [${memoryItem.type}] 记忆.`);
 
       } else {
         console.log(`[Queue Worker] 对话无长尾价值，跳过。`);
+      }
       }
 
     } catch (err) {

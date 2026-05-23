@@ -30,11 +30,12 @@ async function insertMessage({ id, sessionId, role, contentText, contentJson, in
   );
 }
 
-async function getMessages(sessionId) {
-  return await all(
-    'SELECT id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC',
-    [sessionId]
-  );
+async function getMessages(sessionId, limit) {
+  const sql = limit
+    ? 'SELECT id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT ?'
+    : 'SELECT id, session_id, role, content_text, content_json, intent_type, tool_calls_json, tool_call_id, client_message_id, created_at FROM chat_message WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC';
+  const params = limit ? [sessionId, limit] : [sessionId];
+  return await all(sql, params);
 }
 
 async function getMessageByClientId(clientMessageId) {
@@ -79,6 +80,14 @@ async function softDeleteSessionMessages(sessionId) {
   await run('UPDATE chat_message SET deleted_at = NOW(3) WHERE session_id = ? AND deleted_at IS NULL', [sessionId]);
 }
 
+async function getUserMessageCount(sessionId) {
+  const row = await get(
+    "SELECT COUNT(*) AS total FROM chat_message WHERE session_id = ? AND role = 'user' AND deleted_at IS NULL",
+    [sessionId]
+  );
+  return row ? row.total : 0;
+}
+
 async function softDeleteSession(sessionId) {
   await run('UPDATE chat_session SET deleted_at = NOW(3) WHERE id = ?', [sessionId]);
 }
@@ -95,7 +104,7 @@ module.exports = {
   createSession, getSession, updateSessionActive, updateSessionTitle,
   insertMessage, getMessages, getMessageByClientId,
   insertFeedback, deleteFeedback,
-  getLastAssistantMessage, getMessageById, deleteMessage, getMessageCount,
+  getUserMessageCount, getLastAssistantMessage, getMessageById, deleteMessage, getMessageCount,
   softDeleteSessionMessages, softDeleteSession,
   getUserById, getLatestDispatchedTask,
 };

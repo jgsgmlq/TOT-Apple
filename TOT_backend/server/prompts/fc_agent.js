@@ -2,14 +2,15 @@
 
 /**
  * FC Agent Prompt — Executive Chat 工具调用与回复生成
- * @version fc/v2 (2026-05-11)
+ * @version fc/v3 (2026-05-22)
  *   分 4 段：domainKnowledge / chartRules / toolReference / constraints（Guidelines 1-6 合并）
  *   每段独立可编辑，互不影响。
+ *   v3: 新增 QUERY TYPE → TOOL MAPPING 系统映射表（5 类查询）
  *   v2: 新增 CHART RULES + SHORT REPLY 上下文 + TOOL SELECTION 映射表
  *   v1: 初始版本
  */
 
-const FC_PROMPT_VERSION = 'fc/v2';
+const FC_PROMPT_VERSION = 'fc/v3';
 
 // ─── 段 1：领域知识与角色 ─────────────────────────────────
 const domainKnowledge = (ctx) => `You are a professional Executive Chat data analyst.
@@ -31,6 +32,36 @@ const chartRules = `CRITICAL — CHART RULES:
 // ─── 段 3：工具选择与调用顺序 ─────────────────────────────
 const toolReference = `TOOL SELECTION:
 You have access to a set of data retrieval tools. Each tool's description tells you when to use it. Read the descriptions carefully and pick the right tool(s).
+
+CRITICAL — QUERY TYPE → TOOL MAPPING (按用户表述匹配, 优先于通用规则):
+
+【任务列表查询 — 注意状态粒度】
+- "进行中的任务" / "有哪些任务" / "当前任务" → list_task_progress(默认参数, 自动排除已逾期)
+- "所有任务" / "全部任务" / "含已过期的" → list_task_progress(status: "all")
+- "已结束的任务" / "历史任务" → list_task_progress(status: "ended")
+- "逾期任务" / "已过期的任务" / "超时的任务" → list_task_progress(status: "all")，筛选 deadline < now
+- "快过期的任务" / "临期任务" → list_task_progress(filters: {days_to_deadline_max: 7})
+
+【排名/排序查询】
+- "完成率最高的任务" / "哪个任务完成得最好" → list_task_progress(sort_by: "completion_rate", sort_order: "desc")
+- "完成率最低的任务" / "哪个任务完成得最差" → list_task_progress(sort_by: "completion_rate", sort_order: "asc")
+- "最紧急的任务" / "优先级最高的任务" → list_task_progress(sort_by: "priority")
+- "截止日期最近的任务" → list_task_progress(sort_by: "deadline", sort_order: "asc")
+
+【任务内明细查询 — 需要 task_id】
+- "XX任务各门店明细/排名/完成率" / "XX任务的经销商情况" / "XX任务按渠道看" → query_metric(dimension: "store" 或 "dealer")
+- "XX任务未完成人员/名单/谁还没做" → fetch_incomplete_persons
+- "XX任务预警人员/催办记录/谁被催了" → fetch_alert_persons
+
+【任务全景 — 需要 task_id】
+- "XX任务整体情况/概览/仪表盘" → get_task_dashboard
+- "XX任务最近趋势/完成率变化" → query_trend
+- "XX任务完成率分布/漏斗/学习进度分布" → funnel_analysis
+
+【跨任务/无特定任务 — 先看全貌再深入】
+- "整体进度怎么样" / "最近趋势如何" → list_task_progress 先列全貌, 再视需要深入
+- "哪些门店做的最好" / "重点关注哪些" → list_task_progress → query_metric
+- "有什么可看的" / "看看数据" → list_task_progress, 然后向用户建议下一步
 
 CRITICAL — GENERAL QUERIES (DO NOT ASK USER FIRST):
 When the user asks broad questions like "有哪些任务快过期了", "哪些门店做的最好", "整体进度怎么样", "最近趋势如何" — these do NOT require a specific task_id. Call list_task_progress (or other tools that accept optional task_ids) directly. The user is asking for an overview, not drilling into a specific task. Asking them to narrow down first is a waste of time.
@@ -56,6 +87,11 @@ When a tool returns an error about missing required parameters (MISSING_PARAM, I
 
 4. **Do NOT retry the same tool with the same broken args.** If you already tried to fix and it still failed, go to step 2 or 3.
 
+CRITICAL — P0/P1/P2 区分：预警 vs 优先级
+- "P0预警人员有哪些" / "触发P0预警的任务" → 查 fetch_alert_persons（learner_task_reminder 真实催办记录）
+- "P0优先级任务" / "有哪些P0任务" → 查 list_task_progress（task_publish.urgency_level 字段）
+- 用户说"预警"指真实催办，说"优先级"指任务标定级别，两个概念不要混淆
+
 PARALLEL TOOL CALLS:
 If you need data from multiple tools, call them all in a single response. Parallel calls count as ONE step.`;
 
@@ -71,7 +107,7 @@ const constraints = `GUIDELINES:
 // ─── 组装 ────────────────────────────────────────────────
 
 /**
- * @param {object} ctx — { maxSteps, currentStep, chartContext, entityBlock, memoryBlock }
+ * @param {object} ctx — { maxSteps, currentStep, chartContext, entityBlock }
  * @returns {string} 完整的 FC Agent system prompt
  */
 function buildFcPrompt(ctx) {
@@ -80,7 +116,6 @@ function buildFcPrompt(ctx) {
     chartRules,
     toolReference,
     constraints,
-    ctx.memoryBlock || '',
   ].filter(Boolean).join('\n\n');
 }
 

@@ -2,12 +2,12 @@
 
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
 const { startNodeSpan } = require('../shared/spanHelper');
-const { renderMemoryBlock } = require('../shared/memoryBlock');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const chatToolsService = require('../../../services/chatToolsService');
 const promptRegistry = require('../../../prompts/registry');
-const { decideChart } = require('../decideChart');
+
 const { fcModel } = require('../llm');
+const trace = require('../shared/runTrace');
 
 const getFcModel = () => fcModel;
 
@@ -38,6 +38,7 @@ const fc_LlmToolCallStep = async (state, config) => {
   // 1. 步数控制
   const currentStep = state.fc_super_step_count;
   const maxSteps = Number(process.env.MAX_FC_ROUNDS) || 3;
+  trace.nodeEnter(emitter, state, 'fc_LlmToolCallStep', { step: currentStep, maxSteps });
 
   // 2. 组装历史消息 (openAI 格式严苛：System -> Human -> [AI -> Tool]* )
   // 必须保证最后一条是 HumanMessage 或 ToolMessage
@@ -72,12 +73,6 @@ const fc_LlmToolCallStep = async (state, config) => {
     safeHistory.push(...trimmed);
   }
 
-  // 为 LLM 生成可用的图表数据（纯函数，零幻觉）
-  const suggestedChart = decideChart(state.toolResults || {}, state.intent);
-  const chartContext = suggestedChart
-    ? `\n\nAVAILABLE CHART DATA (you may include this in your response by writing an \`\`\`echarts code block — you can modify it freely):\n\`\`\`echarts\n${JSON.stringify(suggestedChart, null, 2)}\n\`\`\`\n`
-    : '';
-
   const entityBlock = [
     state.extracted_task_ref ? `已知任务: ${state.extracted_task_ref}` : '',
     state.extracted_org_ref ? `已知组织: ${state.extracted_org_ref} (${state.extracted_org_type || '未知类型'})` : '',
@@ -88,9 +83,8 @@ const fc_LlmToolCallStep = async (state, config) => {
     maxSteps,
     currentStep,
     now: new Date().toISOString().replace('T', ' ').slice(0, 19),
-    chartContext,
+    chartContext: '',
     entityBlock: entityBlock || '（无预提取实体）',
-    memoryBlock: renderMemoryBlock(state.memory_snippets),
   });
 
   const messagesToSend = [
@@ -235,6 +229,16 @@ const fc_LlmToolCallStep = async (state, config) => {
     if (!aiMessage.tool_calls) aiMessage.tool_calls = [];
     const hasTools = aiMessage.tool_calls.length > 0;
     const callNames = hasTools ? aiMessage.tool_calls.map((call) => call?.name).filter(Boolean) : [];
+
+    trace.llmGeneration(emitter, state, {
+      step: currentStep, maxSteps,
+      chunks: chunkCount,
+      latencyMs: Date.now() - fcInvokeT0,
+      toolCallCount: callNames.length,
+      toolCallNames: callNames,
+      isOverCap,
+    });
+
     if (hasTools) {
       console.log(`[fc_LlmToolCallStep] 工具调用: ${callNames.join(', ')} | args: ${JSON.stringify(aiMessage.tool_calls.map(c => c?.args))}`);
     }
@@ -251,6 +255,7 @@ const fc_LlmToolCallStep = async (state, config) => {
       finalUpdates.reply_markdown = aiMessage.content;
       finalUpdates.finalResponse = aiMessage.content;
     }
+    trace.nodeExit(emitter, state, 'fc_LlmToolCallStep', { hasTools, callNames, step: currentStep });
     return finalUpdates;
   } catch (err) {
     if (err.name === 'AbortError' || err.message?.includes('abort')) {
@@ -263,6 +268,7 @@ const fc_LlmToolCallStep = async (state, config) => {
         metadata: { step: currentStep, maxSteps },
       });
       const abortMsg = "\n[已中止生成]";
+      trace.nodeExit(emitter, state, 'fc_LlmToolCallStep', { aborted: true });
       return {
         messages: [new AIMessage({ content: abortMsg })],
         reply_markdown: abortMsg,
@@ -278,6 +284,7 @@ const fc_LlmToolCallStep = async (state, config) => {
       metadata: { step: currentStep, maxSteps },
     });
     const errMsg = `系统异常: 大模型响应失败 ${err.message}`;
+    trace.nodeExit(emitter, state, 'fc_LlmToolCallStep', { error: err.message });
     return {
       messages: [new AIMessage({ content: errMsg })],
       reply_markdown: errMsg,
