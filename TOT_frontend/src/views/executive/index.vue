@@ -260,13 +260,21 @@
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
-                  <!-- 结构化模板 -->
+                  <!-- 新 blocks 组件化格式 -->
+                  <BlockRenderer
+                    v-if="msg.replyContent?.blocks"
+                    :blocks="msg.replyContent.blocks"
+                    :datasets="msg.replyContent._datasets"
+                    @suggestion-click="fillComposerWithSuggestion"
+                  />
+                  <AgentTracePanel v-if="msg.done && msg.traceSteps?.length" :steps="msg.traceSteps" />
+
+                  <!-- 结构化模板（一个 release cycle 后删除） -->
                   <template v-else-if="msg.replyContent?.template && msg.replyContent.template !== 'general'">
                     <!-- Overview — 警告模板用更醒目的样式 -->
                     <div v-if="msg.replyContent.overview"
-                      :class="msg.replyContent.template === 'warning' ? 'hero-card hero-card--warning' : 'hero-card'">
-                      {{ msg.replyContent.overview }}
-                    </div>
+                      :class="msg.replyContent.template === 'warning' ? 'hero-card hero-card--warning' : 'hero-card'"
+                      v-html="renderMarkdown(msg.replyContent.overview)" />
 
                     <!-- 图表 -->
                     <div v-if="msg.replyContent.visualizations?.length" class="exec-charts"
@@ -292,6 +300,9 @@
 
                     <!-- 追问 -->
                     <SuggestChips v-if="msg.replyContent.followUpSuggestions?.length" :items="msg.replyContent.followUpSuggestions" @select="fillComposerWithSuggestion" />
+
+                    <!-- Agent 运行追踪 -->
+                    <AgentTracePanel v-if="msg.done && msg.traceSteps?.length" :steps="msg.traceSteps" />
                   </template>
 
                   <!-- 流式中的 Markdown 渲染（无 replyContent 时） -->
@@ -303,9 +314,12 @@
                     @suggestion-click="fillComposerWithSuggestion"
                   />
 
+                  <!-- Agent 运行追踪（无结构化卡片时也显示） -->
+                  <AgentTracePanel v-if="msg.done && !msg.replyContent && msg.traceSteps?.length" :steps="msg.traceSteps" />
+
                   <!-- 数据溯源 -->
-                  <div v-if="provFooterContent(msg.replyContent?.statisticsProvenance)" class="exec-prov-footer">
-                    {{ provFooterContent(msg.replyContent.statisticsProvenance) }}
+                  <div v-if="provFooterContent(msg.replyContent?.statisticsProvenance) || provFooterContent(msg.replyContent?._provenance)" class="exec-prov-footer">
+                    {{ provFooterContent(msg.replyContent?.statisticsProvenance) || provFooterContent(msg.replyContent?._provenance) }}
                     </div>
 
                   <!-- AI Feedback Actions -->
@@ -454,11 +468,14 @@
   
   import { useUserStore } from '@/store/modules/user';
   import AiChartRenderer from './components/AiChartRenderer.vue';
+  import BlockRenderer from './components/BlockRenderer.vue';
   import MarkdownRenderer from './components/MarkdownRenderer.vue';
+  import { renderInsightMarkdown } from '@/utils/markdownRender';
   import KeyGrid from '@/components/chat/KeyGrid.vue';
   import InsightList from '@/components/chat/InsightList.vue';
   import TableBlock from '@/components/chat/TableBlock.vue';
   import SuggestChips from '@/components/chat/SuggestChips.vue';
+  import AgentTracePanel from '@/components/chat/AgentTracePanel.vue';
 import LogoMark from '@/components/common/LogoMark.vue';
   import {
     createChatSession,
@@ -482,6 +499,12 @@ import LogoMark from '@/components/common/LogoMark.vue';
     speechTextForExecutiveTts,
     speechTextForSendResult,
   } from '@/utils/execStreamReply';
+
+  // 将 Agent 回复中的 **bold** 等 Markdown 语法渲染为 HTML
+  const renderMarkdown = (text: string): string => {
+    if (!text) return '';
+    return renderInsightMarkdown(text);
+  };
 
   const TOOL_DISPLAY_NAMES: Record<string, string> = {
     getOverviewData: '查询培训进度总览',
@@ -526,6 +549,8 @@ import LogoMark from '@/components/common/LogoMark.vue';
     replyContent?: ReplyContent | null;
     /** HITL / clarify 交互态 */
     pendingClarification?: ClarifyPayload | null;
+    /** Agent 运行追踪步骤 */
+    traceSteps?: import('@/utils/execStreamReply').TraceEvent[] | null;
     userFeedback?: 'like' | 'dislike' | null;
     isRegenerating?: boolean;
     isFeedbackLoading?: boolean;
@@ -700,6 +725,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
     const resumePayload: Record<string, unknown> = {
       resume_type: resumeType,
       value: resolvedValue,
+      label: chosen?.option?.label ?? (typeof resolvedValue === 'string' ? resolvedValue : ''),
       selected_option_id: chosen?.option?.id,
       action: chosen?.action || (isCancel ? 'cancel' : 'select_option'),
       toolCallId:
@@ -929,6 +955,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
           replyContent: structured,
           userFeedback: item.userFeedback,
           done: true,
+          traceSteps: (structured as any)?._trace || null,
         });
       }
     }
@@ -1176,7 +1203,8 @@ import LogoMark from '@/components/common/LogoMark.vue';
     function applySendSuccess(
       sid: string,
       result: SendMessageResult,
-      thinkingSnapshot?: string
+      thinkingSnapshot?: string,
+      traceSteps?: import('@/utils/execStreamReply').TraceEvent[]
     ) {
       const lastMsg = messages.value[loadingIndex];
       if (lastMsg) {
@@ -1187,6 +1215,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
         lastMsg.content = result.markdownContent || formatReplyContentText(result.replyContent);
         lastMsg.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg.replyContent = result.replyContent;
+        lastMsg.traceSteps = traceSteps?.length ? traceSteps : null;
         // 保存工具调用链（调试用）
         (lastMsg as any)._toolCalls = (result as any)._toolMeta?.toolNames || [];
       }
@@ -1214,7 +1243,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
         }
       }
       try {
-        const { result, thinkingSnapshot } = await runExecStyleSseChat(
+        const { result, thinkingSnapshot, traceSteps } = await runExecStyleSseChat(
           streamExecutiveChatMessage,
           sid,
           question,
@@ -1226,6 +1255,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
               jsonStream: p.jsonStream,
               partialReply: p.partialReply ?? undefined,
               activeToolName: p.activeToolName,
+              traceSteps: p.traceSteps,
             };
             scrollToBottom();
             if (tts) {
@@ -1244,7 +1274,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
           const spoken = speechTextForSendResult(result);
           if (spoken) tts.pushSpokenPlainText(spoken);
         }
-        applySendSuccess(sid, result, thinkingSnapshot);
+        applySendSuccess(sid, result, thinkingSnapshot, traceSteps);
       } finally {
         if (tts) {
           tts.finish();
@@ -1633,7 +1663,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 36px;
     scroll-behavior: smooth;
 
     .empty-chat {
@@ -1697,6 +1727,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
       display: flex;
       gap: 16px;
       max-width: 90%;
+      margin-bottom: 36px;
 
       &.is-user {
         align-self: flex-end;
@@ -1747,13 +1778,67 @@ import LogoMark from '@/components/common/LogoMark.vue';
           }
         }
 
-        .exec-structured {
+        .exec-prov-footer {
+        font-size: 11px; color: #94a3b8; text-align: right; margin-top: 10px;
+      }
+
+      .exec-structured {
           .hero-card {
-            background: var(--bg-0);
+            background: linear-gradient(135deg, rgba(250,251,252,1) 0%, rgba(247,249,250,1) 100%);
             color: var(--text-0);
-            padding: 20px 24px;
-            margin-bottom: 20px; font-size: 15px; line-height: 1.65;
-            border-left: 3px solid var(--accent);
+            padding: 22px 28px;
+            margin-bottom: 24px;
+            font-size: 15px;
+            line-height: 1.72;
+            border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.06);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.04);
+            position: relative;
+            overflow: hidden;
+
+            // 顶部微妙的彩色渐变线 — 替代原来的深色左边框
+            &::before {
+              content: '';
+              position: absolute;
+              top: 0; left: 0; right: 0;
+              height: 2px;
+              background: linear-gradient(90deg, #2563eb 0%, #7c3aed 60%, transparent 100%);
+              opacity: 0.55;
+            }
+
+            // 弱化左侧装饰 — 原来这里是 border-left 的位置
+            // 改为一个极淡的光晕点
+            &::after {
+              content: '';
+              position: absolute;
+              top: 18px;
+              left: 16px;
+              width: 4px;
+              height: 4px;
+              border-radius: 50%;
+              background: #2563eb;
+              opacity: 0.35;
+            }
+
+            strong { font-weight: 650; color: #1e293b; }
+            em { font-style: normal; color: #64748b; }
+          }
+
+          .hero-card--warning {
+            background: linear-gradient(135deg, #fffbf5 0%, #fff7ed 100%) !important;
+            border-color: rgba(234,160,40,0.12) !important;
+
+            &::before {
+              background: linear-gradient(90deg, #d97706 0%, #ea580c 70%, transparent 100%) !important;
+              opacity: 0.6 !important;
+            }
+
+            &::after {
+              background: #d97706 !important;
+            }
+
+            strong { color: #92400e !important; }
+            em { color: #b45309 !important; }
           }
 
           &.exec-structured--stream {
@@ -1896,10 +1981,6 @@ import LogoMark from '@/components/common/LogoMark.vue';
           padding: 8px 12px;
           font-size: 13px;
           color: #555;
-        }
-
-        .exec-prov-footer {
-          font-size: 11px; color: #94a3b8; text-align: right; margin-top: 10px;
         }
 
         .exec-json-fallback {
@@ -2165,7 +2246,6 @@ import LogoMark from '@/components/common/LogoMark.vue';
   .exec-chain-step { background: #f8fafc; padding: 2px 8px; border-radius: 4px; border: 1px solid #e2e8f0; }
   .exec-chain-arrow { color: #cbd5e1; margin: 0 2px; }
 
-  .hero-card--warning { background: #fef4e6 !important; color: #9a3412 !important; border-left: 3px solid #d97706 !important; }
 </style>
 
 <style>
