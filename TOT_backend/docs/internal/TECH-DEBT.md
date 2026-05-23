@@ -134,3 +134,27 @@
 1. 评估是否需要独立的类型枚举或关联表
 2. 记忆去重策略优化（当前 SHA256(content) 对相似语义不敏感）
 3. 记忆过期/衰减策略
+
+---
+
+## 2026-05-23 — 远端 Redis 版本过低，BullMQ Worker 无法启动
+
+**症状**
+- `app.js` 启动 MemoryWorker 时报错：`Redis version needs to be greater or equal than 5.0.0 Current: 3.2.12`
+- Worker 启动失败（非致命降级），`publishMemoryIngestion` 中事件被静默丢弃
+- 日志：`[Queue Producer] publish failed`
+
+**影响范围**
+- **不影响**：短期对话上下文（conversation 走 MySQL chat_message）
+- **不影响**：长期记忆检索（getMemories 走 MySQL user_memory）
+- **不影响**：safetyGateway / finalResponse 的上下文注入
+- **影响**：长期记忆 LLM 提取完全不可用（事件无法入队，Worker 不消费）
+
+**未修原因**
+- Redis 为远端服务器（通过 dotenvx 加密 .env 中的 REDIS_URL 指向），需运维配合升级
+- 短期上下文功能不受影响，长期记忆提取可降级运行
+
+**修复方向**
+1. 升级远端 Redis 至 5.0+
+2. 备选：部署本地 Redis 5.0+ 替代远端实例
+3. 紧急情况可回退到旧 `chatMemoryService.extract()` 作为 fallback（已从 chatService 中移除，模块仍保留）
