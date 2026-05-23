@@ -78,6 +78,43 @@ async function getMyPalProgressByEmails(emailIds, limit = 500) {
   );
 }
 
+// ─── Task Overview Stats (SQL 聚合) ─────────────────────────────────
+
+async function getTaskOverviewStats(taskPublishId, taskWeek) {
+  if (!taskPublishId) return null;
+
+  const row = await get(
+    `SELECT
+       COUNT(DISTINCT ltq.email_id) AS total_assignments,
+       COUNT(DISTINCT CASE WHEN ls.status = 'completed' THEN ltq.email_id END) AS completed_count,
+       COUNT(DISTINCT CASE WHEN ls.status = 'in_progress' THEN ltq.email_id END) AS in_progress_count,
+       COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P0' THEN ltq.email_id END) AS p0_count,
+       COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P1' THEN ltq.email_id END) AS p1_count,
+       COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P2' THEN ltq.email_id END) AS p2_count,
+       COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P3' THEN ltq.email_id END) AS p3_count
+     FROM learner_task_queue ltq
+     LEFT JOIN (
+       SELECT mps2.email_id, mps2.task_week,
+         CASE
+           WHEN COUNT(*) = SUM(CASE WHEN mps2.passed_week IS NOT NULL THEN 1 ELSE 0 END)
+             THEN 'completed'
+           WHEN SUM(CASE WHEN mps2.first_use_time IS NOT NULL THEN 1 ELSE 0 END) > 0
+             THEN 'in_progress'
+           ELSE 'pending'
+         END AS status
+       FROM mypal_learning_progress_sync mps2
+       WHERE mps2.required_flag = 1 AND mps2.task_week = ?
+       GROUP BY mps2.email_id, mps2.task_week
+     ) AS ls ON ls.email_id = ltq.email_id
+     LEFT JOIN learner_task_reminder ltr
+       ON ltr.task_publish_id = ltq.task_publish_id AND ltr.email_id = ltq.email_id
+     WHERE ltq.task_publish_id = ?`,
+    [taskWeek || null, taskPublishId]
+  );
+
+  return row;
+}
+
 // ─── Reminder / Confirmation ────────────────────────────────────────
 
 async function getConfirmationStatus({ taskPublishId, emailIds } = {}) {
@@ -242,6 +279,7 @@ module.exports = {
   countQueueByTask,
   getMyPalProgressByWeek,
   getMyPalProgressByEmails,
+  getTaskOverviewStats,
   getConfirmationStatus,
   getReminderList,
   getRemindersByTaskId,
