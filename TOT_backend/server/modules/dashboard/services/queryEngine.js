@@ -139,18 +139,10 @@ async function getOverviewBoardData(query) {
   const task = taskId ? await mysqlCrud.getTaskById(taskId) : null;
   if (!task) return emptyOverview();
 
-  // task_week 为 null 时 SQL 子查询无法匹配 MPS，降级
-  if (!task.task_week) {
-    return getOverviewBoardDataFallback(query);
-  }
+  // task_week 为 null 时 SQL 子查询无法匹配 MPS
+  if (!task.task_week) return emptyOverview();
 
-  let stats;
-  try {
-    stats = await mysqlCrud.getTaskOverviewStats(taskId, task.task_week);
-  } catch (err) {
-    console.warn('[getOverviewBoardData] SQL stats failed, fallback:', err.message);
-    return getOverviewBoardDataFallback(query);
-  }
+  const stats = await mysqlCrud.getTaskOverviewStats(taskId, task.task_week);
 
   if (!stats || stats.total_assignments === 0) return emptyOverview();
 
@@ -213,109 +205,6 @@ async function getOverviewBoardData(query) {
     learningCount: inProgCnt,
     readCount: total,
     readRate: participationRate,
-  };
-}
-
-async function getOverviewBoardDataFallback(query) {
-  const { taskId } = query;
-  const { task, queues, mpsRows, confirmedSet, reminderMap } = await fetchTaskContext(taskId, query);
-
-  if (!task || queues.length === 0) return emptyOverview();
-
-  const now = Date.now();
-  const total = queues.length;
-  const dueMs = new Date(task.due_date).getTime();
-
-  let completedCnt = 0, inProgCnt = 0, pendingCnt = 0, overdueCnt = 0;
-  let onTimeCnt = 0, confirmedCnt = 0;
-  let timeTotal = 0, timeCount = 0;
-  let newN = 0, p0N = 0, p1N = 0, p2N = 0, p3N = 0;
-
-  for (const q of queues) {
-    const status = classifyStatus(q.email_id, mpsRows);
-    const confirmed = confirmedSet.has(q.email_id);
-    const level = reminderMap.get(q.email_id) || 'new';
-
-    if (status === 'completed') {
-      completedCnt++;
-      const hrs = completionTimeHours(task, mpsRows, q.email_id);
-      if (hrs !== null) { timeTotal += hrs; timeCount++; }
-      const passedTimes = mpsRows
-        .filter(r => r.email_id === q.email_id && r.required_flag === 1 && r.passed_time)
-        .map(r => new Date(r.passed_time).getTime());
-      if (passedTimes.length > 0 && Math.max(...passedTimes) <= dueMs) onTimeCnt++;
-    } else if (status === 'in_progress') {
-      inProgCnt++;
-    } else {
-      pendingCnt++;
-    }
-
-    if (status !== 'completed' && now > dueMs) overdueCnt++;
-    if (confirmed) confirmedCnt++;
-
-    if (level === 'new') newN++;
-    else if (level === 'P0') p0N++;
-    else if (level === 'P1') p1N++;
-    else if (level === 'P2') p2N++;
-    else if (level === 'P3') p3N++;
-  }
-
-  const completionRate       = total > 0 ? parseFloat(((100 * completedCnt) / total).toFixed(2)) : 0;
-  const onTimeCompletionRate = total > 0 ? parseFloat(((100 * onTimeCnt) / total).toFixed(2)) : 0;
-  const avgCompletionTimeHours = timeCount > 0
-    ? parseFloat((timeTotal / timeCount).toFixed(2))
-    : 0;
-
-  const nudgeConversionRate = total > 0
-    ? parseFloat(((100 * completedCnt) / total).toFixed(2))
-    : 0;
-
-  const participationRate = total > 0
-    ? parseFloat(((100 * (inProgCnt + completedCnt)) / total).toFixed(2))
-    : 0;
-
-  const remainingSeconds = task.due_date
-    ? Math.max(0, Math.floor((dueMs - now) / 1000))
-    : 0;
-
-  const warningCount = { new: newN, p3: p3N, p2: p2N, p1: p1N, p0: p0N };
-
-  return {
-    totalAssignments: total,
-    pushUserCount: total,
-    employeeReadCount: total,
-    managerReadCount: total,
-    totalReadCount: total,
-
-    completionRate,
-    completedCount: completedCnt,
-    onTimeCompletionRate,
-    avgCompletionTimeHours,
-
-    taskReachRate: participationRate,
-    taskReadRate: participationRate,
-    nudgeConversionRate,
-
-    crisisNewRate: total > 0 ? parseFloat(((100 * newN) / total).toFixed(2)) : 0,
-    crisisP3Rate: total > 0 ? parseFloat(((100 * p3N) / total).toFixed(2)) : 0,
-    crisisP2Rate: total > 0 ? parseFloat(((100 * p2N) / total).toFixed(2)) : 0,
-    crisisP1Rate: total > 0 ? parseFloat(((100 * p1N) / total).toFixed(2)) : 0,
-    crisisP0Rate: total > 0 ? parseFloat(((100 * p0N) / total).toFixed(2)) : 0,
-
-    inProgressCount: inProgCnt,
-    pendingCount: pendingCnt,
-    overdueCount: overdueCnt,
-    warningCount,
-
-    confirmedCount: confirmedCnt,
-    confirmationRate: total > 0 ? parseFloat(((100 * confirmedCnt) / total).toFixed(2)) : 0,
-    nudgeSeverityCounts: warningCount,
-
-    completionRateDelta: 0,
-    remainingSeconds,
-
-    platform: null,
-    updatedAt: formatNowSqliteLocal(),
   };
 }
 
@@ -1025,7 +914,6 @@ async function getStoreRankBoardData(query) {
 module.exports = {
   // Board-data functions
   getOverviewBoardData,
-  getOverviewBoardDataFallback,
   getFunnelData,
   getFunnelBoardData,
   getAlertFunnelData,

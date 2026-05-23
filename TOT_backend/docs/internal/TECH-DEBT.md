@@ -137,6 +137,15 @@
 
 ---
 
+## getOverviewBoardData onTimeCompletionRate / avgCompletionTimeHours 临时填 0 (2026-05-23)
+
+SQL 聚合路径 (`getTaskOverviewStats`) 无法精确计算 `onTimeCompletionRate` 和 `avgCompletionTimeHours`（MPS 是 task_week 级别，不是 task 级别，子查询内无法 JOIN task_publish 取 start_date/due_date）。后续可加针对性 SQL 只对 completed 学员算耗时。
+
+- 影响：`/dashboard/overview` API 返回这两个字段为 0
+- 不影响：`list_task_progress` 等工具输出（不使用这两个字段）
+
+---
+
 ## 2026-05-23 — 远端 Redis 版本过低，BullMQ Worker 无法启动
 
 **症状**

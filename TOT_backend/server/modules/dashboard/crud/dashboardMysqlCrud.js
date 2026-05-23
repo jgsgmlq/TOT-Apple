@@ -93,6 +93,7 @@ async function getTaskOverviewStats(taskPublishId, taskWeek) {
        COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P2' THEN ltq.email_id END) AS p2_count,
        COUNT(DISTINCT CASE WHEN ltr.reminder_level = 'P3' THEN ltq.email_id END) AS p3_count
      FROM learner_task_queue ltq
+     JOIN learner_account la ON la.email_id = ltq.email_id AND la.user_enabled_indicator = 1
      LEFT JOIN (
        SELECT mps2.email_id, mps2.task_week,
          CASE
