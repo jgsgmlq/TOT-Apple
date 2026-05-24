@@ -107,6 +107,13 @@ async function resolveEntities(state, config) {
 }
 
 function buildAmbiguityPayload(result, filters, fallbackOptions) {
+  const fmtDate = (d) => {
+    if (!d) return '--';
+    if (typeof d === 'string') return d.slice(0, 10);
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    return String(d).slice(0, 10);
+  };
+
   if (result.tasks && result.tasks.status === 'multiple') {
     return {
       type: 'task_ambiguous',
@@ -116,7 +123,7 @@ function buildAmbiguityPayload(result, filters, fallbackOptions) {
         id: t.task_publish_id,
         label: t.task_title,
         value: t.task_publish_id,
-        subtitle: `${t.model_type || ''} · 截止 ${t.due_date ? t.due_date.slice(0, 10) : '--'}`,
+        subtitle: `${t.model_type || ''} · 截止 ${fmtDate(t.due_date)}`,
         match_type: t.match_type,
         score: t.score,
       })),
@@ -129,7 +136,7 @@ function buildAmbiguityPayload(result, filters, fallbackOptions) {
           id: t.task_publish_id,
           label: t.task_title,
           value: t.task_publish_id,
-          subtitle: `${t.model_type || ''} · 截止 ${t.due_date ? t.due_date.slice(0, 10) : '--'}`,
+          subtitle: `${t.model_type || ''} · 截止 ${fmtDate(t.due_date)}`,
         }))
       : [];
     return {
