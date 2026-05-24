@@ -26,9 +26,9 @@
     const { type: rawType = 'bar', title = '', xAxis = [], series = [] } = props.data || {};
 
     // 后端可能返回 funnel/radar 等类型，前端 ECharts 降级到同类笛卡尔图
-    const SUPPORTED = ['bar', 'line', 'pie', 'scatter'];
+    const SUPPORTED = ['bar', 'line', 'pie', 'scatter', 'funnel'];
     const type = SUPPORTED.includes(rawType) ? rawType : 'bar';
-    const isCartesian = type !== 'pie';
+    const isCartesian = type !== 'pie' && type !== 'funnel';
 
     const option: any = {
       title: {
@@ -79,6 +79,16 @@
       };
     }
 
+    // 漏斗图专属配置：移除 grid/dataZoom/legend，设置漏斗特有参数
+    if (type === 'funnel') {
+      delete option.grid;
+      delete option.dataZoom;
+      delete option.legend;
+      delete option.xAxis;
+      delete option.yAxis;
+      option.tooltip = { trigger: 'item', formatter: '{b}: {c}' };
+    }
+
     const highlights = (props.data as any).highlights || [];
 
     // Precision Dashboard 色板（色盲友好）
@@ -110,7 +120,7 @@
     option.series = series.map((s, idx) => {
       const item: any = {
         name: s.name || '',
-        type: ['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar',
+        type: ['bar', 'line', 'pie', 'scatter', 'funnel'].includes(type) ? type : 'bar',
         data: s.data || [],
         itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 },
       };
@@ -140,6 +150,15 @@
       if (type === 'line') {
         item.smooth = true;
         item.symbolSize = 6;
+      }
+
+      if (type === 'funnel') {
+        item.sort = 'descending';
+        item.gap = 2;
+        item.left = '10%';
+        item.width = '80%';
+        item.label = { show: true, position: 'inside', formatter: '{b}: {c}' };
+        item.itemStyle = { borderColor: '#fff', borderWidth: 2 };
       }
 
       // 动态高亮：将高亮的 dataIndex 标为强调色

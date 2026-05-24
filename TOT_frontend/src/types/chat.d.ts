@@ -1,5 +1,5 @@
 export interface ChartData {
-  type: 'bar' | 'line' | 'pie' | 'scatter';
+  type: 'bar' | 'line' | 'pie' | 'scatter' | 'funnel';
   title?: string;
   xAxis?: string[]; // 用于直角坐标系（Bar/Line/Scatter）
   series: {
