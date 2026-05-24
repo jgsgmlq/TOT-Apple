@@ -5,9 +5,12 @@ const { interrupt } = require("@langchain/langgraph");
 const { startNodeSpan } = require('../shared/spanHelper');
 const { endSpan, getClient, NOOP_TRACE } = require('../../../utils/tracer');
 const { makeToolMessage } = require('../toolCallUtils');
+const trace = require('../shared/runTrace');
 
-const humanInTheLoopGate = async (state) => {
+const humanInTheLoopGate = async (state, config) => {
+  const emitter = config?.configurable?.sseEmitter;
   const span = startNodeSpan(state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status, reason: state.ambiguity_payload?.type || null });
+  trace.nodeEnter(emitter, state, 'HumanInTheLoopGate', { hitlStatus: state.hitl_status });
   let payload = state.ambiguity_payload || state.interrupt_payload;
   console.log(`[HITL] 图执行流挂起，等待客户端发送 resume。 payload:`, payload);
 
@@ -19,8 +22,13 @@ const humanInTheLoopGate = async (state) => {
   // FC 循环内的 ask_user 中断：payload 已有 question + options，不需要补全
   const isFcClarification = payload?.type === 'fc_clarification' || payload?.source === 'fc_loop';
 
-  // 缺任务参数时，查询任务列表作为候选（非 FC 内部中断）
-  if (!isFcClarification && payload?.type === 'missing_task_ref') {
+  // 缺任务参数时，查询任务列表作为候选（非 FC 内部中断，且 resolveEntities 未提供 candidates）
+  const hasOptions = Array.isArray(payload?.options) && payload.options.length > 0;
+  const needsLegacyTaskQuery = !isFcClarification
+    && (payload?.type === 'missing_task_ref' || payload?.type === 'vague_task_ref')
+    && !hasOptions;
+
+  if (needsLegacyTaskQuery) {
     try {
       const taskCrud = require('../../../modules/task/crud/taskCrud');
       const tasks = await taskCrud.getTaskList({ statuses: ['dispatched', 'active'] });
@@ -61,7 +69,7 @@ const humanInTheLoopGate = async (state) => {
   if (span && span !== NOOP_TRACE) {
     try { span.event({ name: 'HITL_Resume', input: JSON.stringify(userResponse).slice(0, 200) }); } catch {}
   }
-  const normalized = userResponse?.resumePayload || userResponse?.resume_payload || userResponse?.value || userResponse;
+  const normalized = userResponse?.resumePayload || userResponse?.resume_payload || userResponse;
   const resumeType = normalized?.resume_type
     || normalized?.type
     || (normalized?.selected_option_id?.startsWith('clarify_') ? 'intent_shift' : 'slot_fill');
@@ -76,6 +84,8 @@ const humanInTheLoopGate = async (state) => {
   if (isFcClarification) {
     if (isCancel) {
       endSpan(span, { output: 'fc_hitl_cancel' });
+      trace.decision(emitter, state, 'fc_hitl_cancel', 'user cancelled FC clarification', { node: 'HumanInTheLoopGate' });
+      trace.nodeExit(emitter, state, 'HumanInTheLoopGate', { path: 'fc_hitl_cancel' });
       return {
         hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
         pending_tool_calls: [], fc_next_action: 'finalize',
@@ -83,6 +93,8 @@ const humanInTheLoopGate = async (state) => {
       };
     }
     endSpan(span, { output: 'fc_hitl_continue' });
+    trace.decision(emitter, state, 'fc_hitl_continue', 'user replied to FC clarification', { node: 'HumanInTheLoopGate' });
+    trace.nodeExit(emitter, state, 'HumanInTheLoopGate', { path: 'fc_hitl_continue' });
     const selectedText = typeof normalized?.value === 'string' && normalized.value.trim()
       ? normalized.value.trim()
       : (normalized?.selected_option_id || JSON.stringify(normalized));
@@ -96,6 +108,8 @@ const humanInTheLoopGate = async (state) => {
 
   if (isCancel) {
     endSpan(span, { output: 'cancel' });
+    trace.decision(emitter, state, 'cancel', 'user cancelled', { node: 'HumanInTheLoopGate' });
+    trace.nodeExit(emitter, state, 'HumanInTheLoopGate', { path: 'cancel' });
     const cancelMsg = '已取消本次查询。如需继续，请告诉我新的问题。';
     return {
       hitl_status: 'resumed', interrupt_payload: null, hitl_resume_payload: normalized,
@@ -106,6 +120,8 @@ const humanInTheLoopGate = async (state) => {
 
   if (isIntentShift) {
     endSpan(span, { output: 'intent_shift' });
+    trace.decision(emitter, state, 'intent_shift', 'user changed intent', { node: 'HumanInTheLoopGate' });
+    trace.nodeExit(emitter, state, 'HumanInTheLoopGate', { path: 'intent_shift' });
     const nextUserMessage = userText || state.userMessage;
     const cancelMessages = (state.pending_tool_calls || []).map(tc =>
       makeToolMessage({ id: tc.id || 'unknown', name: tc.name || 'clarify_intent' }, JSON.stringify({ error: 'User cancelled this operation due to intent shift.' }))
@@ -119,6 +135,8 @@ const humanInTheLoopGate = async (state) => {
   }
 
   endSpan(span, { output: resumeType });
+  trace.decision(emitter, state, 'slot_fill', 'user filled missing params', { node: 'HumanInTheLoopGate', resumeType });
+  trace.nodeExit(emitter, state, 'HumanInTheLoopGate', { path: 'slot_fill', resumeType });
 
   // 提取用户选择的参数值（slot_fill）
   const selectedValue = normalized?.value ?? normalized?.selected_option_id ?? normalized;

@@ -3,7 +3,7 @@
 const { buildAmbiguityPayload } = require('../nodes/resolveEntities');
 
 describe('buildAmbiguityPayload', () => {
-  test('tasks multiple → task_ambiguous with candidates', () => {
+  test('tasks multiple → task_ambiguous with options', () => {
     const result = {
       tasks: {
         status: 'multiple',
@@ -18,14 +18,14 @@ describe('buildAmbiguityPayload', () => {
     const filters = { task_name: 'BAU', task_category: null };
     const payload = buildAmbiguityPayload(result, filters);
     expect(payload.type).toBe('task_ambiguous');
-    expect(payload.candidates.length).toBe(2);
-    expect(payload.candidates[0].id).toBe('T1');
-    expect(payload.candidates[0].label).toBe('Task A');
-    expect(payload.candidates[0].subtitle).toContain('BAU');
+    expect(payload.options.length).toBe(2);
+    expect(payload.options[0].id).toBe('T1');
+    expect(payload.options[0].label).toBe('Task A');
+    expect(payload.options[0].subtitle).toContain('BAU');
     expect(payload.resume_type).toBe('slot_fill');
   });
 
-  test('tasks not_found → task_not_found with empty candidates', () => {
+  test('tasks not_found → task_not_found with empty options', () => {
     const result = {
       tasks: { status: 'not_found', items: [] },
       org: { status: 'not_requested', resolved: null },
@@ -35,7 +35,7 @@ describe('buildAmbiguityPayload', () => {
     const payload = buildAmbiguityPayload(result, filters);
     expect(payload.type).toBe('task_not_found');
     expect(payload.question).toContain('NoSuchTask');
-    expect(payload.candidates).toEqual([]);
+    expect(payload.options).toEqual([]);
   });
 
   test('org multiple → org_ambiguous', () => {
@@ -43,7 +43,7 @@ describe('buildAmbiguityPayload', () => {
       tasks: { status: 'not_requested', items: [] },
       org: {
         status: 'multiple',
-        candidates: [
+        options: [
           { code: 'EAST', name: '华东', org_type: 'region' },
           { code: 'WEST', name: '西部', org_type: 'region' }
         ]
@@ -53,7 +53,7 @@ describe('buildAmbiguityPayload', () => {
     const filters = { org_name: '华' };
     const payload = buildAmbiguityPayload(result, filters);
     expect(payload.type).toBe('org_ambiguous');
-    expect(payload.candidates[0].id).toBe('EAST');
+    expect(payload.options[0].id).toBe('EAST');
   });
 
   test('no clarification needed → null', () => {

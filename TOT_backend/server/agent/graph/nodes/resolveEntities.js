@@ -72,7 +72,7 @@ async function resolveEntities(state, config) {
     if (orgMatches.length === 1) {
       result.org = { status: 'resolved', resolved: orgMatches[0] };
     } else if (orgMatches.length >= 2) {
-      result.org = { status: 'multiple', candidates: orgMatches };
+      result.org = { status: 'multiple', options: orgMatches };
       result.needs_clarification = true;
     } else {
       result.org = { status: 'not_found', resolved: null };
@@ -99,7 +99,7 @@ function buildAmbiguityPayload(result, filters) {
       type: 'task_ambiguous',
       prompt: `"${filters.task_name || filters.task_category || '该条件'}" 匹配到 ${result.tasks.items.length} 个任务，请问是哪一个？`,
       question: `"${filters.task_name || filters.task_category || '该条件'}" 匹配到多个任务，请问是哪一个？`,
-      candidates: result.tasks.items.map(t => ({
+      options: result.tasks.items.map(t => ({
         id: t.task_publish_id,
         label: t.task_title,
         value: t.task_publish_id,
@@ -115,7 +115,7 @@ function buildAmbiguityPayload(result, filters) {
       type: 'task_not_found',
       prompt: `未找到"${filters.task_name || '该条件'}"对应的任务。请问是哪个任务？`,
       question: `未找到"${filters.task_name || '该条件'}"对应的任务。请问是哪个任务？`,
-      candidates: [],
+      options: [],
       resume_type: 'slot_fill',
     };
   }
@@ -124,7 +124,7 @@ function buildAmbiguityPayload(result, filters) {
       type: 'org_ambiguous',
       prompt: `"${filters.org_name}" 匹配到 ${result.org.candidates.length} 个组织，请问是哪一个？`,
       question: `"${filters.org_name}" 匹配到多个组织，请问是哪一个？`,
-      candidates: result.org.candidates.map(o => ({
+      options: result.org.candidates.map(o => ({
         id: o.code, label: o.name, value: o.code,
       })),
       resume_type: 'slot_fill',

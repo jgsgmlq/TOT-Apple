@@ -8,6 +8,7 @@ const { extractPlottableData } = require('../shared/extractPlottableData');
 const { BlocksOutput } = require('../shared/blocksSchema');
 const { fcModel, getStructuredModel } = require('../llm');
 const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
+const { buildEntityContext } = require('./resolveEntities');
 const trace = require('../shared/runTrace');
 
 const MAX_REPAIR_ATTEMPTS = 2;
@@ -233,15 +234,17 @@ const finalResponseStep = async (state, config) => {
       }
 
       const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      const intent = state.intent || '';
-      const nowBlock = '\n\nCONTEXT:\n- 当前时间: ' + dataTimestamp + '\n- 用户意图倾向: ' + intent + '（仅供理解上下文，以实际工具查询结果为准）';
+      const timestampBlock = '\n\n当前时间: ' + dataTimestamp;
+      const entityCtx = buildEntityContext(state);
 
       const prompt = promptRegistry.get('final_response');
       const fullPrompt = prompt
         + '\n\n' + renderConversation(state.conversation || [])
         + '\n\n' + renderLongTerm(state.long_term_memories || '')
+        + entityCtx
         + '\n\n用户问题: ' + state.userMessage
-        + '\n\n工具查询结果:\n' + resultsText + datasetsBlock + nowBlock;
+        + '\n\n工具查询结果:\n' + resultsText + datasetsBlock
+        + timestampBlock;
 
       let parsed = null;
       let lastError = '';
