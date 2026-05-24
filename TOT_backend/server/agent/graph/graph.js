@@ -9,15 +9,20 @@ const { fc_ExecuteTool } = require("./nodes/fc_ExecuteTool");
 const { fc_MergeToolResults } = require("./nodes/fc_MergeToolResults");
 
 const { humanInTheLoopGate } = require("./nodes/humanInTheLoopGate");
+const { resolveEntities } = require("./nodes/resolveEntities");
 const { finalResponseStep } = require("./nodes/finalResponseStep");
 const { persistAndEmit } = require("./nodes/persistAndEmit");
 const { maybeWrapNode, maybeWrapRoute } = require("./shared/graphDebugger");
 
 const routeAfterSafetyGateway = (state) => {
-  if (state.mode === "deny") return "deny";
-  if (state.mode === "chat") return "chat";
-  if (state.ambiguity_payload) return "hitl";
-  return "fc";
+  if (state.mode === "deny") return "FinalResponseStep";
+  if (state.mode === "chat") return "FinalResponseStep";
+  return "resolveEntities";
+};
+
+const routeAfterResolveEntities = (state) => {
+  if (state.ambiguity_payload) return "HumanInTheLoopGate";
+  return "fc_CheckSteps";
 };
 
 const routeAfterFcCheckSteps = (state) => {
@@ -69,6 +74,7 @@ const buildGraph = () => {
   const workflow = new StateGraph(ExecChatGraphState)
     .addNode("LoadContext", wn("LoadContext", loadContext))
     .addNode("SafetyGateway", wn("SafetyGateway", safetyGateway))
+    .addNode("resolveEntities", wn("resolveEntities", resolveEntities))
     .addNode("fc_CheckSteps", wn("fc_CheckSteps", fc_CheckSteps))
     .addNode("fc_LlmToolCallStep", wn("fc_LlmToolCallStep", fc_LlmToolCallStep))
     .addNode("fc_CheckDuplicate", wn("fc_CheckDuplicate", fc_CheckDuplicate))
@@ -83,10 +89,13 @@ const buildGraph = () => {
   workflow.addEdge("LoadContext", "SafetyGateway");
 
   workflow.addConditionalEdges("SafetyGateway", wr("SafetyGateway", routeAfterSafetyGateway), {
-    deny: "FinalResponseStep",
-    chat: "FinalResponseStep",
-    hitl: "HumanInTheLoopGate",
-    fc: "fc_CheckSteps",
+    "FinalResponseStep": "FinalResponseStep",
+    "resolveEntities": "resolveEntities",
+  });
+
+  workflow.addConditionalEdges("resolveEntities", wr("resolveEntities", routeAfterResolveEntities), {
+    "HumanInTheLoopGate": "HumanInTheLoopGate",
+    "fc_CheckSteps": "fc_CheckSteps",
   });
 
   workflow.addConditionalEdges("fc_CheckSteps", wr("fc_CheckSteps", routeAfterFcCheckSteps), {
@@ -129,6 +138,7 @@ const buildGraph = () => {
 module.exports = {
   buildGraph,
   routeAfterSafetyGateway,
+  routeAfterResolveEntities,
   routeAfterFcCheckSteps,
   routeAfterFcLlm,
   routeAfterCheckDuplicate,

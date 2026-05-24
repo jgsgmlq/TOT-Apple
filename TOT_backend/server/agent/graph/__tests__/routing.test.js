@@ -2,6 +2,7 @@
 
 const {
   routeAfterSafetyGateway,
+  routeAfterResolveEntities,
   routeAfterFcCheckSteps,
   routeAfterFcLlm,
   routeAfterCheckDuplicate,
@@ -16,21 +17,27 @@ const aiMsg = (content, opts = {}) => ({
   ...opts,
 });
 
-describe("Route functions (v2)", () => {
+describe("Route functions (v3)", () => {
   describe("routeAfterSafetyGateway", () => {
     test("deny → FinalResponseStep", () => {
-      expect(routeAfterSafetyGateway({ mode: "deny" })).toBe("deny");
+      expect(routeAfterSafetyGateway({ mode: "deny" })).toBe("FinalResponseStep");
     });
     test("chat → FinalResponseStep", () => {
-      expect(routeAfterSafetyGateway({ mode: "chat", ambiguity_payload: null })).toBe("chat");
+      expect(routeAfterSafetyGateway({ mode: "chat" })).toBe("FinalResponseStep");
     });
-    test("tool + ambiguity → HITL", () => {
-      expect(routeAfterSafetyGateway({
-        mode: "tool", ambiguity_payload: { type: "missing_task_ref", question: "哪个任务？" }
-      })).toBe("hitl");
+    test("tool → resolveEntities", () => {
+      expect(routeAfterSafetyGateway({ mode: "tool" })).toBe("resolveEntities");
     });
-    test("tool + no ambiguity → FC", () => {
-      expect(routeAfterSafetyGateway({ mode: "tool", ambiguity_payload: null })).toBe("fc");
+  });
+
+  describe("routeAfterResolveEntities", () => {
+    test("has ambiguity → HumanInTheLoopGate", () => {
+      expect(routeAfterResolveEntities({
+        ambiguity_payload: { type: "task_ambiguous", question: "哪个任务？" }
+      })).toBe("HumanInTheLoopGate");
+    });
+    test("no ambiguity → fc_CheckSteps", () => {
+      expect(routeAfterResolveEntities({ ambiguity_payload: null })).toBe("fc_CheckSteps");
     });
   });
 
