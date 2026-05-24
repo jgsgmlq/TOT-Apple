@@ -482,4 +482,32 @@ module.exports = {
   incrementInsightVote,
   decrementInsightVote,
   getInsightVotes,
+  normalizeForNameSearch,
+  tokenizeForSearch,
 };
+
+// ─── 名称规范化 ────────────────────────────────────────────────────────────
+
+function normalizeForNameSearch(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/\s+/g, '')
+    .replace(/｜/g, '|')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/，/g, ',')
+    .replace(/：/g, ':')
+    .replace(/；/g, ';')
+    .replace(/！/g, '!');
+}
+
+function tokenizeForSearch(str) {
+  const normalized = normalizeForNameSearch(str);
+  if (normalized.length === 0) return [];
+  const tokens = [];
+  for (let i = 0; i < normalized.length - 1; i++) {
+    tokens.push(normalized.slice(i, i + 2));
+  }
+  tokens.push(normalized);
+  return [...new Set(tokens)];
+}

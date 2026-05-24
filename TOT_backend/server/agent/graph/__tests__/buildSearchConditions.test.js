@@ -26,11 +26,12 @@ describe('buildSearchConditions', () => {
     expect(conds.some(c => c.includes('due_date IS NULL'))).toBe(false);
   });
 
-  test('name 生成去空格 LIKE 双条件', () => {
+  test('name 生成去空格+全角转半角 LIKE 双条件', () => {
     const { conds, params } = buildSearchConditions({ name: 'iPhone 17' });
-    expect(conds.some(c => c.includes('REPLACE(tp.task_title, " ", "") LIKE ?'))).toBe(true);
+    expect(conds.some(c => c.includes("REPLACE(REPLACE(REPLACE(REPLACE(tp.task_title, ' ', ''), '｜', '|'), '（', '('), '）', ')') LIKE ?"))).toBe(true);
     expect(params).toContain('%iPhone 17%');
-    expect(params).toContain('%iPhone17%');
+    const kwParams = params.filter(p => p === '%iPhone17%');
+    expect(kwParams.length).toBe(1);
   });
 
   test('category 精确匹配 campaign_activity.model_type', () => {
