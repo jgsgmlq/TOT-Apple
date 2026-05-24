@@ -282,7 +282,40 @@ async function searchTasks(filters = {}) {
                ORDER BY tp.due_date ASC
                LIMIT ?`;
   params.push(filters.limit || 10);
-  return await all(sql, params);
+  let rows = await all(sql, params);
+
+  // 关键词 fallback：精确 LIKE 没匹配到且用户给了 task_name
+  if (rows.length === 0 && filters.name) {
+    const tokens = tokenizeForSearch(filters.name);
+    if (tokens.length > 0) {
+      const { conds: baseConds, params: baseParams } = buildSearchConditions({
+        ...filters,
+        name: null,  // 去掉 name 条件，用关键词替代
+      });
+      const tokenConds = tokens.map(() => 'tp.task_title LIKE ?').join(' OR ');
+      const keywordSql = `SELECT tp.task_publish_id, tp.task_title, tp.due_date, tp.publish_status,
+                                  tp.urgency_level, tp.platform_scope,
+                                  ca.model_type, ca.topic_name
+                           FROM task_publish tp
+                           LEFT JOIN campaign_activity ca ON ca.activity_id = tp.activity_id
+                           WHERE ${baseConds.join(' AND ')} AND (${tokenConds})
+                           LIMIT 50`;
+      const tokenParams = tokens.map(t => `%${t}%`);
+      const keywordRows = await all(keywordSql, [...baseParams, ...tokenParams]);
+
+      const normalizedInput = normalizeForNameSearch(filters.name);
+      const scored = keywordRows.map(row => {
+        const normalizedTitle = normalizeForNameSearch(row.task_title || '');
+        const matchCount = tokens.filter(t => normalizedTitle.includes(t)).length;
+        const fullMatch = normalizedTitle.includes(normalizedInput) ? 10 : 0;
+        return { ...row, match_score: matchCount + fullMatch };
+      });
+      scored.sort((a, b) => b.match_score - a.match_score);
+      rows = scored.slice(0, 5);
+    }
+  }
+
+  return rows;
 }
 
 // ═══════════════════════════════════════════════════════════════════
