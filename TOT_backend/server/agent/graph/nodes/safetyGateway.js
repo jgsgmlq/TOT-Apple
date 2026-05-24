@@ -99,8 +99,9 @@ async function safetyGateway(state, config) {
     endSpan(span, { output: `mode=${mode}`, metadata: { mode, ambiguity: ambiguity?.type || null } });
     trace.decision(emitter, state, `mode=${mode}`, parsed.reason || '', {
       node: 'SafetyGateway',
-      task_ref: parsed.extracted.task_ref,
-      org_ref: parsed.extracted.org_ref,
+      task_name: parsed.filters.task_name,
+      task_category: parsed.filters.task_category,
+      org_name: parsed.filters.org_name,
       ambiguity: ambiguity?.type || null,
     });
     trace.nodeExit(emitter, state, 'SafetyGateway', { mode, ambiguity: ambiguity?.type || null });
