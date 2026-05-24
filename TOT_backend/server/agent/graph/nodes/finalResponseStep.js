@@ -5,7 +5,7 @@ const { startNodeSpan } = require('../shared/spanHelper');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const promptRegistry = require('../../../prompts/registry');
 const { extractPlottableData } = require('../shared/extractPlottableData');
-const { BlocksOutput } = require('../shared/blocksSchema');
+const { BlocksOutput, PlannerOutput } = require('../shared/blocksSchema');
 const { fcModel, getStructuredModel } = require('../llm');
 const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
 const { buildEntityContext } = require('./resolveEntities');
@@ -150,6 +150,74 @@ function getLatestToolExecuteAt(toolResults) {
   return latest;
 }
 
+// ─── 两轮 LLM 调用辅助函数 ──────────────────────────────────────────────────
+
+function buildDataBlock(state, toolItems, plottableDatasets) {
+  const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
+
+  let datasetsBlock = '';
+  if (plottableDatasets.length > 0) {
+    const summary = plottableDatasets.map(ds => ({
+      id: ds.id,
+      title: ds.title,
+      labelCount: ds.xAxis?.length || 0,
+      sampleRows: ds.sampleRows || [],
+    }));
+    datasetsBlock = '\n\nAVAILABLE DATASETS (通过 chart/table block 的 datasetId 引用，不要编造):\n' + JSON.stringify(summary, null, 2);
+  }
+
+  const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const timestampBlock = '\n\n当前时间: ' + dataTimestamp;
+  const entityCtx = buildEntityContext(state);
+
+  return '\n\n' + renderConversation(state.conversation || [])
+    + '\n\n' + renderLongTerm(state.long_term_memories || '')
+    + entityCtx
+    + '\n\n用户问题: ' + state.userMessage
+    + '\n\n工具查询结果:\n' + resultsText + datasetsBlock
+    + timestampBlock;
+}
+
+async function runStructuredRound(llm, systemPrompt, humanInstruction, schema, maxAttempts, signal) {
+  let parsed = null;
+  let lastError = '';
+
+  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+    let rawText = '';
+    const repairSuffix = attempt > 0
+      ? '\n\n上次输出校验失败，错误如下:\n' + lastError + '\n请修正后重新输出。'
+      : '';
+
+    const stream = await llm.stream([
+      new SystemMessage(systemPrompt + repairSuffix),
+      new HumanMessage(humanInstruction)
+    ], { signal });
+
+    for await (const chunk of stream) {
+      const delta = typeof chunk.content === 'string' ? chunk.content : '';
+      if (delta) rawText += delta;
+    }
+
+    let rawJson;
+    try { rawJson = JSON.parse(rawText); } catch (_) {
+      try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
+    }
+
+    parsed = schema.safeParse(rawJson);
+    console.log('[runStructuredRound] attempt=' + attempt + ' success=' + parsed.success + ' rawLen=' + rawText.length);
+    if (!parsed.success) {
+      const issues = parsed.error?.issues || parsed.error?.message;
+      console.log('[runStructuredRound] Zod error:', JSON.stringify(issues).substring(0, 300));
+    }
+
+    if (parsed.success) break;
+
+    lastError = JSON.stringify(parsed.error?.issues || parsed.error?.message || '');
+  }
+
+  return { parsed, lastError };
+}
+
 // ─── 主节点 ────────────────────────────────────────────────────────────────
 
 const finalResponseStep = async (state, config) => {
@@ -210,89 +278,112 @@ const finalResponseStep = async (state, config) => {
         response = '你好！我是您的 Executive Chat 智能助理。我能帮您查询门店表现、任务完成率、下钻区域数据等。';
       }
     } else {
-      // ── tool mode: BlocksOutput + repair loop ──────────────────────────
+      // ── tool mode: 两轮 LLM 调用 —— Plan → Execute ────────────────────
       const llm = getStructuredModel();
       const traceId = config?.configurable?.traceId;
       const client = getClient();
-      const gen = client && traceId
-        ? client.generation({ traceId, name: 'FinalResponse_Structured', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
-        : NOOP_TRACE.generation({ name: 'FinalResponse_Structured' });
+      const plnGen = client && traceId
+        ? client.generation({ traceId, name: 'FinalResponse_Planner', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
+        : NOOP_TRACE.generation({ name: 'FinalResponse_Planner' });
+      const execGen = client && traceId
+        ? client.generation({ traceId, name: 'FinalResponse_Execute', model: 'deepseek-chat', input: maskPII(state.userMessage), metadata: { mode: 'tool' } })
+        : NOOP_TRACE.generation({ name: 'FinalResponse_Execute' });
 
       const toolItems = prepareToolData(state.toolResults);
-      const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
-
       const plottableDatasets = extractPlottableData(state.toolResults || {});
-      let datasetsBlock = '';
-      if (plottableDatasets.length > 0) {
-        const summary = plottableDatasets.map(ds => ({
-          id: ds.id,
-          title: ds.title,
-          labelCount: ds.xAxis?.length || 0,
-          sampleRows: ds.sampleRows || [],
-        }));
-        datasetsBlock = '\n\nAVAILABLE DATASETS (通过 chart/table block 的 datasetId 引用，不要编造):\n' + JSON.stringify(summary, null, 2);
+      const dataBlock = buildDataBlock(state, toolItems, plottableDatasets);
+
+      // 发送 SSE trace 告知用户正在分析
+      if (emitter && typeof emitter.handleTrace === 'function') {
+        emitter.handleTrace({
+          ts: Date.now(),
+          type: 'status',
+          node: 'FinalResponseStep',
+          data: { message: '正在分析问题...' },
+        });
       }
 
-      const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      const timestampBlock = '\n\n当前时间: ' + dataTimestamp;
-      const entityCtx = buildEntityContext(state);
+      // ═══ 第一轮：规划 ═══
+      const plannerPrompt = promptRegistry.get('final_response_planner') + dataBlock;
 
-      const prompt = promptRegistry.get('final_response');
-      const fullPrompt = prompt
-        + '\n\n' + renderConversation(state.conversation || [])
-        + '\n\n' + renderLongTerm(state.long_term_memories || '')
-        + entityCtx
-        + '\n\n用户问题: ' + state.userMessage
-        + '\n\n工具查询结果:\n' + resultsText + datasetsBlock
-        + timestampBlock;
+      const plannerResult = await runStructuredRound(
+        llm,
+        plannerPrompt,
+        '分析用户问题，输出严格的 JSON 对象。',
+        PlannerOutput,
+        MAX_REPAIR_ATTEMPTS,
+        config?.signal
+      );
 
-      let parsed = null;
-      let lastError = '';
+      let plannerData = null;
+      if (plannerResult.parsed?.success) {
+        plannerData = plannerResult.parsed.data;
+        // 空 selectedDatasets 触发一次额外 retry
+        if (!plannerData.selectedDatasets || plannerData.selectedDatasets.length === 0) {
+          console.log('[FinalResponseStep] Planner returned empty selectedDatasets, retrying...');
+          const retryResult = await runStructuredRound(
+            llm,
+            plannerPrompt + '\n\n你必须选择至少一个数据集。请重新分析。',
+            '分析用户问题，输出严格的 JSON 对象。必须选择至少一个 datasetId。',
+            PlannerOutput,
+            1,
+            config?.signal
+          );
+          if (retryResult.parsed?.success) {
+            plannerData = retryResult.parsed.data;
+          }
+        }
+        endGeneration(plnGen, { output: maskPII(preview(JSON.stringify(plannerData))), model: 'deepseek-chat' });
+      } else {
+        endGeneration(plnGen, { output: maskPII(preview(plannerResult.lastError)), level: 'WARNING', statusMessage: plannerResult.lastError, model: 'deepseek-chat' });
+      }
 
-      for (let attempt = 0; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
-        try {
-          let rawText = '';
-          const repairSuffix = attempt > 0
-            ? '\n\n上次输出校验失败，错误如下:\n' + lastError + '\n请修正后重新输出。'
-            : '';
-          const stream = await llm.stream([
-            new SystemMessage(fullPrompt + repairSuffix),
-            new HumanMessage('输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。')
-          ], { signal: config?.signal });
-          for await (const chunk of stream) {
-            const delta = typeof chunk.content === 'string' ? chunk.content : '';
-            if (delta) rawText += delta;
-          }
-          let rawJson;
-          try { rawJson = JSON.parse(rawText); } catch (_) {
-            try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
-          }
+      // 构建 planner 分析段落
+      const plannerSection = plannerData
+        ? '\n\n[问题分析]\n' + plannerData.analysis + '\n\n建议呈现方式: ' + plannerData.suggestedApproach
+        : '\n\n[问题分析]\n（规划阶段未完成，请根据数据和用户问题自行判断最佳回答方式）';
 
-          parsed = BlocksOutput.safeParse(rawJson);
-          console.log('[FinalResponseStep] attempt=' + attempt + ' success=' + parsed.success + ' blocks=' + (parsed.success ? parsed.data.blocks.length : 0) + ' rawLen=' + rawText.length);
-          if (!parsed.success) {
-            console.log('[FinalResponseStep] Zod error:', JSON.stringify(parsed.error?.issues || parsed.error?.message).substring(0, 300));
-            console.log('[FinalResponseStep] Raw (first 500):', rawText.substring(0, 500));
+      // ═══ 第二轮：执行 ═══
+      const execPrompt = promptRegistry.get('final_response', { plannerAnalysis: plannerSection.trim() }) + dataBlock;
+
+      const MAX_EXEC_ATTEMPTS = MAX_REPAIR_ATTEMPTS;
+      let execParsed = null;
+      let execLastError = '';
+
+      for (let attempt = 0; attempt <= MAX_EXEC_ATTEMPTS; attempt++) {
+        const result = await runStructuredRound(
+          llm,
+          execPrompt + (attempt > 0 ? '' : ''),
+          '输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。',
+          BlocksOutput,
+          0,  // 单次，repair 由外层 handle
+          config?.signal
+        );
+
+        execParsed = result.parsed;
+        execLastError = result.lastError;
+        console.log('[FinalResponseStep] exec attempt=' + attempt + ' success=' + (execParsed?.success || false));
+
+        if (execParsed?.success && execParsed.data.blocks.length > 0) {
+          const datasetIds = new Set(plottableDatasets.map(d => d.id));
+          const orphanIds = execParsed.data.blocks
+            .filter(b => (b.type === 'chart' || b.type === 'table') && !datasetIds.has(b.datasetId))
+            .map(b => b.datasetId);
+          if (orphanIds.length > 0) {
+            execLastError = '以下 datasetId 不在 AVAILABLE DATASETS 中: ' + orphanIds.join(', ') + '。可用的: ' + [...datasetIds].join(', ');
+            console.log('[FinalResponseStep] orphan datasetIds on attempt=' + attempt + ': ' + orphanIds.join(', '));
+            continue;
           }
-          if (parsed.success && parsed.data.blocks.length > 0) {
-            const datasetIds = new Set(plottableDatasets.map(d => d.id));
-            const orphanIds = parsed.data.blocks
-              .filter(b => (b.type === 'chart' || b.type === 'table') && !datasetIds.has(b.datasetId))
-              .map(b => b.datasetId);
-            if (orphanIds.length > 0) {
-              lastError = '以下 datasetId 不在 AVAILABLE DATASETS 中: ' + orphanIds.join(', ') + '。可用的: ' + [...datasetIds].join(', ');
-              continue;
-            }
-            break;
-          } else {
-            lastError = parsed.success
-              ? 'blocks 数组为空'
-              : JSON.stringify(parsed.error.issues || parsed.error.message);
-          }
-        } catch (err) {
-          lastError = err.message;
+          break;
+        } else {
+          execLastError = execParsed?.success
+            ? 'blocks 数组为空'
+            : JSON.stringify(execParsed?.error?.issues || execParsed?.error?.message || '');
         }
       }
+
+      const parsed = execParsed;
+      const lastError = execLastError;
 
       if (parsed && parsed.success && parsed.data.blocks.length > 0) {
         const datasetMap = new Map();
@@ -314,6 +405,7 @@ const finalResponseStep = async (state, config) => {
           }
         }
 
+        const dataTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
         const provenance = parsed.data._provenance || {};
         const toolCutoff = getLatestToolExecuteAt(state.toolResults);
         const dataCutoff = toolCutoff
@@ -345,10 +437,10 @@ const finalResponseStep = async (state, config) => {
           _contentText: contentText,
         });
 
-        endGeneration(gen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
+        endGeneration(execGen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
       } else {
         response = '抱歉，查询过程中遇到了问题，请稍后重试或尝试缩小查询范围。';
-        endGeneration(gen, { output: maskPII(preview(response)), level: 'WARNING', statusMessage: lastError, model: 'deepseek-chat' });
+        endGeneration(execGen, { output: maskPII(preview(response)), level: 'WARNING', statusMessage: lastError, model: 'deepseek-chat' });
       }
     }
   }

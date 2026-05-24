@@ -25,7 +25,7 @@ const PROMPTS = {
   safety_gateway:    { version: 'safety_gateway/v1',       get: () => loadPrompt('safety_gateway_v1') },
   safety_gateway_v2: { version: 'safety_gateway/v2',       get: (ctx) => loadAndRender('safety_gateway_v2', ctx || {}) },
   final_response_planner: { version: 'final_response_planner/v1', get: () => loadPrompt('final_response_planner_v1') },
-  final_response:    { version: 'final_response/v3',       get: () => loadPrompt('final_response_v3') },
+  final_response:    { version: 'final_response/v3',       get: (ctx) => loadAndRender('final_response_v3', ctx || {}) },
   title_generator:   { version: 'title/v1',                get: () => loadPrompt('title_generator_v1') },
 };
 
