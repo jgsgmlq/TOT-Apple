@@ -16,7 +16,7 @@
 【防线 1】SafetyGateway — 口语理解 + 指代消解 + self-review
     ↓  输出干净的 task_name，或标记 ambiguity
 【防线 2】searchTasks — normalize + 2-gram 关键词 fallback
-    ↓  精确匹配 → 关键词匹配 → 宽泛兜底
+    ↓  精确匹配 → 关键词匹配（整串加权）→ 宽泛兜底
 【防线 3】HITL task_not_found — 带候选的选项
     ↓  至少给用户几个"可能是指"的选项
 ```
@@ -60,14 +60,18 @@
 
 **不做的**：代码级 sanitizeTaskName()。噪音模式枚举不完，LLM 懂中文语法，靠 prompt 指导就够了。
 
+**对话历史完整性**：`extractContentText` 目前只提取 markdown/keyNumbers/insights 的文本，不提取 table block 内容。需要补上 table 数据，确保对话历史中 tables 里的任务名也能被 SafetyGateway 看到。
+
+**兜底**：指代消解最终仍失败时，走 HITL 让用户选择/重新输入。
+
 ### 防线 2：searchTasks 关键词容错
 
 在 `searchTasks` 中增加 fallback 逻辑：
 
 当完整 LIKE 匹配返回 0 时：
 
-1. **关键词匹配**：将 `filters.name` 做 `normalizeForNameSearch()` 后，按中文 2-gram 拆词，每个关键词 `LIKE '%kw%'`
-2. **按匹配度排序**：匹配到的关键词数量多的排前面，取前 5 个
+1. **关键词匹配**：`normalizeForNameSearch()` + 中文 2-gram 拆词，每个关键词 `LIKE '%kw%'`
+2. **按匹配度排序**：匹配到的关键词数量多的排前面。**整串包含加权最高**——如果 normalize 后的完整输入直接出现在 task_title 的 normalize 结果中，排第一
 3. **如果关键词也找不到**：去掉 name 条件，按 category/platform/status 宽泛搜索，返回前 5 个
 
 `normalizeForNameSearch` 扩展现有全角转半角逻辑，补全常见字符：
@@ -91,50 +95,50 @@ function tokenizeForSearch(str) {
   for (let i = 0; i < normalized.length - 1; i++) {
     tokens.push(normalized.slice(i, i + 2));
   }
-  tokens.push(normalized);
+  tokens.push(normalized); // 完整字符串，整串匹配权重最高
   return [...new Set(tokens)];
 }
 ```
 
 ### 防线 3：HITL task_not_found 带候选
 
-`resolveEntities.js` 的 `buildAmbiguityPayload` — 当 `status=not_found` 时：
-
-改为用 `searchTasks`（去掉 name 条件，保留 category/platform/statuses）做宽泛搜索填 options，不再用 `taskCrud.getTaskList()`。
+`buildAmbiguityPayload` 保持纯函数。异步 I/O（宽泛搜索）留在 `resolveEntities` 里完成，结果通过新参数传入：
 
 ```javascript
-// not_found case: 用宽泛条件重搜填候选
+// resolveEntities: not_found 时先做宽泛搜索
 const fallbackMatches = await dashboardMysqlCrud.searchTasks({
   category: qf.task_category,
   platform: qf.platform,
   statuses,
   limit: 5,
 });
-options: fallbackMatches.map(t => ({
-  id: t.task_publish_id,
-  label: t.task_title,
-  value: t.task_publish_id,
-  subtitle: `${t.model_type || ''} · 截止 ${t.due_date ? t.due_date.slice(0, 10) : '--'}`,
-}))
+const payload = buildAmbiguityPayload(result, qf, fallbackMatches);
 ```
+
+`buildAmbiguityPayload` 新增第三个参数 `fallbackOptions`，not_found case 时用它填 options。不用 `taskCrud.getTaskList()`。
 
 ## 实现决策总结
 
 | 决策 | 选择 |
 |------|------|
-| SafetyGateway 改进方式 | prompt-only，加口语理解 + self-review，不加 schema 字段 |
+| SafetyGateway 改进方式 | prompt-only，加口语理解 + self-review，不升级 schema |
 | 代码级 sanitizeTaskName | 不做——噪音模式枚举不完 |
+| 对话历史完整性 | 补 extractContentText 对 table 的提取 |
 | searchTasks 2-gram | 保留——过度设计没坏处 |
+| 关键词匹配排序 | 整串包含加权最高 |
 | HITL 候选来源 | 统一用 `searchTasks`，不用 `taskCrud.getTaskList()` |
+| buildAmbiguityPayload | 保持纯函数，fallbackOptions 参数传入 |
+| ADR | 不需要——ADR-0001 已覆盖架构，v3 是渐进增强 |
 | 实现顺序 | 三个防线同时做 |
 
 ## 改动范围
 
 | 文件 | 改动 |
 |------|------|
-| `prompts/src/safety_gateway_v2.md` | 增加口语理解规则、指代消解规则、对话历史利用、self-review 步骤 |
-| `modules/dashboard/crud/dashboardMysqlCrud.js` | `searchTasks` 增加关键词 fallback；新增/扩展 normalize 函数；新增 `tokenizeForSearch` |
-| `agent/graph/nodes/resolveEntities.js` | `buildAmbiguityPayload` 的 not_found case 用 searchTasks 填 options |
+| `prompts/src/safety_gateway_v2.md` | 口语理解规则、指代消解、对话历史利用、self-review |
+| `agent/graph/nodes/finalResponseStep.js` | `extractContentText` 补 table block 提取 |
+| `modules/dashboard/crud/dashboardMysqlCrud.js` | `searchTasks` 关键词 fallback；扩展 normalize；新增 tokenizeForSearch |
+| `agent/graph/nodes/resolveEntities.js` | not_found case 宽泛搜索填 fallbackOptions；`buildAmbiguityPayload` 新增参数 |
 
 ## 验证方式
 
@@ -145,10 +149,10 @@ curl ... "那个跨渠道BAU的任务看看具体情况" → 期望：正确匹�
 # 测试部分关键词
 curl ... "跨渠道" → 期望：找到包含"跨渠道"的任务
 
-# 测试指代消解（需要两轮对话）
+# 测试指代消解（两轮对话）
 第1轮："有哪些进行中的任务" → 返回任务列表
 第2轮："看看第三个" → 期望：正确找到第3个任务
 
 # 测试找不到但有候选
-curl ... "不存在的任务名XYZ" → 期望：HITL 返回相关任务的候选列表，不为空
+curl ... "不存在的任务名XYZ" → 期望：HITL 返回候选列表，不为空
 ```
