@@ -1,6 +1,6 @@
 'use strict';
 
-const taskCrud = require('../modules/task/crud/taskCrud');
+const mysqlCrud = require('../modules/dashboard/crud/dashboardMysqlCrud');
 
 module.exports = {
   schema: {
@@ -30,32 +30,29 @@ module.exports = {
   handler: async (args, regionScope) => {
     const statuses = args.status === 'ended'
       ? ['ended'] : args.status === 'active'
-      ? ['active'] : ['active', 'ended'];
+      ? ['dispatched'] : ['dispatched', 'ended'];
 
-    const pageSize = args.page_size || 20;
-    const offset = ((args.page || 1) - 1) * pageSize;
-    const tasks = await taskCrud.getTaskList({ statuses, limit: Math.min(pageSize, 100), offset });
+    const limit = Math.min(args.page_size || 20, 100);
 
-    if (!tasks || tasks.length === 0) {
-      return { success: true, data: { total_count: 0, rows: [] } };
-    }
+    const rows = await mysqlCrud.searchTasks({
+      name: args.keyword || null,
+      platform: args.platform || null,
+      statuses,
+      limit,
+    });
 
-    let rows = tasks.map(t => ({
-      task_id: t.id, task_name: t.name, platform: t.platform || null,
-      priority: t.priority || null, status: t.publish_status || t.status,
-      start_date: t.start_at || null, deadline: t.ddl_at || t.due_date,
-      completion_rate: t.completionRate || 0, learning_count: t.learningCount || 0
-    }));
-
-    if (args.keyword) {
-      const kw = args.keyword.toLowerCase();
-      rows = rows.filter(r => String(r.task_name).toLowerCase().includes(kw));
-    }
-
-    if (args.platform) {
-      rows = rows.filter(r => r.platform === args.platform);
-    }
-
-    return { success: true, data: { total_count: rows.length, rows } };
+    return {
+      success: true,
+      data: {
+        total_count: rows.length,
+        rows: rows.map(t => ({
+          task_id: t.task_publish_id, task_name: t.task_title,
+          platform: (() => { try { return JSON.parse(t.platform_scope || '[]')[0] || null; } catch (_) { return null; } })(),
+          priority: t.urgency_level || null, status: t.publish_status,
+          start_date: t.start_date || null, deadline: t.due_date,
+          completion_rate: 0, learning_count: 0
+        }))
+      }
+    };
   }
 };

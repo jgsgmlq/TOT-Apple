@@ -32,9 +32,7 @@ module.exports = {
       return { success: false, errorCode: 'MISSING_PARAM', message: '参数 task_id 是必填的' };
     }
 
-    let taskId = rawId;
-    const matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
-    if (matches.length > 0) taskId = matches[0].task_publish_id;
+    const taskId = rawId;
 
     const trendData = await queryEngine.getTrendBoardData({ taskId, type: 'daily' });
     return {

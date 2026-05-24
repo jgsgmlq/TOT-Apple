@@ -33,19 +33,7 @@ module.exports = {
       };
     }
 
-    // 模糊搜索：先全词，再逐词缩短
     let taskId = rawId;
-    let matches = await mysqlCrud.searchTasks(rawId.toLowerCase());
-    if (matches.length === 0) {
-      const words = rawId.split(/[\s，,、]+/).filter(w => w.length > 1);
-      for (let i = words.length - 1; i >= 1; i--) {
-        matches = await mysqlCrud.searchTasks(words.slice(0, i).join(' ').toLowerCase());
-        if (matches.length > 0) break;
-      }
-    }
-    if (matches.length > 0) {
-      taskId = matches[0].task_publish_id;
-    }
 
     const [overview, funnel, alerts] = await Promise.all([
       queryEngine.getOverviewBoardData({ taskId }).catch(() => null),

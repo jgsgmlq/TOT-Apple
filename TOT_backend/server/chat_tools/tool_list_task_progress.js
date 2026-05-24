@@ -68,14 +68,6 @@ module.exports = {
     const nowTs = now.getTime();
 
     let filtered = rows;
-    // 默认行为：查询 active 任务时自动排除已截止的（due_date < now）
-    if (args.status !== 'ended' && args.status !== 'all') {
-      filtered = filtered.filter(r => {
-        if (!r.deadline) return true; // 无截止日期的不排除
-        const d = new Date(r.deadline);
-        return isNaN(d.getTime()) || d.getTime() >= nowTs;
-      });
-    }
 
     if (args.filters) {
       if (args.filters.completion_rate_max != null) {

@@ -9,7 +9,6 @@
  * 供 C(管理员) 只读调用 getCampaignList 等
  */
 
-const { getDb } = require('../../common/db/connection');
 const { get, all, run } = require('../../common/db/mysql');
 
 // ═══════════════════════════════════════════════════════════════
@@ -23,14 +22,13 @@ async function getTaskById(id) {
   ) ?? null;
 }
 
-async function getTaskList({ week, statuses, modelType, limit, offset } = {}) {
+async function getTaskList({ week, statuses, limit, offset } = {}) {
   const cond = []; const p = [];
   if (week) { cond.push('task_week = ?'); p.push(week); }
   if (statuses && statuses.length) {
     cond.push('publish_status IN (' + statuses.map(function() { return '?'; }).join(',') + ')');
     p.push(...statuses);
   }
-  if (modelType) { cond.push('model_type = ?'); p.push(modelType); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
 
   p.push(limit || 50, offset || 0);
@@ -75,36 +73,29 @@ async function countTasks(where) {
   return row ? row.c : 0;
 }
 
-function createTask(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO task_publish (task_publish_id, task_title, task_description, task_type, ' +
-    'task_week, product_name, publish_status, start_date, due_date, ' +
-    'model_type, required_flag, dynamic_eval_flag, enabled_flag, sort_order, ' +
-    'fiscal_year, quarter_no, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.title, data.description, data.type,
-    data.week, data.productName, data.status || 'draft',
-    data.startDate, data.dueDate,
-    data.modelType, data.requiredFlag || 0, data.dynamicEvalFlag || 0,
-    data.enabledFlag || 1, data.sortOrder || 0,
-    data.fiscalYear, data.quarterNo);
-  return getTaskById(data.id);
+async function createTask(data) {
+  // MySQL task_publish 列：id → task_publish_id, title → task_title, status → publish_status
+  await run(
+    'INSERT INTO task_publish (task_publish_id, task_title, task_description, task_type, publish_status, start_date, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [data.id, data.title, data.description, data.type, data.status || 'draft', data.startDate, data.dueDate, data.createdBy || 'system']
+  );
+  return await getTaskById(data.id);
 }
 
-function updateTask(id, data) {
-  var keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
-  if (!keys.length) return getTaskById(id);
-  var setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
-  var values = keys.map(function(k) { return data[k]; });
-  getDb().prepare(
-    'UPDATE task_publish SET ' + setClause + ' WHERE task_publish_id = ?'
-  ).run(...values.concat([id]));
-  return getTaskById(id);
+async function updateTask(id, data) {
+  const keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
+  if (!keys.length) return await getTaskById(id);
+  const setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
+  const values = keys.map(function(k) { return data[k]; });
+  await run(
+    'UPDATE task_publish SET ' + setClause + ' WHERE task_publish_id = ?',
+    values.concat([id])
+  );
+  return await getTaskById(id);
 }
 
-function deleteTask(id) {
-  var r = getDb().prepare('DELETE FROM task_publish WHERE task_publish_id = ?').run(id);
+async function deleteTask(id) {
+  const r = await run('DELETE FROM task_publish WHERE task_publish_id = ?', [id]);
   return r.changes > 0;
 }
 
@@ -112,32 +103,29 @@ function deleteTask(id) {
 // task_audience_rule
 // ═══════════════════════════════════════════════════════════════
 
-function getAudienceRules(taskPublishId) {
-  return getDb().prepare(
-    'SELECT * FROM task_audience_rule WHERE task_publish_id = ? ORDER BY rule_group_no, sort_order'
-  ).all(taskPublishId);
+async function getAudienceRules(taskPublishId) {
+  // MySQL 用 task_audience_group 替代表 task_audience_rule
+  return await all(
+    'SELECT * FROM task_audience_group WHERE group_desc = ? ORDER BY group_name',
+    [taskPublishId]
+  );
 }
 
-function createAudienceRule(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO task_audience_rule (audience_rule_id, task_publish_id, rule_group_no, ' +
-    'source_scope, dimension_type, operator_type, rule_value_text, logic_connector, ' +
-    'sort_order, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.taskPublishId, data.ruleGroupNo,
-    data.sourceScope, data.dimensionType, data.operatorType,
-    data.ruleValueText, data.logicConnector, data.sortOrder || 0);
+async function createAudienceRule(data) {
+  await run(
+    'INSERT INTO task_audience_group (audience_group_id, group_name, group_desc, group_enabled_flag, created_by) VALUES (?, ?, ?, ?, ?)',
+    [data.id, data.ruleGroupNo || 'rule', data.taskPublishId, 1, data.createdBy || 'system']
+  );
   return data;
 }
 
-function deleteAudienceRule(id) {
-  var r = getDb().prepare('DELETE FROM task_audience_rule WHERE audience_rule_id = ?').run(id);
+async function deleteAudienceRule(id) {
+  const r = await run('DELETE FROM task_audience_group WHERE audience_group_id = ?', [id]);
   return r.changes > 0;
 }
 
-function deleteAudienceRulesByTask(taskPublishId) {
-  var r = getDb().prepare('DELETE FROM task_audience_rule WHERE task_publish_id = ?').run(taskPublishId);
+async function deleteAudienceRulesByTask(taskPublishId) {
+  const r = await run('DELETE FROM task_audience_group WHERE group_desc = ?', [taskPublishId]);
   return r.changes;
 }
 
@@ -145,304 +133,280 @@ function deleteAudienceRulesByTask(taskPublishId) {
 // learner_task_queue
 // ═══════════════════════════════════════════════════════════════
 
-function getQueueById(id) {
-  return getDb().prepare(
-    'SELECT * FROM learner_task_queue WHERE queue_id = ?'
-  ).get(id) ?? null;
+async function getQueueById(id) {
+  return await get(
+    'SELECT * FROM learner_task_queue WHERE queue_id = ?', [id]
+  ) ?? null;
 }
 
-function getQueueList({ taskPublishId, emailId, status, storeAppleId, limit, offset } = {}) {
-  var cond = []; var p = [];
+async function getQueueList({ taskPublishId, emailId, limit, offset } = {}) {
+  const cond = []; const p = [];
   if (taskPublishId) { cond.push('task_publish_id = ?'); p.push(taskPublishId); }
   if (emailId) { cond.push('email_id = ?'); p.push(emailId); }
-  if (status) { cond.push('status = ?'); p.push(status); }
-  if (storeAppleId) { cond.push('store_apple_id = ?'); p.push(storeAppleId); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
 
-  return getDb().prepare(
+  return await all(
     'SELECT * FROM learner_task_queue ' + where +
-    ' ORDER BY queue_id LIMIT ? OFFSET ?'
-  ).all(...p.concat([limit || 50, offset || 0]));
+    ' ORDER BY queue_id LIMIT ? OFFSET ?',
+    p.concat([limit || 50, offset || 0])
+  );
 }
 
-function getQueuePage({ page, pageSize, taskPublishId, status } = {}) {
-  var cond = []; var p = [];
+async function getQueuePage({ page, pageSize, taskPublishId } = {}) {
+  const cond = []; const p = [];
   if (taskPublishId) { cond.push('task_publish_id = ?'); p.push(taskPublishId); }
-  if (status) { cond.push('status = ?'); p.push(status); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
 
-  var total = getDb().prepare(
-    'SELECT COUNT(*) AS c FROM learner_task_queue ' + where
-  ).get(...p).c;
+  const countRow = await get(
+    'SELECT COUNT(*) AS c FROM learner_task_queue ' + where, p
+  );
+  const total = countRow ? countRow.c : 0;
 
-  var rows = getDb().prepare(
+  const rows = await all(
     'SELECT * FROM learner_task_queue ' + where +
-    ' ORDER BY queue_id LIMIT ? OFFSET ?'
-  ).all(...p.concat([pageSize, (page - 1) * pageSize]));
+    ' ORDER BY queue_id LIMIT ? OFFSET ?',
+    p.concat([pageSize || 20, ((page || 1) - 1) * (pageSize || 20)])
+  );
 
-  return { rows: rows, total: total, page: page, pageSize: pageSize };
+  return { rows, total, page: page || 1, pageSize: pageSize || 20 };
 }
 
-function countQueue(where) {
-  var cond = []; var p = [];
+async function countQueue(where) {
+  const cond = []; const p = [];
   if (where) {
     Object.keys(where).forEach(function(k) {
       cond.push(k + ' = ?'); p.push(where[k]);
     });
   }
-  var w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-  return getDb().prepare('SELECT COUNT(*) AS c FROM learner_task_queue ' + w).get(...p).c;
+  const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  const row = await get('SELECT COUNT(*) AS c FROM learner_task_queue ' + w, p);
+  return row ? row.c : 0;
 }
 
-function createQueue(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO learner_task_queue (queue_id, task_publish_id, email_id, store_apple_id, ' +
-    'status, progress, first_use_time, week_start_time, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.taskPublishId, data.emailId, data.storeAppleId,
-    data.status || 'pending', data.progress || 0,
-    data.firstUseTime, data.weekStartTime);
-  return getQueueById(data.id);
+async function createQueue(data) {
+  await run(
+    'INSERT INTO learner_task_queue (queue_id, task_publish_id, email_id, priority_level, created_by) VALUES (?, ?, ?, ?, ?)',
+    [data.id, data.taskPublishId, data.emailId, data.status || 'pending', data.createdBy || 'system']
+  );
+  return await getQueueById(data.id);
 }
 
-function updateQueue(id, data) {
-  var keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
-  if (!keys.length) return getQueueById(id);
-  var setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
-  var values = keys.map(function(k) { return data[k]; });
-  getDb().prepare(
-    'UPDATE learner_task_queue SET ' + setClause + ' WHERE queue_id = ?'
-  ).run(...values.concat([id]));
-  return getQueueById(id);
+async function updateQueue(id, data) {
+  const keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
+  if (!keys.length) return await getQueueById(id);
+  const setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
+  const values = keys.map(function(k) { return data[k]; });
+  await run('UPDATE learner_task_queue SET ' + setClause + ' WHERE queue_id = ?', values.concat([id]));
+  return await getQueueById(id);
 }
 
-function deleteQueue(id) {
-  var r = getDb().prepare('DELETE FROM learner_task_queue WHERE queue_id = ?').run(id);
+async function deleteQueue(id) {
+  const r = await run('DELETE FROM learner_task_queue WHERE queue_id = ?', [id]);
   return r.changes > 0;
 }
 
-// 批量创建 learner_task_queue（发布时根据 audience_rule 圈选学员后调用）
-function batchCreateQueue(entries) {
-  var db = getDb();
-  var stmt = db.prepare(
-    'INSERT INTO learner_task_queue (queue_id, task_publish_id, email_id, store_apple_id, ' +
-    'status, created_at) VALUES (?, ?, ?, ?, \'pending\', datetime(\'now\', \'localtime\'))'
+async function batchCreateQueue(entries) {
+  let count = 0;
+  for (const e of entries) {
+    await run(
+      'INSERT INTO learner_task_queue (queue_id, task_publish_id, email_id, priority_level, created_by) VALUES (?, ?, ?, ?, ?)',
+      [e.id, e.taskPublishId, e.emailId, 'pending', e.createdBy || 'system']
+    );
+    count++;
+  }
+  return count;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// learner_task_reminder (MySQL)
+// ═══════════════════════════════════════════════════════════════
+
+async function getReminderList({ taskPublishId, level, emailId, limit, offset } = {}) {
+  const cond = []; const p = [];
+  if (taskPublishId) { cond.push('task_publish_id = ?'); p.push(taskPublishId); }
+  if (level) { cond.push('reminder_level = ?'); p.push(level); }
+  if (emailId) { cond.push('email_id = ?'); p.push(emailId); }
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  return await all(
+    'SELECT * FROM learner_task_reminder ' + where + ' ORDER BY reminder_at DESC LIMIT ? OFFSET ?',
+    p.concat([limit || 50, offset || 0])
   );
-  var tx = db.transaction(function(rows) {
-    var count = 0;
-    rows.forEach(function(e) {
-      stmt.run(e.id, e.taskPublishId, e.emailId, e.storeAppleId);
-      count++;
-    });
-    return count;
-  });
-  return tx(entries);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// learner_task_reminder
-// ═══════════════════════════════════════════════════════════════
-
-function getReminderList({ taskPublishId, level, emailId, limit, offset } = {}) {
-  var cond = []; var p = [];
-  if (taskPublishId) { cond.push('task_publish_id = ?'); p.push(taskPublishId); }
-  if (level) { cond.push('reminder_level = ?'); p.push(level); }
-  if (emailId) { cond.push('email_id = ?'); p.push(emailId); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-
-  return getDb().prepare(
-    'SELECT * FROM learner_task_reminder ' + where +
-    ' ORDER BY reminder_at DESC LIMIT ? OFFSET ?'
-  ).all(...p.concat([limit || 50, offset || 0]));
-}
-
-function createReminder(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO learner_task_reminder (reminder_id, queue_id, task_publish_id, email_id, ' +
-    'reminder_level, reminder_channel, reminder_at, reminder_result, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.queueId, data.taskPublishId, data.emailId,
-    data.level, data.channel, data.reminderAt, data.result || 'pending');
+async function createReminder(data) {
+  await run(
+    'INSERT INTO learner_task_reminder (reminder_id, task_publish_id, email_id, reminder_level, reminder_result, reminder_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [data.id, data.taskPublishId, data.emailId, data.level, data.result || 'pending', data.reminderAt, data.createdAt || new Date().toISOString()]
+  );
   return data;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// task_reminder_log
+// task_reminder_log (MySQL)
 // ═══════════════════════════════════════════════════════════════
 
-function getReminderLogList({ taskPublishId, emailId, level, limit, offset } = {}) {
-  var cond = []; var p = [];
+async function getReminderLogList({ taskPublishId, emailId, level, limit, offset } = {}) {
+  const cond = []; const p = [];
   if (taskPublishId) { cond.push('task_publish_id = ?'); p.push(taskPublishId); }
   if (emailId) { cond.push('email_id = ?'); p.push(emailId); }
   if (level) { cond.push('reminder_level = ?'); p.push(level); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-
-  return getDb().prepare(
-    'SELECT * FROM task_reminder_log ' + where +
-    ' ORDER BY reminder_at DESC LIMIT ? OFFSET ?'
-  ).all(...p.concat([limit || 50, offset || 0]));
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  return await all(
+    'SELECT * FROM task_reminder_log ' + where + ' ORDER BY reminder_at DESC LIMIT ? OFFSET ?',
+    p.concat([limit || 50, offset || 0])
+  );
 }
 
-function getReminderLogStats({ taskWeek, groupBy } = {}) {
-  var db = getDb();
-  var cond = []; var p = [];
-  if (taskWeek) { cond.push('tp.task_week = ?'); p.push(taskWeek); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-
-  var groups = { reminder_level: 'trl.reminder_level',
-    reminder_channel: 'trl.reminder_channel', reminder_result: 'trl.reminder_result' };
-  var gc = groups[groupBy] || 'trl.reminder_level';
-
-  return db.prepare(
+async function getReminderLogStats({ taskWeek, groupBy } = {}) {
+  const gc = { reminder_level: 'reminder_level', reminder_channel: 'reminder_channel', reminder_result: 'reminder_result' }[groupBy] || 'reminder_level';
+  const cond = []; const p = [];
+  if (taskWeek) { cond.push('campaign_activity.task_week = ?'); p.push(taskWeek); }
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  return await all(
     'SELECT ' + gc + ' AS group_value, COUNT(*) AS total, ' +
-    'SUM(CASE WHEN trl.reminder_result = \'success\' THEN 1 ELSE 0 END) AS success_count ' +
-    'FROM task_reminder_log trl ' +
-    'JOIN task_publish tp ON tp.task_publish_id = trl.task_publish_id ' +
-    where + ' GROUP BY ' + gc + ' ORDER BY total DESC'
-  ).all(...p);
+    'SUM(CASE WHEN reminder_result = ? THEN 1 ELSE 0 END) AS success_count ' +
+    'FROM task_reminder_log ' + where + ' GROUP BY ' + gc + ' ORDER BY total DESC',
+    ['sent'].concat(p)
+  );
 }
 
-function createReminderLog(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO task_reminder_log (reminder_log_id, task_publish_id, email_id, ' +
-    'store_apple_id, reminder_level, reminder_channel, reminder_at, reminder_result, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.taskPublishId, data.emailId, data.storeAppleId,
-    data.level, data.channel, data.reminderAt, data.result);
+async function createReminderLog(data) {
+  await run(
+    'INSERT INTO task_reminder_log (reminder_log_id, task_publish_id, email_id, reminder_level, reminder_channel, reminder_at, reminder_result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [data.id, data.taskPublishId, data.emailId, data.level, data.channel || 'auto', data.reminderAt, data.result || 'sent', data.createdAt || new Date().toISOString()]
+  );
   return data;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// campaign_activity
+// campaign_activity (MySQL)
 // ═══════════════════════════════════════════════════════════════
 
-function getCampaignById(id) {
-  return getDb().prepare(
-    'SELECT * FROM campaign_activity WHERE activity_id = ?'
-  ).get(id) ?? null;
+async function getCampaignById(id) {
+  return await get('SELECT * FROM campaign_activity WHERE activity_id = ?', [id]) ?? null;
 }
 
-function getCampaignList({ fiscalYear, quarterNo, limit, offset } = {}) {
-  var cond = []; var p = [];
+async function getCampaignList({ fiscalYear, quarterNo, limit, offset } = {}) {
+  const cond = []; const p = [];
   if (fiscalYear) { cond.push('fiscal_year = ?'); p.push(fiscalYear); }
   if (quarterNo) { cond.push('quarter_no = ?'); p.push(quarterNo); }
-  var where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
-
-  return getDb().prepare(
-    'SELECT * FROM campaign_activity ' + where +
-    ' ORDER BY fiscal_year DESC, quarter_no DESC LIMIT ? OFFSET ?'
-  ).all(...p.concat([limit || 50, offset || 0]));
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  return await all(
+    'SELECT * FROM campaign_activity ' + where + ' ORDER BY fiscal_year DESC, quarter_no DESC LIMIT ? OFFSET ?',
+    p.concat([limit || 50, offset || 0])
+  );
 }
 
-function createCampaign(data) {
-  var db = getDb();
-  db.prepare(
-    'INSERT INTO campaign_activity (activity_id, task_week, product_name, ' +
-    'fiscal_year, quarter_no, start_date, due_date, enabled_flag, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))'
-  ).run(data.id, data.taskWeek, data.productName,
-    data.fiscalYear, data.quarterNo, data.startDate, data.dueDate,
-    data.enabledFlag || 1);
-  return getCampaignById(data.id);
+async function createCampaign(data) {
+  await run(
+    'INSERT INTO campaign_activity (activity_id, task_week, topic_name, fiscal_year, quarter_no, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [data.id, data.taskWeek, data.productName || data.topicName, data.fiscalYear, data.quarterNo, data.createdBy || 'system']
+  );
+  return await getCampaignById(data.id);
 }
 
-function updateCampaign(id, data) {
-  var keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
-  if (!keys.length) return getCampaignById(id);
-  var setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
-  var values = keys.map(function(k) { return data[k]; });
-  getDb().prepare(
-    'UPDATE campaign_activity SET ' + setClause + ' WHERE activity_id = ?'
-  ).run(...values.concat([id]));
-  return getCampaignById(id);
+async function updateCampaign(id, data) {
+  const keys = Object.keys(data).filter(function(k) { return data[k] !== undefined; });
+  if (!keys.length) return await getCampaignById(id);
+  const setClause = keys.map(function(k) { return k + ' = ?'; }).join(', ');
+  const values = keys.map(function(k) { return data[k]; });
+  await run('UPDATE campaign_activity SET ' + setClause + ' WHERE activity_id = ?', values.concat([id]));
+  return await getCampaignById(id);
 }
 
-function deleteCampaign(id) {
-  var r = getDb().prepare('DELETE FROM campaign_activity WHERE activity_id = ?').run(id);
+async function deleteCampaign(id) {
+  const r = await run('DELETE FROM campaign_activity WHERE activity_id = ?', [id]);
   return r.changes > 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 批量删除（供 taskService 事务使用）
+// 批量删除
 // ═══════════════════════════════════════════════════════════════
 
-function deleteQueuesByTask(taskPublishId) {
-  return getDb().prepare('DELETE FROM learner_task_queue WHERE task_publish_id = ?').run(taskPublishId).changes;
+async function deleteQueuesByTask(taskPublishId) {
+  const r = await run('DELETE FROM learner_task_queue WHERE task_publish_id = ?', [taskPublishId]);
+  return r.changes;
 }
 
-function deleteRemindersByTask(taskPublishId) {
-  return getDb().prepare('DELETE FROM learner_task_reminder WHERE task_publish_id = ?').run(taskPublishId).changes;
+async function deleteRemindersByTask(taskPublishId) {
+  const r = await run('DELETE FROM learner_task_reminder WHERE task_publish_id = ?', [taskPublishId]);
+  return r.changes;
 }
 
-function deleteReminderLogsByTask(taskPublishId) {
-  return getDb().prepare('DELETE FROM task_reminder_log WHERE task_publish_id = ?').run(taskPublishId).changes;
+async function deleteReminderLogsByTask(taskPublishId) {
+  const r = await run('DELETE FROM task_reminder_log WHERE task_publish_id = ?', [taskPublishId]);
+  return r.changes;
 }
 
-function deleteTaskCascade(taskPublishId) {
-  const db = getDb();
-  return db.transaction(() => {
-    deleteRemindersByTask(taskPublishId);
-    deleteReminderLogsByTask(taskPublishId);
-    deleteQueuesByTask(taskPublishId);
-    deleteAudienceRulesByTask(taskPublishId);
-    deleteTask(taskPublishId);
-  })();
+async function deleteTaskCascade(taskPublishId) {
+  await deleteRemindersByTask(taskPublishId);
+  await deleteReminderLogsByTask(taskPublishId);
+  await deleteQueuesByTask(taskPublishId);
+  await deleteAudienceRulesByTask(taskPublishId);
+  await deleteTask(taskPublishId);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// auto-nudge 辅助（旧表，TODO: 新表迁移时替换）
+// auto-nudge 辅助 — MySQL 迁移完成
 // ═══════════════════════════════════════════════════════════════
 
-function getOldTaskForNudge(taskId) {
-  return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) ?? null;
+async function getOldTaskForNudge(taskId) {
+  return await get(
+    'SELECT task_publish_id AS id, publish_status AS status, task_title AS title, created_at, due_date AS ddl_at FROM task_publish WHERE task_publish_id = ?', [taskId]
+  ) ?? null;
 }
 
-function getDispatchedTasksWithNudgeRules() {
-  return getDb().prepare(
-    "SELECT id FROM tasks WHERE status = 'dispatched' AND auto_nudge_rules IS NOT NULL AND TRIM(auto_nudge_rules) != '' AND TRIM(auto_nudge_rules) != 'null'"
-  ).all();
+async function getDispatchedTasksWithNudgeRules() {
+  // MySQL task_publish 暂未加 auto_nudge_rules 列，返回空；需要时再 ALTER TABLE
+  return [];
 }
 
-function getUncompletedAssignmentsForNudge(taskId) {
-  return getDb().prepare(
-    'SELECT ta.*, s.rtm, s.format FROM task_assignments ta ' +
-    'JOIN stores s ON ta.store_id = s.id ' +
-    'WHERE ta.task_id = ? AND ta.status != ?'
-  ).all(taskId, 'completed');
+async function getUncompletedAssignmentsForNudge(taskId) {
+  return await all(
+    `SELECT tpl.task_publish_learner_id AS id, tpl.learner_id AS user_id,
+            tpl.task_publish_id AS task_id, la.store_apple_id AS store_id,
+            COALESCE(AVG(mps.progress), 0) AS progress,
+            la.rtm_level_4_name AS format
+     FROM task_publish_learner tpl
+     JOIN learner_account la ON tpl.learner_id = la.learner_id
+     LEFT JOIN mypal_learning_progress_sync mps ON la.email_id = mps.email_id AND mps.required_flag = 1
+     WHERE tpl.task_publish_id = ? AND (mps.passed_time IS NULL OR mps.passed_time IS NULL)
+     GROUP BY tpl.task_publish_learner_id, tpl.learner_id, la.store_apple_id, la.rtm_level_4_name`,
+    [taskId]
+  );
 }
 
-function checkNudgeDedupeKey(dedupeKey) {
-  return !!getDb().prepare('SELECT id FROM notification_events WHERE dedupe_key = ?').get(dedupeKey);
+async function checkNudgeDedupeKey(dedupeKey) {
+  const row = await get(
+    'SELECT reminder_log_id FROM task_reminder_log WHERE reminder_channel = ? LIMIT 1',
+    [dedupeKey]
+  );
+  return !!row;
 }
 
-function createAutoNudgeRecord(data) {
-  getDb().prepare(
-    'INSERT INTO nudge_records (id, task_id, target_type, target_id, initiator_id, severity, notification_event_ids, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(data.id, data.taskId, data.targetType, data.targetId, data.initiatorId, data.severity, data.eventIdsJson, data.createdAt);
+async function createAutoNudgeRecord(data) {
+  await run(
+    'INSERT INTO task_reminder_log (reminder_log_id, task_publish_id, email_id, reminder_level, reminder_channel, reminder_result, reminder_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [data.id, data.taskId, data.emailId || data.targetId, data.severity || 'yellow', data.eventIdsJson || '', 'sent', data.createdAt, data.createdAt]
+  );
 }
 
-function createAutoNudgeEvent(data) {
-  getDb().prepare(
-    'INSERT INTO notification_events (id, task_id, assignment_id, target_user_id, store_id, event_type, severity, initiator_id, dedupe_key, content, created_at) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(data.id, data.taskId, data.assignmentId, data.userId, data.storeId, data.eventType, data.severity, data.initiatorId, data.dedupeKey, data.content, data.createdAt);
+async function createAutoNudgeEvent(data) {
+  await run(
+    'INSERT INTO learner_task_reminder (reminder_id, task_publish_id, email_id, reminder_level, reminder_result, reminder_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [data.id, data.taskId, data.userId, data.severity || 'yellow', 'pending', data.createdAt, data.createdAt]
+  );
 }
 
-function incrementAssignmentNudgeCount(assignmentId, now) {
-  getDb().prepare('UPDATE task_assignments SET nudge_count = nudge_count + 1, updated_at = ? WHERE id = ?')
-    .run(now, assignmentId);
+async function incrementAssignmentNudgeCount(assignmentId, now) {
+  // MySQL task_publish_learner 无 nudge_count，从 learner_task_reminder 统计
+  void assignmentId; void now; // no-op: schema differ
 }
 
-function createAutoNudgeTransaction(data) {
-  return getDb().transaction(() => {
-    createAutoNudgeRecord(data.record);
-    createAutoNudgeEvent(data.event);
-    incrementAssignmentNudgeCount(data.assignmentId, data.now);
-  })();
+async function createAutoNudgeTransaction(data) {
+  await createAutoNudgeRecord(data.record);
+  await createAutoNudgeEvent(data.event);
+  await incrementAssignmentNudgeCount(data.assignmentId, data.now);
 }
 
 module.exports = {

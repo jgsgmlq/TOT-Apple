@@ -1,6 +1,7 @@
 'use strict';
 
 const executiveMetricsService = require('../modules/dashboard/services/executiveMetricsService');
+const taskCrud = require('../modules/task/crud/taskCrud');
 
 module.exports = {
   schema: {
@@ -36,8 +37,10 @@ module.exports = {
       return { success: false, errorCode: 'MISSING_PARAM', message: '参数 task_id 是必填的' };
     }
 
+    let taskName = taskId;
+
     const params = {
-      taskName: taskId,
+      taskName,
       metrics: args.metrics || [],
       dimensions: args.dimension ? [args.dimension] : [],
       filters: args.scope_filter || {},
@@ -59,14 +62,17 @@ module.exports = {
       rows = rows.slice(0, args.top_n);
     }
 
+    // dimensions/metrics 是新版structured格式，task_name/platform/priority 保持向后兼容
     return {
       success: true,
       data: {
         task_id: result.taskId || taskId,
-        task_name: result.taskName,
-        platform: result.platform,
-        priority: result.priority,
+        task_name: result.taskName || args.task_id,
+        platform: result.platform || null,
+        priority: result.priority || null,
         dimension: args.dimension,
+        dimensions: result.dimensions,
+        metrics: result.metrics,
         rows,
         summary: result.summary || null
       }
