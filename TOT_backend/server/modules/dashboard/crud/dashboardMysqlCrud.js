@@ -399,11 +399,18 @@ function buildSearchConditions(filters) {
     conds.push("tp.publish_status != 'draft'");
   }
 
-  // 任务名 — 去空格模糊匹配
+  // 任务名 — 去空格 + 全角→半角规范化后模糊匹配
   if (filters.name) {
-    const kw = filters.name.replace(/\s+/g, '');
-    conds.push('(tp.task_title LIKE ? OR REPLACE(tp.task_title, " ", "") LIKE ?)');
-    params.push(`%${filters.name}%`, `%${kw}%`);
+    const normalized = filters.name
+      .replace(/\s+/g, '')
+      .replace(/｜/g, '|')
+      .replace(/（/g, '(')
+      .replace(/）/g, ')');
+    conds.push(`(
+      tp.task_title LIKE ?
+      OR REPLACE(REPLACE(REPLACE(REPLACE(tp.task_title, ' ', ''), '｜', '|'), '（', '('), '）', ')') LIKE ?
+    )`);
+    params.push(`%${filters.name}%`, `%${normalized}%`);
   }
 
   // 类别 — JOIN campaign_activity
