@@ -257,7 +257,7 @@ const finalResponseStep = async (state, config) => {
             : '';
           const stream = await llm.stream([
             new SystemMessage(fullPrompt + repairSuffix),
-            new HumanMessage('输出严格的 JSON 对象，包含 "blocks" 数组。')
+            new HumanMessage('输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。')
           ], { signal: config?.signal });
           for await (const chunk of stream) {
             const delta = typeof chunk.content === 'string' ? chunk.content : '';
