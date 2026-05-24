@@ -274,6 +274,79 @@ async function getInsightVotes(id) {
   return await get('SELECT up_count AS up, down_count AS down FROM dashboard_insights WHERE id = ?', [id]);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// 统一任务搜索 — SQL condition builder（纯函数，可测试）
+// ═══════════════════════════════════════════════════════════════════
+
+function buildSearchConditions(filters) {
+  const conds = [];
+  const params = [];
+
+  // 状态过滤 — 默认排除 draft
+  if (filters.statuses && filters.statuses.length > 0) {
+    conds.push(`tp.publish_status IN (${filters.statuses.map(() => '?').join(',')})`);
+    params.push(...filters.statuses);
+    // "active" 语义: dispatched + 未过期 (仅在单独 dispatch 时加)
+    if (filters.statuses.length === 1 && filters.statuses[0] === 'dispatched') {
+      conds.push('(tp.due_date IS NULL OR tp.due_date >= NOW())');
+    }
+  } else {
+    conds.push("tp.publish_status != 'draft'");
+  }
+
+  // 任务名 — 去空格模糊匹配
+  if (filters.name) {
+    const kw = filters.name.replace(/\s+/g, '');
+    conds.push('(tp.task_title LIKE ? OR REPLACE(tp.task_title, " ", "") LIKE ?)');
+    params.push(`%${filters.name}%`, `%${kw}%`);
+  }
+
+  // 类别 — JOIN campaign_activity
+  if (filters.category) {
+    conds.push('ca.model_type = ?');
+    params.push(filters.category);
+  }
+
+  // 产品
+  if (filters.product) {
+    conds.push('ca.topic_name LIKE ?');
+    params.push(`%${filters.product}%`);
+  }
+
+  // 优先级
+  if (filters.priority) {
+    conds.push('tp.urgency_level = ?');
+    params.push(filters.priority);
+  }
+
+  // 平台
+  if (filters.platform) {
+    conds.push('tp.platform_scope LIKE ?');
+    params.push(`%${filters.platform}%`);
+  }
+
+  // 截止日紧迫度 (与 status_filter 正交)
+  if (filters.deadlineUrgency === 'soon') {
+    conds.push('tp.due_date IS NOT NULL AND tp.due_date BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 7 DAY)');
+  } else if (filters.deadlineUrgency === 'overdue') {
+    conds.push('tp.due_date IS NOT NULL AND tp.due_date < NOW()');
+  }
+
+  // 时间范围
+  if (filters.timeRange) {
+    if (filters.timeRange.start) {
+      conds.push('tp.due_date >= ?');
+      params.push(filters.timeRange.start);
+    }
+    if (filters.timeRange.end) {
+      conds.push('tp.due_date <= ?');
+      params.push(filters.timeRange.end);
+    }
+  }
+
+  return { conds, params };
+}
+
 module.exports = {
   getTaskById,
   getQueueEntries,
@@ -290,6 +363,7 @@ module.exports = {
   insertAgentInsight,
   getLatestAgentInsight,
   searchTasks,
+  buildSearchConditions,
   insertInsight,
   getInsightById,
   incrementInsightVote,
