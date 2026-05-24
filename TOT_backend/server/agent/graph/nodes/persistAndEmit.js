@@ -2,6 +2,7 @@
 
 const { nanoid } = require('nanoid');
 const { getTitleModel } = require('../llm');
+const promptRegistry = require('../../../prompts/registry');
 const chatCrud = require('../../../modules/dashboard/crud/chatCrud');
 const { startNodeSpan } = require('../shared/spanHelper');
 const { endSpan, getClient } = require('../../../utils/tracer');
@@ -131,7 +132,7 @@ async function generateSessionTitle(sessionId, userMessage, overviewText) {
   const llm = getTitleModel();
 
   const messages = [
-    { role: "system", content: '你是一个对话标题生成器。根据对话内容提炼一个简洁的标题，概括本次对话讨论的主题。\n规则：\n1. 标题应概括对话主题，不是复述数据结论。例如用户问「哪些门店完成率低」，标题应为「门店完成率排查」，而不是「5家门店完成率低于50%」\n2. 使用名词性短语，不要用陈述句\n3. 只输出标题本身，不要引号、不要多余文字\n4. 不超过16个字' },
+    { role: "system", content: promptRegistry.get('title_generator') },
     { role: "user", content: `用户问题：${user}\nAI回答概要：${overview}\n\n标题：` },
   ];
 

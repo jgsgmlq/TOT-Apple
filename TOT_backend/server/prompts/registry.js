@@ -3,38 +3,34 @@
 /**
  * Prompt 注册表 — Executive Chat 所有 LLM prompt 的单一入口。
  *
+ * 所有 prompt 存储在 prompts/src/*.md 中，通过 loader.js 加载。
+ * 支持 ${var} 模板变量替换。
+ *
  * 用法：
  *   const registry = require('./prompts/registry');
- *   const prompt = registry.get('router');             // 字符串
- *   const prompt = registry.get('fc_agent', ctx);      // ctx 填充模板
- *   const version = registry.version('fc_agent');      // "fc/v2"
+ *   const prompt = registry.get('router');             // 静态 prompt
+ *   const prompt = registry.get('fc_agent', ctx);      // 带变量替换
+ *   const version = registry.version('fc_agent');      // "fc/v3"
  *
- * 新增 prompt：
- *   1. 在 prompts/ 下新建文件，导出 { XXX_PROMPT_VERSION, ... }
- *   2. 在此文件的 register() 中添加
- *   3. nodes.js 中用 registry.get('xxx') 替代内联字符串
+ * 直接编辑 .md 文件即可修改 prompt，无需改 JS。
  */
 
-const { ROUTER_PROMPT_VERSION, ROUTER_SYSTEM_PROMPT } = require('./router');
-const { FC_PROMPT_VERSION, buildFcPrompt, FC_PROMPT_V4_VERSION, buildFcPromptV4 } = require('./fc_agent');
-const { CHAT_REPLY_PROMPT_VERSION, CHAT_REPLY_PROMPT } = require('./chat_reply');
-const { SAFETY_GATEWAY_VERSION, SAFETY_GATEWAY_PROMPT, SAFETY_GATEWAY_V2_VERSION, SAFETY_GATEWAY_V2_PROMPT } = require('./safetyGateway');
-const { FINAL_RESPONSE_VERSION, FINAL_RESPONSE_PROMPT } = require('./final_response');
+const { loadPrompt, loadAndRender } = require('./loader');
 
 const PROMPTS = {
-  router:         { version: ROUTER_PROMPT_VERSION,       get: () => ROUTER_SYSTEM_PROMPT },
-  fc_agent:       { version: FC_PROMPT_VERSION,           get: (ctx) => buildFcPrompt(ctx) },
-  fc_agent_v4:    { version: FC_PROMPT_V4_VERSION,        get: (ctx) => buildFcPromptV4(ctx) },
-  chat_reply:     { version: CHAT_REPLY_PROMPT_VERSION,   get: () => CHAT_REPLY_PROMPT },
-  safety_gateway: { version: SAFETY_GATEWAY_VERSION,      get: () => SAFETY_GATEWAY_PROMPT },
-  safety_gateway_v2: { version: SAFETY_GATEWAY_V2_VERSION, get: () => SAFETY_GATEWAY_V2_PROMPT },
-  final_response: { version: FINAL_RESPONSE_VERSION,      get: () => FINAL_RESPONSE_PROMPT },
+  router:            { version: 'router/v3',               get: () => loadPrompt('router_v3') },
+  fc_agent:          { version: 'fc/v3',                   get: (ctx) => loadAndRender('fc_agent_v3', ctx) },
+  fc_agent_v4:       { version: 'fc/v4',                   get: (ctx) => loadAndRender('fc_agent_v4', ctx) },
+  chat_reply:        { version: 'chat/v1',                 get: () => loadPrompt('chat_reply_v1') },
+  safety_gateway:    { version: 'safety_gateway/v1',       get: () => loadPrompt('safety_gateway_v1') },
+  safety_gateway_v2: { version: 'safety_gateway/v2',       get: (ctx) => loadAndRender('safety_gateway_v2', ctx || {}) },
+  final_response:    { version: 'final_response/v3',       get: () => loadPrompt('final_response_v3') },
+  title_generator:   { version: 'title/v1',                get: () => loadPrompt('title_generator_v1') },
 };
 
 /**
- * 获取 prompt 字符串。
- * @param {string} name — 'router' | 'fc_agent' | 'chat_reply'
- * @param {object} [ctx] — 模板上下文（仅 fc_agent 需要）
+ * @param {string} name
+ * @param {object} [ctx] — 模板变量
  * @returns {string}
  */
 function get(name, ctx) {
@@ -44,7 +40,6 @@ function get(name, ctx) {
 }
 
 /**
- * 获取 prompt 版本号。
  * @param {string} name
  * @returns {string}
  */
@@ -54,4 +49,4 @@ function version(name) {
   return entry.version;
 }
 
-module.exports = { get, version };
+module.exports = { get, version, loadPrompt, loadAndRender };

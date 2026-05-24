@@ -6,6 +6,7 @@ const mysql = require('../../modules/common/db/mysql');
 const { getMemoryModel } = require("../graph/llm");
 const { SystemMessage } = require("@langchain/core/messages");
 const { CallbackHandler } = require("langfuse-langchain");
+const { loadAndRender } = require('../../prompts/loader');
 
 const getLangfuseCallback = (sessionId) => {
   if (process.env.LANGFUSE_ENABLED !== 'true') return null;
@@ -53,25 +54,7 @@ async function startMemoryWorker() {
 
     try {
       // 1. 调用大模型，判断这段对话是否有值得记录的新“事实/偏好”
-      const prompt = `你是一个记忆提取器。分析用户的问题和助手的回应，判断该轮对话是否值得纳入长期记忆。
-
-【值得记忆的内容】
-1. user（用户偏好）：用户体现出反复出现的数据偏好或交互习惯
-2. feedback（行为反馈）：用户明确对助手行为提出要求、纠正或期望
-3. project（业务上下文）：对话中涉及的具体培训业务信息
-
-【不值得记忆的内容】
-- 一次性的简单数据查询（如"华东完成率"）
-- 闲聊或问候
-- 无明确偏好的确认语（如"好的""行"）
-
-如果值得记忆，输出格式：
-{"type":"<user|feedback|project>","content":"具体内容"}
-
-如果不值得记忆，输出：NONE
-
-用户问题: "${userMessage}"
-助手回应: "${finalResponse}"`;
+      const prompt = loadAndRender('memory_extractor_v1', { userMessage, finalResponse });
 
       const llm = getMemoryLLM();
       const lfCallback = getLangfuseCallback(event.payload.sessionId);

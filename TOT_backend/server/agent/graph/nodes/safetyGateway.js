@@ -42,8 +42,8 @@ async function safetyGateway(state, config) {
   const span = startNodeSpan(state, 'SafetyGateway', { userMessage: (state.userMessage || '').slice(0, 80) });
   console.log(`[SafetyGateway] 分析用户消息: ${(state.userMessage || '').slice(0, 80)}`);
 
-  const schemaDefinition = promptRegistry.get("safety_gateway_v2")
-    .replace('{now}', new Date().toISOString().replace('T', ' ').slice(0, 10));
+  const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 10);
+  const schemaDefinition = promptRegistry.get("safety_gateway_v2", { now: nowStr });
   const conversationBlock = renderConversation(state.conversation || []);
   const longTermBlock = renderLongTerm(state.long_term_memories || '');
 
