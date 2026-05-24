@@ -136,6 +136,12 @@ function extractContentText(blocks) {
       for (const item of block.items) {
         parts.push(`[${item.level}] ${item.text}`);
       }
+    } else if (block.type === 'table') {
+      parts.push(block.title || '');
+    } else if (block.type === 'suggestions') {
+      for (const item of block.items) {
+        parts.push(item);
+      }
     }
   }
   return parts.join('\n');
@@ -462,4 +468,4 @@ const finalResponseStep = async (state, config) => {
   };
 };
 
-module.exports = { finalResponseStep, sanitizeUserFacingMarkdown, buildTableFromRows, prepareToolData };
+module.exports = { finalResponseStep, sanitizeUserFacingMarkdown, buildTableFromRows, prepareToolData, extractContentText };

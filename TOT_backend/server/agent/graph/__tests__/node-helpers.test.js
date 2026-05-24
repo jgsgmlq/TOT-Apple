@@ -2,7 +2,42 @@
 
 const { isErrorPayload } = require('../nodes/fc_MergeToolResults');
 const { inspectToolResult } = require('../nodes/fc_ExecuteTool');
-const { sanitizeUserFacingMarkdown, finalResponseStep, buildTableFromRows, prepareToolData } = require('../nodes/finalResponseStep');
+const { sanitizeUserFacingMarkdown, finalResponseStep, buildTableFromRows, prepareToolData, extractContentText } = require('../nodes/finalResponseStep');
+
+describe('extractContentText', () => {
+  test('extracts markdown content', () => {
+    const result = extractContentText([
+      { type: 'markdown', content: 'hello world' },
+    ]);
+    expect(result).toContain('hello world');
+  });
+
+  test('extracts table block with title', () => {
+    const result = extractContentText([
+      { type: 'table', title: '任务列表', datasetId: 'ds1' },
+    ]);
+    expect(result).toContain('任务列表');
+  });
+
+  test('extracts suggestions as text', () => {
+    const result = extractContentText([
+      { type: 'suggestions', items: ['查一下完成率', '对比各区域'] },
+    ]);
+    expect(result).toContain('查一下完成率');
+    expect(result).toContain('对比各区域');
+  });
+
+  test('extracts mixed blocks correctly', () => {
+    const result = extractContentText([
+      { type: 'markdown', content: '## 总览' },
+      { type: 'table', title: '任务清单', datasetId: 'ds1' },
+      { type: 'suggestions', items: ['追问1'] },
+    ]);
+    expect(result).toContain('总览');
+    expect(result).toContain('任务清单');
+    expect(result).toContain('追问1');
+  });
+});
 describe('Node helper functions', () => {
   describe('isErrorPayload (fc_MergeToolResults)', () => {
     test('returns false for non-string', () => {
