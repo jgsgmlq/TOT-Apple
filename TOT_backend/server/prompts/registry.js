@@ -18,7 +18,7 @@
 const { ROUTER_PROMPT_VERSION, ROUTER_SYSTEM_PROMPT } = require('./router');
 const { FC_PROMPT_VERSION, buildFcPrompt } = require('./fc_agent');
 const { CHAT_REPLY_PROMPT_VERSION, CHAT_REPLY_PROMPT } = require('./chat_reply');
-const { SAFETY_GATEWAY_VERSION, SAFETY_GATEWAY_PROMPT } = require('./safetyGateway');
+const { SAFETY_GATEWAY_VERSION, SAFETY_GATEWAY_PROMPT, SAFETY_GATEWAY_V2_VERSION, SAFETY_GATEWAY_V2_PROMPT } = require('./safetyGateway');
 const { FINAL_RESPONSE_VERSION, FINAL_RESPONSE_PROMPT } = require('./final_response');
 
 const PROMPTS = {
@@ -26,6 +26,7 @@ const PROMPTS = {
   fc_agent:       { version: FC_PROMPT_VERSION,           get: (ctx) => buildFcPrompt(ctx) },
   chat_reply:     { version: CHAT_REPLY_PROMPT_VERSION,   get: () => CHAT_REPLY_PROMPT },
   safety_gateway: { version: SAFETY_GATEWAY_VERSION,      get: () => SAFETY_GATEWAY_PROMPT },
+  safety_gateway_v2: { version: SAFETY_GATEWAY_V2_VERSION, get: () => SAFETY_GATEWAY_V2_PROMPT },
   final_response: { version: FINAL_RESPONSE_VERSION,      get: () => FINAL_RESPONSE_PROMPT },
 };
 
