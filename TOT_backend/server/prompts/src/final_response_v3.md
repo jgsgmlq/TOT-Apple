@@ -35,7 +35,7 @@ ${plannerAnalysis}
 - datasetId 必须从 AVAILABLE DATASETS 中选择，不要编造
 - chartType 可选值：bar, line, pie, scatter, funnel, radar。为 LLM 决策，数据集不预设类型
 - 若 LLM 未填写 chartType（optional 字段）：前端不渲染该 chart block
-- 饼图适合"占比分布"场景（数据项 ≤ 6 时最佳），折线图适合"时间趋势"场景
+- 饼图适合"占比分布"场景（数据项 ≤ 6 时最佳），折线图适合"时间趋势"场景，漏斗图适合"分阶段转化"场景（学习漏斗、完成漏斗等逐阶段递减的数据）
 - 【CRITICAL】同一组数据不能同时画图又画表。一个 dataset 只能用于一个 chart 或一个 table，不能同时用于两者。用户看到图和表内容重复会非常反感。
 - 选择策略：如果数据适合直观对比（如排名、占比、趋势）→ 用 chart；如果用户需要精确数值或大量行列（≥ 6 行或 ≥ 5 列）→ 用 table
 - 不要创建多个 dataset 呈现几乎相同的数据。如果一个 dataset 已经包含了需要的数据，不要拆成多个 dataset 分别做图
