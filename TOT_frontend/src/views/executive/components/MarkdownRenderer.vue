@@ -203,10 +203,12 @@
 
     .markdown-body {
       font-size: 15px;
+      line-height: 1.7;
 
       :deep(p) {
         margin-top: 0;
-        margin-bottom: 1em;
+        margin-bottom: 0.75em;
+        line-height: 1.7;
         &:last-child { margin-bottom: 0; }
       }
 
@@ -217,12 +219,14 @@
 
       :deep(h1), :deep(h2), :deep(h3), :deep(h4) {
         color: #1a1f36;
+        line-height: 1.4;
       }
 
       /* Lists */
       :deep(ul), :deep(ol) {
-        margin-top: 0; margin-bottom: 1em; padding-left: 24px;
-        li { margin-bottom: 0.25em;
+        margin-top: 0; margin-bottom: 0.75em; padding-left: 24px;
+        line-height: 1.7;
+        li { margin-bottom: 0.25em; line-height: 1.7;
           &::marker { color: #8f99a8; }
         }
       }
@@ -238,8 +242,9 @@
       /* Inline Code & Code Blocks */
       :deep(code) {
         font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-        font-size: 0.875em;
-        padding: 0.2em 0.4em;
+        font-size: 0.9em;
+        padding: 0.05em 0.3em;
+        vertical-align: baseline;
         background-color: #f1f3f6;
         color: #dc2626;
         border-radius: 3px;
@@ -265,6 +270,7 @@
 
         th, td {
           padding: 10px 16px; text-align: left;
+          line-height: 1.6; font-size: 14px;
           border-bottom: 1px solid #e2e6ed;
           border-right: 1px solid #e2e6ed;
           &:last-child { border-right: none; }
