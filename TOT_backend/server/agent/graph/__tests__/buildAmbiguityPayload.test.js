@@ -65,4 +65,34 @@ describe('buildAmbiguityPayload', () => {
     const filters = {};
     expect(buildAmbiguityPayload(result, filters)).toBeNull();
   });
+
+  test('task_not_found with fallbackOptions fills options', () => {
+    const result = {
+      tasks: { status: 'not_found', items: [] },
+      org: { status: 'not_requested', resolved: null },
+      needs_clarification: true
+    };
+    const filters = { task_name: 'XYZ', task_category: null };
+    const fallbackOptions = [
+      { task_publish_id: 't1', task_title: '跨渠道BAU', model_type: 'BAU', due_date: '2026-06-01' },
+      { task_publish_id: 't2', task_title: 'iPhone培训', model_type: 'NPI', due_date: '2026-06-15' },
+    ];
+    const payload = buildAmbiguityPayload(result, filters, fallbackOptions);
+    expect(payload.type).toBe('task_not_found');
+    expect(payload.options).toHaveLength(2);
+    expect(payload.options[0].label).toBe('跨渠道BAU');
+    expect(payload.options[0].subtitle).toContain('BAU');
+  });
+
+  test('task_not_found without fallbackOptions returns empty options', () => {
+    const result = {
+      tasks: { status: 'not_found', items: [] },
+      org: { status: 'not_requested', resolved: null },
+      needs_clarification: true
+    };
+    const filters = { task_name: 'XYZ', task_category: null };
+    const payload = buildAmbiguityPayload(result, filters);
+    expect(payload.type).toBe('task_not_found');
+    expect(payload.options).toEqual([]);
+  });
 });

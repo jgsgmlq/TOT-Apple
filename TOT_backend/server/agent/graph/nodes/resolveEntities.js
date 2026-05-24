@@ -63,6 +63,19 @@ async function resolveEntities(state, config) {
     } else {
       result.tasks = { status: 'not_found', items: [] };
       result.needs_clarification = true;
+
+      // 宽泛搜索：去掉 name 条件，用 category/platform/status 找候选
+      try {
+        const fallbackMatches = await dashboardMysqlCrud.searchTasks({
+          category: qf.task_category,
+          platform: qf.platform,
+          statuses,
+          limit: 5,
+        });
+        if (fallbackMatches.length > 0) {
+          result.tasks._fallbackOptions = fallbackMatches;
+        }
+      } catch (_) { /* fallback 失败不阻塞 */ }
     }
   }
 
@@ -80,7 +93,7 @@ async function resolveEntities(state, config) {
   }
 
   const ambiguity_payload = result.needs_clarification
-    ? buildAmbiguityPayload(result, qf)
+    ? buildAmbiguityPayload(result, qf, result.tasks?._fallbackOptions)
     : null;
 
   endSpan(span, {
@@ -93,7 +106,7 @@ async function resolveEntities(state, config) {
   return { resolved_entities: result, ambiguity_payload };
 }
 
-function buildAmbiguityPayload(result, filters) {
+function buildAmbiguityPayload(result, filters, fallbackOptions) {
   if (result.tasks && result.tasks.status === 'multiple') {
     return {
       type: 'task_ambiguous',
@@ -111,11 +124,19 @@ function buildAmbiguityPayload(result, filters) {
     };
   }
   if (result.tasks && result.tasks.status === 'not_found') {
+    const options = fallbackOptions && fallbackOptions.length > 0
+      ? fallbackOptions.map(t => ({
+          id: t.task_publish_id,
+          label: t.task_title,
+          value: t.task_publish_id,
+          subtitle: `${t.model_type || ''} · 截止 ${t.due_date ? t.due_date.slice(0, 10) : '--'}`,
+        }))
+      : [];
     return {
       type: 'task_not_found',
-      prompt: `未找到"${filters.task_name || '该条件'}"对应的任务。请问是哪个任务？`,
+      prompt: `未找到"${filters.task_name || '该条件'}"对应的任务。${options.length > 0 ? '以下可能是您要找的任务：' : '请问是哪个任务？'}`,
       question: `未找到"${filters.task_name || '该条件'}"对应的任务。请问是哪个任务？`,
-      options: [],
+      options,
       resume_type: 'slot_fill',
     };
   }
