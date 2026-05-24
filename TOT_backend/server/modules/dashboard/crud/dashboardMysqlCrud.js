@@ -262,16 +262,27 @@ async function decrementInsightVote(id, voteType) {
   await run(`UPDATE dashboard_insights SET ${col} = ${col} - 1 WHERE id = ? AND ${col} > 0`, [id]);
 }
 
-async function searchTasks(keyword) {
-  return await all(
-    `SELECT * FROM task_publish WHERE task_title LIKE ?`,
-    [`%${keyword}%`]
-  );
-}
-
 async function getInsightVotes(id) {
   await readyInsightsTable();
   return await get('SELECT up_count AS up, down_count AS down FROM dashboard_insights WHERE id = ?', [id]);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 统一任务搜索 — 替代旧 searchTasks(keyword) + 6个工具的各自搜索
+// ═══════════════════════════════════════════════════════════════════
+
+async function searchTasks(filters = {}) {
+  const { conds, params } = buildSearchConditions(filters);
+  const sql = `SELECT tp.task_publish_id, tp.task_title, tp.due_date, tp.publish_status,
+                      tp.urgency_level, tp.platform_scope,
+                      ca.model_type, ca.topic_name
+               FROM task_publish tp
+               LEFT JOIN campaign_activity ca ON ca.activity_id = tp.activity_id
+               WHERE ${conds.join(' AND ')}
+               ORDER BY tp.due_date ASC
+               LIMIT ?`;
+  params.push(filters.limit || 10);
+  return await all(sql, params);
 }
 
 // ═══════════════════════════════════════════════════════════════════
