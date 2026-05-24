@@ -104,12 +104,39 @@ const constraints = `GUIDELINES:
 5. **Step budget is tight**: if multiple tools from your belt are obviously useful for the user's question, return them all in a single response (parallel tool_calls) instead of calling them one-by-one across multiple steps.
 6. **Stop and Ask (CRITICAL)**: If a tool returns an error about missing parameters (e.g., INVALID_PARAMETERS, "请明确您要查询的培训任务名称"), **DO NOT retry calling the tool repeatedly**. Immediately stop and output a natural language response asking the user to provide the missing information.`;
 
+const constraintsV4 = constraints + `
+
+CRITICAL — USE RESOLVED ENTITIES:
+entityBlock 中包含已解析的 task_id 和 org code。调用工具时：
+- 必须使用 entityBlock JSON 中的 task_id，不要编造或使用用户消息中的原始文本
+- 如果 entityBlock 中有多个 task，根据用户意图决定并行调用（一次 tool_calls）还是分步调用
+- unresolved_filters 中的条件（deadline_urgency, alert_level, time_range）应作为附加过滤参数传给工具`;
+
+const errorHandlingV4 = `
+ERROR HANDLING — HITL FOR MISSING PARAMETERS:
+When a tool returns an error about missing required parameters (MISSING_PARAM, INVALID_PARAMETERS, or a message asking to specify a task/product):
+
+1. **First, try to infer from context.** Check entityBlock, the user's original message, and conversation history. If you can fill the missing parameter from context, retry the tool call ONCE with the inferred value.
+
+2. **If the missing parameter is task_id/taskName and you cannot infer it:**
+   a. Call list_task_progress to get the list of available tasks.
+   b. Output a natural language message listing the tasks as numbered options, asking the user to pick one.
+   c. Do NOT call any more tools after this — just output this question and wait.
+
+3. **If the missing parameter is something else (alert_level, dimension, etc.):**
+   Ask the user ONE clear question to clarify. Do not guess.
+
+4. **If the tool returns NO_DATA or "未找到任务的数据":**
+   a. Call list_task_progress to get the list of available tasks.
+   b. Output a natural language message listing the tasks as numbered options, asking the user to pick one.
+   c. Do NOT call any more tools after this — just output and wait.
+
+5. **Do NOT retry the same tool with the same broken args.** If you already tried to fix and it still failed, go to step 2 or 3.`;
+
 // ─── 组装 ────────────────────────────────────────────────
 
-/**
- * @param {object} ctx — { maxSteps, currentStep, chartContext, entityBlock }
- * @returns {string} 完整的 FC Agent system prompt
- */
+const FC_PROMPT_V4_VERSION = 'fc/v4';
+
 function buildFcPrompt(ctx) {
   return [
     domainKnowledge(ctx),
@@ -119,4 +146,14 @@ function buildFcPrompt(ctx) {
   ].filter(Boolean).join('\n\n');
 }
 
-module.exports = { FC_PROMPT_VERSION, buildFcPrompt };
+function buildFcPromptV4(ctx) {
+  return [
+    domainKnowledge(ctx),
+    chartRules,
+    toolReference,
+    constraintsV4,
+    errorHandlingV4,
+  ].filter(Boolean).join('\n\n');
+}
+
+module.exports = { FC_PROMPT_VERSION, FC_PROMPT_V4_VERSION, buildFcPrompt, buildFcPromptV4 };

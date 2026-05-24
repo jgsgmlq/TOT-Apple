@@ -1,6 +1,7 @@
 'use strict';
 
 const { AIMessage, HumanMessage, SystemMessage } = require("@langchain/core/messages");
+const { buildFcEntityBlock } = require('./resolveEntities');
 const { startNodeSpan } = require('../shared/spanHelper');
 const { getClient, endGeneration, endSpan, maskPII, preview, NOOP_TRACE } = require('../../../utils/tracer');
 const chatToolsService = require('../../../services/chatToolsService');
@@ -73,18 +74,14 @@ const fc_LlmToolCallStep = async (state, config) => {
     safeHistory.push(...trimmed);
   }
 
-  const entityBlock = [
-    state.extracted_task_ref ? `已知任务: ${state.extracted_task_ref}` : '',
-    state.extracted_org_ref ? `已知组织: ${state.extracted_org_ref} (${state.extracted_org_type || '未知类型'})` : '',
-    state.extracted_time_ref ? `已知时间: ${state.extracted_time_ref}` : '',
-  ].filter(Boolean).join('\n');
+  const entityBlock = buildFcEntityBlock(state) || '（无预解析实体）';
 
   const systemPrompt = promptRegistry.get('fc_agent', {
     maxSteps,
     currentStep,
     now: new Date().toISOString().replace('T', ' ').slice(0, 19),
     chartContext: '',
-    entityBlock: entityBlock || '（无预提取实体）',
+    entityBlock: entityBlock,
   });
 
   const messagesToSend = [
