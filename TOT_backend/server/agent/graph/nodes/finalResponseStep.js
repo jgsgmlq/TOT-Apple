@@ -346,44 +346,41 @@ const finalResponseStep = async (state, config) => {
       // ═══ 第二轮：执行 ═══
       const execPrompt = promptRegistry.get('final_response', { plannerAnalysis: plannerSection.trim() }) + dataBlock;
 
-      const MAX_EXEC_ATTEMPTS = MAX_REPAIR_ATTEMPTS;
-      let execParsed = null;
-      let execLastError = '';
+      const result = await runStructuredRound(
+        llm,
+        execPrompt,
+        '输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。',
+        BlocksOutput,
+        MAX_REPAIR_ATTEMPTS,
+        config?.signal
+      );
 
-      for (let attempt = 0; attempt <= MAX_EXEC_ATTEMPTS; attempt++) {
-        const result = await runStructuredRound(
-          llm,
-          execPrompt + (attempt > 0 ? '' : ''),
-          '输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。',
-          BlocksOutput,
-          0,  // 单次，repair 由外层 handle
-          config?.signal
-        );
+      let parsed = result.parsed;
+      let lastError = result.lastError;
 
-        execParsed = result.parsed;
-        execLastError = result.lastError;
-        console.log('[FinalResponseStep] exec attempt=' + attempt + ' success=' + (execParsed?.success || false));
-
-        if (execParsed?.success && execParsed.data.blocks.length > 0) {
-          const datasetIds = new Set(plottableDatasets.map(d => d.id));
-          const orphanIds = execParsed.data.blocks
-            .filter(b => (b.type === 'chart' || b.type === 'table') && !datasetIds.has(b.datasetId))
-            .map(b => b.datasetId);
-          if (orphanIds.length > 0) {
-            execLastError = '以下 datasetId 不在 AVAILABLE DATASETS 中: ' + orphanIds.join(', ') + '。可用的: ' + [...datasetIds].join(', ');
-            console.log('[FinalResponseStep] orphan datasetIds on attempt=' + attempt + ': ' + orphanIds.join(', '));
-            continue;
+      // 校验 datasetId 合法性，如有问题则额外 retry 一次
+      if (parsed?.success && parsed.data.blocks.length > 0) {
+        const datasetIds = new Set(plottableDatasets.map(d => d.id));
+        const orphanIds = parsed.data.blocks
+          .filter(b => (b.type === 'chart' || b.type === 'table') && !datasetIds.has(b.datasetId))
+          .map(b => b.datasetId);
+        if (orphanIds.length > 0) {
+          console.log('[FinalResponseStep] orphan datasetIds: ' + orphanIds.join(', ') + ', retrying...');
+          const repairPrompt = execPrompt + '\n\n以下 datasetId 不在可用列表中: ' + orphanIds.join(', ') + '。可用的: ' + [...datasetIds].join(', ');
+          const retry = await runStructuredRound(
+            llm,
+            repairPrompt,
+            '输出严格的 JSON 对象，包含 "blocks" 数组和 "_provenance" 对象（统计口径字段必填）。',
+            BlocksOutput,
+            1,
+            config?.signal
+          );
+          if (retry.parsed?.success) {
+            parsed = retry.parsed;
           }
-          break;
-        } else {
-          execLastError = execParsed?.success
-            ? 'blocks 数组为空'
-            : JSON.stringify(execParsed?.error?.issues || execParsed?.error?.message || '');
+          lastError = retry.lastError;
         }
       }
-
-      const parsed = execParsed;
-      const lastError = execLastError;
 
       if (parsed && parsed.success && parsed.data.blocks.length > 0) {
         const datasetMap = new Map();
