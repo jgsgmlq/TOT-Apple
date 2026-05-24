@@ -103,11 +103,40 @@ const ExecChatGraphState = Annotation.Root({
     default: () => []
   }),
 
-  // ─── SafetyGateway 输出 ───
+  // ─── SafetyGateway v2 输出 ───
+  query_filters: Annotation({
+    reducer: (x, y) => y ?? x,
+    default: () => ({
+      task_name: null, task_category: null, product_name: null,
+      priority: null, alert_level: null, platform: null,
+      org_name: null, org_type: null,
+      time_range: null, deadline_urgency: null,
+      status_filter: "active",
+    })
+  }),
+
+  // ─── resolveEntities 输出 ───
+  resolved_entities: Annotation({
+    reducer: (x, y) => y ?? x,
+    default: () => ({
+      tasks: { status: "not_requested", items: [] },
+      org: { status: "not_requested", resolved: null },
+    })
+  }),
+
+  // ─── SafetyGateway 输出 (legacy, v1 deprecated) ───
+  // @deprecated — 替换为 query_filters.task_name
   extracted_task_ref: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  // @deprecated — 替换为 query_filters.org_name
   extracted_org_ref: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  // @deprecated — 替换为 query_filters.org_type
   extracted_org_type: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  // @deprecated — 替换为 query_filters.time_range
   extracted_time_ref: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  // @deprecated — 替换为 query_filters + resolved_entities
+  entities: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
+  // @deprecated
+  entities_confidence: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
   ambiguity_payload: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
   escalate_count: Annotation({ reducer: (x, y) => (y !== undefined ? y : x), default: () => 0 }),
 });
