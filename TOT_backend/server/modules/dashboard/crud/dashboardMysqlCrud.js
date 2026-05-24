@@ -289,6 +289,100 @@ async function searchTasks(filters = {}) {
 // 统一任务搜索 — SQL condition builder（纯函数，可测试）
 // ═══════════════════════════════════════════════════════════════════
 
+// ─── 组织搜索 ────────────────────────────────────────────────────
+
+async function searchOrg(name, type) {
+  if (!name) return [];
+  const results = [];
+
+  // Layer 1: 黑话映射表（表不存在时静默跳过）
+  try {
+    const slangCond = type ? 'AND org_type = ?' : '';
+    const slangParams = type ? [name, type] : [name];
+    const slangRows = await all(
+      `SELECT canonical_name, org_type, priority
+       FROM org_slang_mappings
+       WHERE alias = ? ${slangCond}
+       ORDER BY priority DESC
+       LIMIT 3`,
+      slangParams
+    );
+    for (const row of slangRows) {
+      const canonicalResults = await _searchResellerStore(row.canonical_name, row.org_type);
+      for (const r of canonicalResults) {
+        r.match_type = 'slang_exact';
+        r.alias = name;
+      }
+      results.push(...canonicalResults);
+    }
+  } catch (_) { /* table not exists — silent skip */ }
+
+  // Layer 2: 直接模糊匹配 reseller_store
+  const directMatches = await _searchResellerStore(name, type);
+  for (const r of directMatches) r.match_type = 'fuzzy_name';
+  results.push(...directMatches);
+
+  // Layer 3: 去空格回退
+  if (results.length === 0 && /\s/.test(name)) {
+    const noSpace = name.replace(/\s+/g, '');
+    const noSpaceMatches = await _searchResellerStore(noSpace, type);
+    for (const r of noSpaceMatches) r.match_type = 'fuzzy_name_nospace';
+    results.push(...noSpaceMatches);
+  }
+
+  // Layer 4: learner_account 补充 (L3/L4)
+  if (type === 'l3' || type === 'l4' || !type) {
+    const laTypes = type ? [type] : ['l3', 'l4'];
+    for (const laType of laTypes) {
+      const col = laType === 'l3' ? 'rtm_level_3_name' : 'rtm_level_4_name';
+      const rows = await all(
+        `SELECT DISTINCT ${col} AS name, '${laType}' AS org_type, ${col} AS code
+         FROM learner_account
+         WHERE ${col} LIKE ?
+         LIMIT 5`,
+        [`%${name}%`]
+      );
+      for (const r of rows) r.match_type = 'fuzzy_learner';
+      results.push(...rows);
+    }
+  }
+
+  // 去重: 按 (code, org_type) 保留最高优先级 match_type
+  const seen = new Map();
+  const priority = { slang_exact: 1, fuzzy_name: 2, fuzzy_name_nospace: 3, fuzzy_learner: 4 };
+  for (const r of results) {
+    const key = `${r.code}::${r.org_type}`;
+    const existing = seen.get(key);
+    if (!existing || priority[r.match_type] < priority[existing.match_type]) {
+      seen.set(key, r);
+    }
+  }
+  return [...seen.values()].slice(0, 10);
+}
+
+const _RESELLER_COL_MAP = {
+  region: ['sub_region_name', 'sub_region_code'],
+  store: ['store_name', 'store_apple_id'],
+  dealer: ['reseller_name', 'reseller_name'],
+  l4: ['rtm4_name', 'rtm4_name'],
+};
+
+async function _searchResellerStore(name, type) {
+  const types = type ? [type] : Object.keys(_RESELLER_COL_MAP);
+  const queries = types.map(t => {
+    const [nameCol, codeCol] = _RESELLER_COL_MAP[t];
+    return all(
+      `SELECT DISTINCT ${codeCol} AS code, ${nameCol} AS name, '${t}' AS org_type
+       FROM reseller_store
+       WHERE ${nameCol} LIKE ?
+       LIMIT 5`,
+      [`%${name}%`]
+    );
+  });
+  const arrs = await Promise.all(queries);
+  return arrs.flat();
+}
+
 function buildSearchConditions(filters) {
   const conds = [];
   const params = [];
@@ -375,6 +469,7 @@ module.exports = {
   getLatestAgentInsight,
   searchTasks,
   buildSearchConditions,
+  searchOrg,
   insertInsight,
   getInsightById,
   incrementInsightVote,
