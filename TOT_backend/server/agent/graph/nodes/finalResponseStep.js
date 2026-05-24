@@ -320,8 +320,8 @@ const finalResponseStep = async (state, config) => {
           ? new Date(toolCutoff).toISOString().replace('T', ' ').slice(0, 19)
           : dataTimestamp;
         const _provenance = {
-          scope: provenance['统计口径'] || '',
-          cutoff: dataCutoff,
+          '统计口径': provenance.scope || provenance['统计口径'] || '',
+          '数据截止': dataCutoff,
         };
 
         const _datasets = {};
