@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'fetch_alert_persons',
-      description: '获取预警人员名单（learner_task_reminder 真实催办记录）。当用户问"P0预警""P1预警""哪些人收到了P0催办"时使用。注意：这与任务优先级(urgency_level)是不同概念——本工具查的是实际已发出的预警记录。',
+      description: '获取预警人员名单（learner_task_reminder 真实催办记录）。当用户问P0预警/P1预警/哪些人收到了P0催办/催办记录/谁被催了时使用。注意：这与任务优先级(urgency_level)是不同概念——本工具查的是实际已发出的预警记录。',
       parameters: {
         type: 'object',
         required: ['task_id', 'alert_level'],

@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Executive Chat Agent — 架构全景图</title>
+<style>
+  :root {
+    --bg: #fafbfc;
+    --surface: #fff;
+    --border: #e2e6ed;
+    --text: #1a1f36;
+    --text2: #5f6b7a;
+    --text3: #a0aec0;
+    --blue: #2563eb;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red: #dc2626;
+    --purple: #7c3aed;
+    --cyan: #0891b2;
+    --pink: #db2777;
+    --llm-bg: #fef3c7;
+    --llm-border: #f59e0b;
+    --code-bg: #dbeafe;
+    --code-border: #3b82f6;
+    --tool-bg: #dcfce7;
+    --tool-border: #22c55e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 40px 24px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 20px; font-weight: 600; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 16px; font-weight: 600; margin: 24px 0 12px; color: var(--text2); }
+  .subtitle { color: var(--text2); font-size: 14px; margin-bottom: 32px; }
+
+  /* ── Overview Stats ── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 32px; }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-num { font-size: 28px; font-weight: 700; color: var(--blue); }
+  .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  /* ── Graph Topology ── */
+  .topology {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    overflow-x: auto;
+  }
+  .topo-flow {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    min-width: 900px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .topo-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .topo-node {
+    width: 140px;
+    padding: 10px 8px;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    position: relative;
+    border: 2px solid;
+  }
+  .topo-node.llm { background: var(--llm-bg); border-color: var(--llm-border); }
+  .topo-node.code { background: var(--code-bg); border-color: var(--code-border); }
+  .topo-node.tool { background: var(--tool-bg); border-color: var(--tool-border); }
+  .topo-node.start { background: #f0f2f5; border-color: #a0aec0; color: var(--text2); }
+  .topo-node.end { background: #f0f2f5; border-color: #a0aec0; color: var(--text2); }
+  .topo-arrow {
+    font-size: 20px;
+    color: var(--text3);
+    line-height: 1;
+    text-align: center;
+    margin: 2px 0;
+  }
+  .topo-arrow-label {
+    font-size: 9px;
+    color: var(--text3);
+    text-align: center;
+    max-width: 140px;
+    word-break: break-all;
+  }
+  .topo-label {
+    font-size: 9px;
+    color: var(--text2);
+    margin-top: 2px;
+    font-weight: 400;
+    font-style: italic;
+  }
+
+  /* ── Node Cards ── */
+  .node-cards { display: grid; gap: 16px; }
+  .node-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    border-left: 4px solid var(--blue);
+  }
+  .node-card.llm-card { border-left-color: var(--amber); }
+  .node-card.code-card { border-left-color: var(--blue); }
+  .node-card.mixed-card { border-left-color: var(--purple); }
+  .node-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .node-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .badge-llm { background: var(--llm-bg); color: #92400e; }
+  .badge-code { background: var(--code-bg); color: #1e40af; }
+  .badge-mixed { background: #ede9fe; color: #6b21a8; }
+  .node-name { font-weight: 700; font-size: 15px; }
+  .node-desc { font-size: 13px; color: var(--text2); margin-bottom: 10px; }
+  .node-detail { font-size: 12px; color: var(--text2); }
+  .node-detail dt { font-weight: 600; color: var(--text); margin-top: 8px; }
+  .node-detail dd { margin-left: 0; color: var(--text2); }
+  .node-detail code {
+    background: #f0f2f5;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  }
+
+  /* ── Route Table ── */
+  .route-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .route-table th {
+    background: #f8f9fb;
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--text2);
+    border-bottom: 2px solid var(--border);
+  }
+  .route-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #f0f2f5;
+  }
+  .route-table code { background: #f0f2f5; padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+
+  /* ── Tool Table ── */
+  .tool-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tool-table th { background: #f8f9fb; padding: 8px 12px; text-align: left; font-weight: 600; font-size: 11px; color: var(--text2); border-bottom: 2px solid var(--border); }
+  .tool-table td { padding: 8px 12px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+  .tool-table td:first-child { font-family: "SF Mono", monospace; font-size: 12px; font-weight: 600; white-space: nowrap; }
+
+  /* ── LLM Table ── */
+  .model-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .model-table th { background: #f8f9fb; padding: 8px 12px; text-align: left; font-weight: 600; font-size: 11px; color: var(--text2); border-bottom: 2px solid var(--border); }
+  .model-table td { padding: 8px 12px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+  .model-table td:first-child { font-family: "SF Mono", monospace; font-size: 12px; font-weight: 600; white-space: nowrap; }
+
+  /* ── Data Flow ── */
+  .state-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+  .state-field {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  .state-field-name { font-weight: 600; font-family: "SF Mono", monospace; font-size: 12px; }
+  .state-field-owner { font-size: 10px; color: var(--text3); float: right; }
+  .state-field-desc { color: var(--text2); margin-top: 4px; font-size: 11px; }
+
+  /* ── Lifecycle ── */
+  .lifecycle { display: flex; gap: 0; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+  .lifecycle-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    width: 170px;
+    text-align: center;
+  }
+  .lifecycle-arrow { font-size: 24px; color: var(--text3); padding: 20px 4px 0; }
+  .lifecycle-num { font-size: 24px; font-weight: 800; color: var(--blue); }
+  .lifecycle-title { font-weight: 600; font-size: 13px; margin-top: 4px; }
+  .lifecycle-desc { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+  /* ── Legend ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; }
+  .legend-dot.llm-dot { background: var(--llm-bg); border-color: var(--llm-border); }
+  .legend-dot.code-dot { background: var(--code-bg); border-color: var(--code-border); }
+  .legend-dot.tool-dot { background: var(--tool-bg); border-color: var(--tool-border); }
+
+  /* ── SSE ── */
+  .sse-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .sse-table th { background: #f8f9fb; padding: 8px 12px; text-align: left; font-weight: 600; font-size: 11px; color: var(--text2); border-bottom: 2px solid var(--border); }
+  .sse-table td { padding: 8px 12px; border-bottom: 1px solid #f0f2f5; }
+  .sse-table td:first-child { font-family: "SF Mono", monospace; font-weight: 600; white-space: nowrap; }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .topo-node { width: 110px; font-size: 10px; padding: 8px 4px; }
+    .lifecycle-step { width: 130px; }
+    .state-fields { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>⚙️ Executive Chat Agent — 架构全景图</h1>
+<p class="subtitle">LangGraph StateGraph · Function Calling Loop · SSE Streaming · MySQL Checkpoint</p>
+
+<!-- ── Stats ── -->
+<div class="stats">
+  <div class="stat"><div class="stat-num">10</div><div class="stat-label">Graph 节点</div></div>
+  <div class="stat"><div class="stat-num">4</div><div class="stat-label">LLM 调用点</div></div>
+  <div class="stat"><div class="stat-num">5</div><div class="stat-label">条件路由</div></div>
+  <div class="stat"><div class="stat-num">9</div><div class="stat-label">Chat Tools</div></div>
+  <div class="stat"><div class="stat-num">5</div><div class="stat-label">LLM Prompt</div></div>
+  <div class="stat"><div class="stat-num">6</div><div class="stat-label">SSE 事件类型</div></div>
+</div>
+
+<!-- ── Graph Topology ── -->
+<h2>1. 图拓扑结构</h2>
+<p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+  实线为固定边，虚线标注条件路由决策。🟡 LLM 节点 &nbsp; 🔵 代码节点 &nbsp; 🟢 工具执行
+</p>
+
+<div class="topology">
+  <div class="topo-flow">
+    <!-- Row: START → LoadContext → SafetyGateway -->
+    <div class="topo-col">
+      <div class="topo-node start">START</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node code">LoadContext</div>
+      <div class="topo-label">代码 · 记忆加载</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node llm">SafetyGateway</div>
+      <div class="topo-label">LLM · 安全网关</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;align-items:center;padding:0 8px;padding-top:140px">
+      <div style="font-size:9px;color:var(--text3);max-width:100px;text-align:center">
+        deny/chat → FinalResponse<br>
+        hitl → HITL Gate<br>
+        fc → CheckSteps
+      </div>
+    </div>
+
+    <!-- FC Loop -->
+    <div class="topo-col" style="padding-top:200px">
+      <div style="font-size:10px;color:var(--text3);margin-bottom:4px;text-align:center;border:1px dashed var(--border);padding:2px 8px;border-radius:4px;width:150px">FC Loop (≤3轮)</div>
+      <div class="topo-node code">fc_CheckSteps</div>
+      <div class="topo-label">步数检查</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node llm">fc_LlmToolCallStep</div>
+      <div class="topo-label">LLM · 工具决策</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node code">fc_CheckDuplicate</div>
+      <div class="topo-label">去重检查</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node tool">fc_ExecuteTool</div>
+      <div class="topo-label">工具 · 执行</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node code">fc_MergeToolResults</div>
+      <div class="topo-label">结果合并</div>
+      <div class="topo-arrow">↙</div>
+      <div style="font-size:9px;color:var(--text3);text-align:center">← 回到 CheckSteps</div>
+    </div>
+
+    <!-- Right branch: HITL + Final -->
+    <div class="topo-col" style="padding-top:200px">
+      <div style="font-size:10px;color:var(--text3);margin-bottom:18px;text-align:center;border:1px dashed var(--border);padding:2px 8px;border-radius:4px;width:150px">HITL 分支</div>
+      <div class="topo-node code">HumanInTheLoopGate</div>
+      <div class="topo-label">中断 & 恢复</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;align-items:center;padding:0 4px;padding-top:310px">
+      <div style="font-size:9px;color:var(--text3);max-width:80px;text-align:center">两者最终汇聚→</div>
+    </div>
+
+    <!-- Final -->
+    <div class="topo-col" style="padding-top:290px">
+      <div class="topo-node llm">FinalResponseStep</div>
+      <div class="topo-label">LLM · 结构化输出</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node code">PersistAndEmit</div>
+      <div class="topo-label">持久化 & SSE</div>
+      <div class="topo-arrow">↓</div>
+      <div class="topo-node end">END</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Node-by-Node ── -->
+<h2>2. 节点详解</h2>
+<div class="node-cards">
+
+  <!-- 1. LoadContext -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">01 · LoadContext</span>
+    </div>
+    <div class="node-desc">加载用户长期记忆和注入用户消息到对话历史。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd><code>state.userId</code>, <code>state.userMessage</code></dd>
+      <dt>输出</dt><dd><code>memory_snippets</code> (用户偏好/上下文), <code>messages</code> (追加 HumanMessage)</dd>
+      <dt>核心逻辑</dt><dd>调用 <code>chatMemoryService.getMemories()</code> 读取 Store API，失败降级为空</dd>
+      <dt>Trace</dt><dd>node_enter → node_exit (snippets 数量)</dd>
+    </dl>
+  </div>
+
+  <!-- 2. SafetyGateway -->
+  <div class="node-card llm-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-llm">LLM</span>
+      <span class="node-name">02 · SafetyGateway</span>
+    </div>
+    <div class="node-desc">安全路由网关。分析用户意图，判断是否为禁止请求、纯闲聊、含歧义、或需要工具查询。</div>
+    <dl class="node-detail">
+      <dt>LLM</dt><dd><code>routerModel</code> — DeepSeek Chat · temperature=0.1 · maxTokens=512</dd>
+      <dt>Prompt</dt><dd><code>safety_gateway</code> — 含近期对话历史(最近4轮)</dd>
+      <dt>输入</dt><dd><code>state.userMessage</code>, <code>state.messages</code>, <code>state.memory_snippets</code></dd>
+      <dt>输出</dt><dd><code>mode</code> (chat/deny/tool), <code>extracted_task_ref</code>, <code>extracted_org_ref</code>, <code>extracted_org_type</code>, <code>extracted_time_ref</code>, <code>ambiguity_payload</code></dd>
+      <dt>路由</dt><dd>
+        <code>deny</code> → FinalResponseStep (拒绝回答)<br>
+        <code>chat</code> → FinalResponseStep (纯闲聊)<br>
+        <code>hitl</code> → HumanInTheLoopGate (有歧义需确认)<br>
+        <code>fc</code> → fc_CheckSteps (工具查询)
+      </dd>
+      <dt>纠错</dt><dd><code>correctMode()</code> — chat + 检测到实体引用 → 升级为 tool</dd>
+      <dt>Trace</dt><dd>node_enter → decision(mode) → node_exit</dd>
+    </dl>
+  </div>
+
+  <!-- 3. fc_CheckSteps -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">03 · fc_CheckSteps</span>
+    </div>
+    <div class="node-desc">FC 循环步数控制器。检查是否超出最大轮次限制。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd><code>state.fc_super_step_count</code>, <code>state.hitl_resume_payload</code></dd>
+      <dt>输出</dt><dd><code>fc_super_step_count</code> (递增), <code>fc_next_action</code></dd>
+      <dt>规则</dt><dd>从 HITL 恢复不递增步数 (ask_user 不消耗 FC 轮次)<br>超出 <code>MAX_FC_ROUNDS</code>(默认3) → 强制 FinalResponseStep</dd>
+      <dt>Trace</dt><dd>node_enter → node_exit (step, fromHitl)</dd>
+    </dl>
+  </div>
+
+  <!-- 4. fc_LlmToolCallStep -->
+  <div class="node-card llm-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-llm">LLM</span>
+      <span class="node-name">04 · fc_LlmToolCallStep</span>
+    </div>
+    <div class="node-desc">FC 循环核心：LLM 决定调用哪些工具(或直接回答)。</div>
+    <dl class="node-detail">
+      <dt>LLM</dt><dd><code>fcModel</code> — DeepSeek Chat · temperature=0.1 · maxTokens=2048 · streaming=true<br>支持 DEEPSEEK_REASONER 切换 deepseek-reasoner</dd>
+      <dt>Prompt</dt><dd><code>fc_agent</code> — 含实体提取、图表数据、工具列表 (bindTools)、步数上下文</dd>
+      <dt>输入</dt><dd>完整消息历史 (截断30条), <code>state.toolResults</code>, <code>state.extracted_*</code></dd>
+      <dt>输出</dt><dd><code>messages</code> (追加 AIMessage + tool_calls), 无工具调用时直接输出 <code>reply_markdown</code></dd>
+      <dt>流式</dt><dd>逐 token 通过 SSE emitter 发送 (isReasoning: true)<br>DSML 过滤: 过滤 &lt;｜tool_calls&gt; 乱码段</dd>
+      <dt>超限</dt><dd>达到 maxSteps 时: 不绑定工具, 追加 SYSTEM 指令强制总结</dd>
+      <dt>Trace</dt><dd>node_enter → llm_generation (step, chunks, latencyMs, toolCallCount, toolCallNames) → node_exit</dd>
+    </dl>
+  </div>
+
+  <!-- 5. fc_CheckDuplicate -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">05 · fc_CheckDuplicate</span>
+    </div>
+    <div class="node-desc">工具调用去重。三级缓存：同批去重 → 同图缓存 → 跨会话 Session 缓存。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd>最后一条 AI 消息的 <code>tool_calls</code></dd>
+      <dt>输出</dt><dd>
+        <code>pending_tool_calls</code> (需执行的新调用)<br>
+        <code>toolResults</code> (缓存命中直接注入结果)<br>
+        <code>fc_next_action</code>: validate/merge/finalize
+      </dd>
+      <dt>签名</dt><dd><code>buildToolSignature(toolName, args, scopeFp, freshnessBucket)</code> — 相同签名 = 相同查询</dd>
+      <dt>Freshness 桶</dt><dd>realtime=60s, daily=3600s, static=86400s</dd>
+      <dt>Trace</dt><dd>node_enter → decision(total/deduped/pending) → node_exit</dd>
+    </dl>
+  </div>
+
+  <!-- 6. fc_ExecuteTool -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">06 · fc_ExecuteTool</span>
+    </div>
+    <div class="node-desc">工具执行器。串行调用每个待执行的工具，支持超时保护、权限短路、SSE 事件。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd><code>state.pending_tool_calls</code></dd>
+      <dt>输出</dt><dd>
+        <code>toolResults</code> (key=call_id, value={data, signature, error})<br>
+        <code>calledTools</code> (已执行工具名列表)<br>
+        <code>fc_next_action</code>: merge/hitl
+      </dd>
+      <dt>特殊处理</dt><dd>
+        <code>ask_user</code> 工具 → 走 HITL 中断路径<br>
+        <code>PERMISSION_DENIED</code> → 后续工具短路跳过<br>
+        超时保护: 每个工具独立 timeoutMs
+      </dd>
+      <dt>SSE</dt><dd>emitter.handleToolStart / handleToolEnd</dd>
+      <dt>Trace</dt><dd>node_enter → tool_call → tool_result → node_exit (executed: N, tools: [...])</dd>
+    </dl>
+  </div>
+
+  <!-- 7. fc_MergeToolResults -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">07 · fc_MergeToolResults</span>
+    </div>
+    <div class="node-desc">将工具执行结果转换为 ToolMessage 注入对话历史，供下一轮 LLM 使用。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd><code>state.toolResults</code>, <code>state.messages</code></dd>
+      <dt>输出</dt><dd><code>messages</code> (追加 ToolMessage), <code>pending_tool_calls</code> (清空), <code>fc_next_action</code></dd>
+      <dt>逻辑</dt><dd>
+        找到最后一条含 tool_calls 的 AI 消息<br>
+        跳过已 emit 的 tool_call_id<br>
+        alias_of 解引用 (同批去重)<br>
+        空结果 → 注入错误 payload + fallback 计数
+      </dd>
+      <dt>缓存</dt><dd>成功结果写入 Session 缓存 (chatSessionStateService.addRecord)</dd>
+      <dt>Trace</dt><dd>node_enter → node_exit (merged: N, fallbacks: N)</dd>
+    </dl>
+  </div>
+
+  <!-- 8. HumanInTheLoopGate -->
+  <div class="node-card mixed-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-mixed">混合</span>
+      <span class="node-name">08 · HumanInTheLoopGate</span>
+    </div>
+    <div class="node-desc">人机交互中断 & 恢复节点。LangGraph interrupt() 挂起图执行，等待用户响应后恢复。</div>
+    <dl class="node-detail">
+      <dt>触发</dt><dd>SafetyGateway ambiguity_payload 或 fc_ExecuteTool 的 ask_user</dd>
+      <dt>中断</dt><dd><code>interrupt(payload)</code> — 图挂起, SSE 发 clarify + done 事件, 前端渲染选择界面</dd>
+      <dt>恢复</dt><dd>前端发 resume 请求 → Command({resume}) → 此节点继续执行</dd>
+      <dt>5 条路径</dt><dd>
+        <code>fc_hitl_continue</code> — FC 澄清继续 (用户回复注入 HumanMessage)<br>
+        <code>fc_hitl_cancel</code> — FC 澄清取消 → finalize<br>
+        <code>cancel</code> — 顶层取消 → finalize<br>
+        <code>intent_shift</code> — 意图转移 → re_route (重置实体+消息)<br>
+        <code>slot_fill</code> — 补全参数 → validate (重新执行工具)
+      </dd>
+      <dt>任务候选</dt><dd>missing_task_ref 时自动查询最多8个任务供选择</dd>
+      <dt>Trace</dt><dd>node_enter → decision(5条路径) → node_exit</dd>
+    </dl>
+  </div>
+
+  <!-- 9. FinalResponseStep -->
+  <div class="node-card llm-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-llm">LLM</span>
+      <span class="node-name">09 · FinalResponseStep</span>
+    </div>
+    <div class="node-desc">最终回复生成。将工具结果和图表数据交给 LLM，输出结构化 JSON。</div>
+    <dl class="node-detail">
+      <dt>LLM</dt><dd><code>structuredModel</code> — DeepSeek Chat · temperature=0.1 · maxTokens=2048 · response_format=json_object</dd>
+      <dt>Prompt</dt><dd><code>final_response</code> + 用户问题 + 工具结果 JSON + 可用数据集摘要</dd>
+      <dt>输入</dt><dd><code>state.toolResults</code> (所有工具结果), <code>state.userMessage</code></dd>
+      <dt>输出</dt><dd>结构化 JSON (Zod 校验 TemplateOutput):</dd>
+      <dt>6 模板</dt><dd>
+        <code>simple_metric</code> — 单指标 (keyNumbers 突出)<br>
+        <code>ranking</code> — 排名 (图表+表格)<br>
+        <code>overview</code> — 全景 (keyNumbers+图表)<br>
+        <code>warning</code> — 预警 (attentionPoints 突出)<br>
+        <code>diagnosis</code> — 诊断 (attentionPoints+建议)<br>
+        <code>general</code> — 通用 (纯 markdown)
+      </dd>
+      <dt>数据解析</dt><dd>
+        <code>extractPlottableData()</code> — 从工具结果提取可画图数据集<br>
+        LLM 通过 <code>selectedCharts</code>/<code>selectedTables</code> 引用<br>
+        ↔ 代码按 datasetId 匹配 → 生成 charts + tables 数组
+      </dd>
+      <dt>降级</dt><dd>无工具结果 → 纯闲聊路径 (stream 文本)<br>JSON 解析失败 → 降级 renderToolResultsMarkdown</dd>
+      <dt>Trace</dt><dd>node_enter → node_exit (template, tables, charts, bytes)</dd>
+    </dl>
+  </div>
+
+  <!-- 10. PersistAndEmit -->
+  <div class="node-card code-card">
+    <div class="node-card-header">
+      <span class="node-badge badge-code">代码</span>
+      <span class="node-name">10 · PersistAndEmit</span>
+    </div>
+    <div class="node-desc">持久化消息到 MySQL + 发送 SSE done 事件 + 生成会话标题 + 发布记忆事件。</div>
+    <dl class="node-detail">
+      <dt>输入</dt><dd><code>state.finalResponse</code>, <code>state.reply_markdown</code>, <code>state.sessionId</code></dd>
+      <dt>输出</dt><dd><code>finalMessageId</code>, <code>sessionTitle</code></dd>
+      <dt>核心逻辑</dt><dd>
+        1. 解析 reply_markdown JSON → 提取 overview 为 contentText<br>
+        2. 注入 <code>_trace</code> (state.trace_log) 到 contentJson<br>
+        3. 写入 chat_message 表<br>
+        4. 首次回复自动生成会话标题 (LLM titleModel)<br>
+        5. 发布 memory 事件到 BullMQ<br>
+        6. 更新 Langfuse trace 元数据
+      </dd>
+      <dt>Trace</dt><dd>node_enter → node_exit (messageId) → clearT0</dd>
+    </dl>
+  </div>
+</div>
+
+<!-- ── Route Decisions ── -->
+<h2>3. 条件路由决策</h2>
+<table class="route-table">
+  <tr><th>路由点</th><th>条件</th><th>目标</th><th>说明</th></tr>
+  <tr>
+    <td>routeAfterSafetyGateway</td>
+    <td><code>mode === "deny"</code></td><td>FinalResponseStep</td><td>拒绝请求(非只读/敏感内容)</td>
+  </tr>
+  <tr><td></td><td><code>mode === "chat"</code></td><td>FinalResponseStep</td><td>纯闲聊(无数据查询)</td></tr>
+  <tr><td></td><td><code>ambiguity_payload</code></td><td>HumanInTheLoopGate</td><td>有歧义(缺任务名/范围不明)</td></tr>
+  <tr><td></td><td>其他</td><td>fc_CheckSteps</td><td>工具查询 → 进入 FC Loop</td></tr>
+  <tr style="background:#fafbfc">
+    <td>routeAfterFcCheckSteps</td>
+    <td><code>step >= MAX_FC_ROUNDS(3)</code></td><td>FinalResponseStep</td><td>超出最大轮次,强制回答</td></tr>
+  <tr style="background:#fafbfc"><td></td><td>正常</td><td>fc_LlmToolCallStep</td><td>继续 FC 循环</td></tr>
+  <tr>
+    <td>routeAfterFcLlm</td>
+    <td>LLM 返回 tool_calls</td><td>fc_CheckDuplicate</td><td>有工具调用 → 去重后执行</td></tr>
+  <tr><td></td><td>无 tool_calls</td><td>FinalResponseStep</td><td>LLM 认为信息够 → 直接回答</td></tr>
+  <tr style="background:#fafbfc">
+    <td>routeAfterCheckDuplicate</td>
+    <td><code>pending_tool_calls > 0</code></td><td>fc_ExecuteTool</td><td>有新调用需执行</td></tr>
+  <tr style="background:#fafbfc"><td></td><td>全部去重</td><td>fc_MergeToolResults</td><td>直接用缓存结果</td></tr>
+  <tr>
+    <td>routeAfterExecute</td>
+    <td><code>hitl_status === 'pending_interrupt'</code></td><td>HumanInTheLoopGate</td><td>ask_user 触发中断</td></tr>
+  <tr><td></td><td><code>escalate_count >= 1</code></td><td>FinalResponseStep</td><td>执行异常,跳过后续</td></tr>
+  <tr><td></td><td>正常</td><td>fc_MergeToolResults</td><td>合并结果继续</td></tr>
+  <tr style="background:#fafbfc">
+    <td>routeAfterMerge</td><td><code>step >= MAX_FC_ROUNDS(3)</code></td><td>FinalResponseStep</td><td>超轮次 → 最终回答</td></tr>
+  <tr style="background:#fafbfc"><td></td><td>正常</td><td>fc_CheckSteps</td><td>回到 FC 循环开始</td></tr>
+  <tr>
+    <td>routeAfterHumanInTheLoop</td>
+    <td><code>fc_next_action === "finalize"</code></td><td>FinalResponseStep</td><td>取消/退出</td></tr>
+  <tr><td></td><td>正常</td><td>fc_CheckSteps</td><td>回到 FC 循环</td></tr>
+</table>
+
+<!-- ── LLM Models ── -->
+<h2>4. LLM 模型清单</h2>
+<table class="model-table">
+  <tr><th>变量名</th><th>模型</th><th>用途</th><th>temperature</th><th>maxTokens</th><th>使用节点</th></tr>
+  <tr>
+    <td>routerModel</td><td>deepseek-chat</td><td>安全路由意图分类</td><td>0.1</td><td>512</td><td>SafetyGateway</td>
+  </tr>
+  <tr>
+    <td>fcModel</td><td>deepseek-chat (或 deepseek-reasoner)</td><td>FC 工具选择决策</td><td>0.1</td><td>2048 (reasoner: 4096)</td><td>fc_LlmToolCallStep</td>
+  </tr>
+  <tr>
+    <td>structuredModel</td><td>deepseek-chat</td><td>结构化 JSON 最终回复</td><td>0.1</td><td>2048</td><td>FinalResponseStep</td>
+  </tr>
+  <tr>
+    <td>titleModel</td><td>deepseek-chat</td><td>会话标题生成</td><td>0</td><td>32</td><td>PersistAndEmit</td>
+  </tr>
+  <tr>
+    <td>memoryModel</td><td>deepseek-chat</td><td>用户记忆提取</td><td>0.1</td><td>512</td><td>chatMemoryService</td>
+  </tr>
+</table>
+
+<!-- ── Tools ── -->
+<h2>5. Chat Tools 目录</h2>
+<table class="tool-table">
+  <tr><th>工具名</th><th>用途</th><th>scopePolicy</th><th>timeout</th><th>数据源</th></tr>
+  <tr><td>search_task</td><td>按关键字/状态/平台搜索任务元数据</td><td>public</td><td>8s</td><td>taskCrud → task_publish</td></tr>
+  <tr><td>list_task_progress</td><td>批量查询任务进度(完成率/学习率/截止日)</td><td>regional_scoped</td><td>15s</td><td>taskCrud + queryEngine</td></tr>
+  <tr><td>query_metric</td><td>按维度(HQ/L3/L4/经销商/门店)查询指标排名</td><td>regional_scoped</td><td>15s</td><td>executiveMetricsService</td></tr>
+  <tr><td>query_trend</td><td>查询任务完成/学习率时间序列</td><td>regional_scoped</td><td>10s</td><td>queryEngine + MySQL</td></tr>
+  <tr><td>funnel_analysis</td><td>查询完成漏斗/预警催办漏斗</td><td>regional_scoped</td><td>12s</td><td>queryEngine + MySQL</td></tr>
+  <tr><td>get_task_dashboard</td><td>单个任务全景(指标+漏斗+预警)</td><td>regional_scoped</td><td>15s</td><td>queryEngine x3 (并行)</td></tr>
+  <tr><td>fetch_incomplete_persons</td><td>获取未完成人员名单(含门店/经销商/)</td><td>regional_scoped</td><td>15s</td><td>task_publish_learner JOIN mypal</td></tr>
+  <tr><td>fetch_alert_persons</td><td>获取预警人员名单(P0/P1/P2 催办记录)</td><td>regional_scoped</td><td>15s</td><td>learner_task_reminder JOIN account</td></tr>
+  <tr><td>ask_user</td><td>反问用户(触发 HITL 中断)</td><td>public</td><td>1s</td><td>无 (handler 空转)</td></tr>
+</table>
+
+<!-- ── Data Flow ── -->
+<h2>6. State 数据流</h2>
+<p style="font-size:13px;color:var(--text2);margin-bottom:12px">
+  State 使用 LangGraph Annotation 模式，不同字段有不同的 reducer 策略。节点只写自己拥有的字段。
+</p>
+<div class="state-fields">
+  <div class="state-field">
+    <div class="state-field-name">sessionId / userId / userMessage <span class="state-field-owner">入口设定</span></div>
+    <div class="state-field-desc">会话标识和用户输入。入口(chatService)一次性写入。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">messages <span class="state-field-owner">追加模式(concat)</span></div>
+    <div class="state-field-desc">对话历史。LoadContext 注入首条 HumanMessage，FC 节点注入 AIMessage + ToolMessage。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">memory_snippets <span class="state-field-owner">LoadContext</span></div>
+    <div class="state-field-desc">用户长期记忆(偏好/上下文)。被 SafetyGateway 和 fc_LlmToolCallStep 渲染进 prompt。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">mode / intent <span class="state-field-owner">SafetyGateway</span></div>
+    <div class="state-field-desc">路由决策: chat_only | tool_action | deny。intent 用于 FinalResponseStep 的模板选择。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">extracted_task_ref / extracted_org_ref / extracted_org_type / extracted_time_ref <span class="state-field-owner">SafetyGateway</span></div>
+    <div class="state-field-desc">从用户消息中提取的实体。注入 fc_agent prompt 帮助 LLM 选工具。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">ambiguity_payload <span class="state-field-owner">SafetyGateway</span></div>
+    <div class="state-field-desc">歧义检测结果。触发 HumanInTheLoopGate 中断。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">fc_super_step_count <span class="state-field-owner">fc_CheckSteps</span></div>
+    <div class="state-field-desc">FC 循环轮次计数器。多个路由点检查此值决定是否强制终止循环。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">pending_tool_calls <span class="state-field-owner">fc_LlmToolCallStep, fc_CheckDuplicate</span></div>
+    <div class="state-field-desc">待执行的工具调用列表。fc_ExecuteTool 消费，fc_MergeToolResults 清空。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">toolResults <span class="state-field-owner">fc_ExecuteTool (merge spread)</span></div>
+    <div class="state-field-desc">{tool_call_id: {data, signature, error}} 累计。多轮 FC 结果累积。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">calledTools <span class="state-field-owner">fc_ExecuteTool (concat)</span></div>
+    <div class="state-field-desc">所有已执行工具名列表。用于 trace 和 done 事件的 _toolMeta。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">hitl_status / interrupt_payload / hitl_resume_payload <span class="state-field-owner">HITL 节点</span></div>
+    <div class="state-field-desc">人机交互状态: idle → pending_interrupt → resumed。恢复时携带用户选择。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">finalResponse / reply_markdown <span class="state-field-owner">FinalResponseStep, fc_LlmToolCallStep</span></div>
+    <div class="state-field-desc">最终回复(JSON 字符串或 Markdown)。PersistAndEmit 消费。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">trace_log <span class="state-field-owner">各节点 (concat 追加)</span></div>
+    <div class="state-field-desc">运行追踪事件数组。PersistAndEmit 写入 content_json._trace。</div>
+  </div>
+  <div class="state-field">
+    <div class="state-field-name">regionScope <span class="state-field-owner">入口设定</span></div>
+    <div class="state-field-desc">用户权限范围: {type: "national" | "regional" | "rtm", regions, rtm}。工具执行时传递。</div>
+  </div>
+</div>
+
+<!-- ── SSE Events ── -->
+<h2>7. SSE 事件流</h2>
+<table class="sse-table">
+  <tr><th>事件</th><th>phase/内容</th><th>来源节点</th><th>前端处理</th></tr>
+  <tr>
+    <td>delta</td>
+    <td>phase=reasoning · LLM 推理文本</td>
+    <td>fc_LlmToolCallStep</td>
+    <td>累积到 thinking (思考过程面板)</td>
+  </tr>
+  <tr>
+    <td>delta</td>
+    <td>phase=tool_start · {toolName}</td>
+    <td>fc_ExecuteTool</td>
+    <td>显示"正在查询 XXX" 旋转指示器</td>
+  </tr>
+  <tr>
+    <td>delta</td>
+    <td>phase=tool_end · {status}</td>
+    <td>fc_ExecuteTool</td>
+    <td>移除旋转指示器</td>
+  </tr>
+  <tr>
+    <td>delta</td>
+    <td>phase=content · 最终回复文本</td>
+    <td>FinalResponseStep (chat_only 路径)</td>
+    <td>渲染到 hero card 或 markdown</td>
+  </tr>
+  <tr>
+    <td>trace</td>
+    <td>{ts, type, node, data}</td>
+    <td>所有节点 (runTrace)</td>
+    <td>累积到 traceSteps → AgentTracePanel</td>
+  </tr>
+  <tr>
+    <td>clarify</td>
+    <td>{prompt, options, threadId}</td>
+    <td>PersistAndEmit (HITL 路径)</td>
+    <td>渲染选择器界面</td>
+  </tr>
+  <tr>
+    <td>done</td>
+    <td>{messageId, replyContent, markdownContent, _toolMeta}</td>
+    <td>PersistAndEmit</td>
+    <td>最终确定消息状态</td>
+  </tr>
+  <tr>
+    <td>error</td>
+    <td>{message, code}</td>
+    <td>chatService (异常捕获)</td>
+    <td>显示错误提示</td>
+  </tr>
+</table>
+
+<!-- ── Lifecycle ── -->
+<h2>8. 对话全生命周期</h2>
+<div class="lifecycle">
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">①</div>
+    <div class="lifecycle-title">前端发送</div>
+    <div class="lifecycle-desc">POST /sessions/:id/messages<br>{content, stream:true}</div>
+  </div>
+  <div class="lifecycle-arrow">→</div>
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">②</div>
+    <div class="lifecycle-title">SSE 初始化</div>
+    <div class="lifecycle-desc">创建 MysqlSaver checkpointer<br>加载历史消息<br>构建 inputState</div>
+  </div>
+  <div class="lifecycle-arrow">→</div>
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">③</div>
+    <div class="lifecycle-title">Graph 执行</div>
+    <div class="lifecycle-desc">START → LoadContext → SafetyGateway → FC Loop (≤3轮) → FinalResponseStep → PersistAndEmit → END</div>
+  </div>
+  <div class="lifecycle-arrow">→</div>
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">④</div>
+    <div class="lifecycle-title">SSE 流式推送</div>
+    <div class="lifecycle-desc">delta(thinking/tool_start/tool_end) → trace → done/clarify</div>
+  </div>
+  <div class="lifecycle-arrow">→</div>
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">⑤</div>
+    <div class="lifecycle-title">MySQL 持久化</div>
+    <div class="lifecycle-desc">chat_message(content_text, content_json, _trace)<br>更新会话标题</div>
+  </div>
+  <div class="lifecycle-arrow">→</div>
+  <div class="lifecycle-step">
+    <div class="lifecycle-num">⑥</div>
+    <div class="lifecycle-title">前端渲染</div>
+    <div class="lifecycle-desc">Hero Card 结构化卡片<br>表格 / 图表 / 数据溯源<br>AgentTrace 时间线</div>
+  </div>
+</div>
+
+<!-- ── key paths ── -->
+<h2>9. 典型对话路径</h2>
+
+<h3>路径 A：纯闲聊 (Chat Only)</h3>
+<div class="topology" style="margin-bottom:24px">
+  <div class="topo-flow" style="justify-content:center;gap:4px">
+    <div class="topo-node code" style="width:100px">LoadContext</div>
+    <div style="padding-top:30px;font-size:18px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:100px">SafetyGateway<div style="font-size:8px;font-weight:400">mode=chat</div></div>
+    <div style="padding-top:30px;font-size:18px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:110px">FinalResponse<div style="font-size:8px;font-weight:400">stream markdown</div></div>
+    <div style="padding-top:30px;font-size:18px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:100px">PersistAndEmit</div>
+  </div>
+</div>
+
+<h3>路径 B：单工具查询 (FC 1轮)</h3>
+<div class="topology" style="margin-bottom:24px">
+  <div class="topo-flow" style="justify-content:center;gap:4px">
+    <div class="topo-node code" style="width:80px">Load...</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:80px">Safety</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Check</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:80px">LLM</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Dup</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node tool" style="width:80px">Exec</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Merge</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Check</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:80px">Final</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Persist</div>
+  </div>
+  <div style="font-size:11px;color:var(--text2);margin-top:8px;text-align:center">
+    SafetyGateway(mode=fc) → CheckSteps(step=1) → LLM(选择 tool) → CheckDup → Execute → Merge → CheckSteps(step=2) → LLM(无工具调用=直接回答) → FinalResponse
+  </div>
+</div>
+
+<h3>路径 C：HITL 中断恢复</h3>
+<div class="topology" style="margin-bottom:24px">
+  <div class="topo-flow" style="justify-content:center;gap:4px">
+    <div class="topo-node code" style="width:80px">Load...</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node llm" style="width:80px">Safety<div style="font-size:7px">ambig.</div></div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">HITL<div style="font-size:7px">interrupt</div></div>
+    <div style="padding-top:30px;font-size:16px;color:var(--red)">⏸</div>
+    <div style="font-size:10px;color:var(--red);padding:20px 4px">SSE clarify+done → 前端选择 → resume</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--green)">▶</div>
+    <div class="topo-node code" style="width:80px">Check...</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div style="font-size:10px;color:var(--text2);padding:20px 4px">...FC Loop...</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Final</div>
+    <div style="padding-top:30px;font-size:16px;color:var(--text3)">→</div>
+    <div class="topo-node code" style="width:80px">Persist</div>
+  </div>
+</div>
+
+<h3>路径 D：多工具 FC 循环 (≤3轮)</h3>
+<p style="font-size:13px;color:var(--text2)">
+  例如"Mono BAU 任务完成情况": 第1轮 LLM 调用 get_task_dashboard → 结果不够 → 第2轮调用 fetch_incomplete_persons + query_metric → 信息够了 → 无工具调用 → FinalResponseStep
+</p>
+
+<!-- ── Footer ── -->
+<div style="margin-top:60px;padding-top:20px;border-top:1px solid var(--border);text-align:center;font-size:12px;color:var(--text3)">
+  Executive Chat Agent · LangGraph + DeepSeek Function Calling · v4.0 · 2026-05-22
+</div>
+
+</div>
+</body>
+</html>

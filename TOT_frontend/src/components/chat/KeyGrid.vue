@@ -7,6 +7,9 @@
       <span class="key-value" :style="{ color: cellColor(k) }">
         {{ k.value }}<small v-if="k.unit" class="key-unit">&nbsp;{{ k.unit }}</small>
       </span>
+      <span v-if="k.trend && k.trend !== 'flat'" class="key-trend" :class="'trend-' + k.trend">
+        {{ trendIcon(k.trend) }} {{ k.trendValue || '' }}
+      </span>
       <span class="key-label">{{ k.label }}</span>
     </div>
   </div>
@@ -14,8 +17,14 @@
 
 <script setup lang="ts">
 defineProps<{
-  items: Array<{ label: string; value: string | number; unit?: string }>;
+  items: Array<{ label: string; value: string | number; unit?: string; trend?: 'up' | 'down' | 'flat'; trendValue?: string }>;
 }>();
+
+function trendIcon(t: string) {
+  if (t === 'up') return '↑';
+  if (t === 'down') return '↓';
+  return '→';
+}
 
 function cellColor(k: { label: string; value: string | number }) {
   if (k.label.includes('完成') && !k.label.includes('未')) return '#059669';
@@ -49,11 +58,19 @@ function cellColor(k: { label: string; value: string | number }) {
   color: #8f99a8;
   font-weight: 400;
 }
+.key-trend {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 2px;
+  &.trend-up { color: #059669; }
+  &.trend-down { color: #dc2626; }
+}
 .key-label {
   display: block;
   font-size: 11px;
   color: #8f99a8;
-  margin-top: 6px;
+  margin-top: 4px;
   font-weight: 500;
 }
 </style>

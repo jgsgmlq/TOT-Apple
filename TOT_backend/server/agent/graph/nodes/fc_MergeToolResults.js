@@ -5,6 +5,7 @@ const { endSpan } = require('../../../utils/tracer');
 const { getLastAiToolCalls, buildToolSignature, safeJsonContent, makeToolMessage } = require('../toolCallUtils');
 const chatSessionStateService = require('../../../services/chatSessionStateService');
 const chatToolsService = require('../../../services/chatToolsService');
+const trace = require('../shared/runTrace');
 
 const computeToolCallSignature = buildToolSignature;
 
@@ -18,8 +19,10 @@ const isErrorPayload = (data) => {
   }
 };
 
-const fc_MergeToolResults = async (state) => {
+const fc_MergeToolResults = async (state, config) => {
+  const emitter = config?.configurable?.sseEmitter;
   const span = startNodeSpan(state, 'FC_MergeToolResults', { toolResultKeys: Object.keys(state.toolResults || {}) });
+  trace.nodeEnter(emitter, state, 'fc_MergeToolResults', { results: Object.keys(state.toolResults || {}).length });
 
   let anchor = null;
   for (let i = state.messages.length - 1; i >= 0; i--) {
@@ -79,7 +82,8 @@ const fc_MergeToolResults = async (state) => {
     updates.meta_fallback_count = (state.meta_fallback_count || 0) + fallbackBump;
   }
   endSpan(span, { output: `${newMessages.length} messages merged` });
+  trace.nodeExit(emitter, state, 'fc_MergeToolResults', { merged: newMessages.length, fallbacks: fallbackBump });
   return updates;
 };
 
-module.exports = { fc_MergeToolResults };
+module.exports = { fc_MergeToolResults, isErrorPayload };

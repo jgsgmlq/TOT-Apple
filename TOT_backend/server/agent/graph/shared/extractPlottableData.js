@@ -132,14 +132,18 @@ function buildRanking(rows, dims, metrics, shortId) {
 
   return {
     id: `rank_${shortId}`,
-    kind: 'ranking',
     title: `${labelOf(dimKey)}排名`,
-    preferChartType: isDistribution ? 'pie' : 'bar',
     xAxis: sorted.map((r) => getDimValue(r, dimKey).slice(0, 20)),
     series: [{
       name: labelOf(metricKey),
       data: sorted.map((r) => getMetricValue(r, metricKey)),
     }],
+    sampleRows: sorted.slice(0, 5).map(r => {
+      const obj = {};
+      obj[labelOf(dimKey)] = getDimValue(r, dimKey);
+      for (const mk of [metricKey]) obj[labelOf(mk)] = getMetricValue(r, mk);
+      return obj;
+    }),
     rawRows: sorted.slice(0, 8),
   };
 }
@@ -151,14 +155,18 @@ function buildFunnel(meta) {
 
   return {
     id: `funnel_${stages[0]?.stage || 'main'}`,
-    kind: 'funnel',
     title: '学习完成漏斗',
-    preferChartType: 'pie',
     xAxis: stages.map((s) => s.label || s.stage),
     series: [{
       name: '人数',
       data: stages.map((s) => s.count || 0),
     }],
+    sampleRows: stages.slice(0, 5).map(r => {
+      const obj = {};
+      obj[labelOf('stage')] = r.label || r.stage;
+      for (const mk of ['count']) obj[labelOf(mk)] = r.count || 0;
+      return obj;
+    }),
     rawRows: stages,
   };
 }
@@ -179,14 +187,18 @@ function buildTrend(rows, dims, metrics, shortId) {
 
   return {
     id: `trend_${shortId}`,
-    kind: 'trend',
     title: '趋势变化',
-    preferChartType: 'line',
     xAxis: points.map((r) => getDimValue(r, timeDim)),
     series: [{
       name: labelOf(metricKey),
       data: points.map((r) => getMetricValue(r, metricKey)),
     }],
+    sampleRows: points.slice(0, 5).map(r => {
+      const obj = {};
+      obj[labelOf(timeDim)] = getDimValue(r, timeDim);
+      for (const mk of [metricKey]) obj[labelOf(mk)] = getMetricValue(r, mk);
+      return obj;
+    }),
     rawRows: points,
   };
 }
@@ -219,11 +231,15 @@ function buildComparison(rows, dims, metrics, shortId, opts = {}) {
 
   return {
     id: `cmp_${scaleGroup}_${shortId}`,
-    kind: 'comparison',
     title: `指标对比${titleSuffix}`,
-    preferChartType: 'bar',
     xAxis,
     series,
+    sampleRows: rows.slice(0, 5).map(r => {
+      const obj = {};
+      obj[labelOf(dimKey)] = getDimValue(r, dimKey);
+      for (const mk of metricKeys) obj[labelOf(mk)] = getMetricValue(r, mk);
+      return obj;
+    }),
     rawRows: rows.slice(0, 8),
   };
 }
@@ -283,6 +299,24 @@ function extractPlottableData(toolResults) {
       }
     }
 
+    // 人员名单 / 非指标型行数据：生成 table-only dataset，LLM 可通过 selectedTables 引用
+    // fetch_incomplete_persons / fetch_alert_persons 等返回的 name+email+store 数据
+    // 无 chartable metrics，但应展示为表格
+    if (plottable.length === 0 && ds.rows.length >= 1 && dims.length >= 1) {
+      plottable.push({
+        id: `list_${shortId}`,
+        title: ds.toolName ? `查询结果 (${ds.toolName})` : '查询结果',
+        xAxis: dims.map(d => labelOf(d)),
+        series: [],
+        sampleRows: ds.rows.slice(0, 5).map(r => {
+          const obj = {};
+          for (const d of dims) obj[labelOf(d)] = getDimValue(r, d);
+          return obj;
+        }),
+        rawRows: ds.rows.slice(0, 20),
+      });
+    }
+
     // 单条对象也当作 row 提取，避免漏掉（无 metrics 时也能进到这里）
     if (plottable.length === 0 && ds.rows.length === 1) {
       const row = ds.rows[0];
@@ -292,10 +326,14 @@ function extractPlottableData(toolResults) {
       if (kvEntries.length >= 2) {
         plottable.push({
           id: `kv_${shortId}`,
-          kind: 'comparison',
           title: '查询结果概览',
           xAxis: kvEntries.map(([k]) => labelOf(k)),
           series: [{ name: '值', data: kvEntries.map(([, v]) => Number(v) || 0) }],
+          sampleRows: kvEntries.slice(0, 5).map(([k, v]) => {
+            const obj = {};
+            obj[labelOf(k)] = v;
+            return obj;
+          }),
           rawRows: [row],
         });
       }

@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "command": "if cat \"$CLAUDE_TOOL_INPUT_FILE\" 2>/dev/null | grep -qiE 'ALTER\\\\s+TABLE|DROP\\\\s+TABLE|CREATE\\\\s+TABLE'; then echo '[BLOCKED] DDL statement detected — database schema changes are forbidden'; exit 2; fi",
+        "description": "Block DDL database write operations"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "paths": "TOT_backend/server/**/*.js",
+        "command": "if echo \"$FILE_PATH\" | grep -q '__tests__'; then cd TOT_backend/server && npx jest \"$FILE_PATH\" --no-coverage 2>&1 | tail -5; fi",
+        "description": "Auto-run Jest on edited test files"
+      }
+    ]
+  }
+}

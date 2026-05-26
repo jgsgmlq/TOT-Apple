@@ -1,5 +1,5 @@
 <template>
-  <div v-if="table && table.rows && table.rows.length >= 2" class="table-block">
+  <div v-if="table && table.rows && table.rows.length >= 1" class="table-block">
     <div class="table-title">{{ table.title }}</div>
 
     <div v-if="isFunnel" class="funnel-view">

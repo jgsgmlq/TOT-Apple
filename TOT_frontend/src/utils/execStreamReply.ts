@@ -9,10 +9,12 @@ export type ExecStreamState = {
   isFirstChunk: boolean;
   wasReasoning: boolean;
   activeToolName?: string;
+  _activeToolCount: number;
+  _toolShowTimer: ReturnType<typeof setTimeout> | null;
 };
 
 export function initExecStreamState(): ExecStreamState {
-  return { reasoningBuf: '', contentBuf: '', isFirstChunk: true, wasReasoning: false };
+  return { reasoningBuf: '', contentBuf: '', isFirstChunk: true, wasReasoning: false, _activeToolCount: 0, _toolShowTimer: null };
 }
 
 /** 归一化 SSE `delta` JSON（兼容字段名差异） */
@@ -48,14 +50,26 @@ export function feedExecStreamDelta(
       state.contentBuf = '';
     }
     if (deltaData.toolName) {
-      state.activeToolName = deltaData.toolName;
+      state._activeToolCount++;
+      // 延迟 500ms 才显示 spinner，避免快速工具调用时视觉闪烁
+      if (state._toolShowTimer) clearTimeout(state._toolShowTimer);
+      const name = deltaData.toolName;
+      state._toolShowTimer = setTimeout(() => {
+        if (state._activeToolCount > 0) {
+          state.activeToolName = name;
+        }
+      }, 500);
     }
     state.wasReasoning = false;
     return;
   }
 
   if (deltaData.phase === 'tool_end') {
-    state.activeToolName = undefined;
+    state._activeToolCount = Math.max(0, state._activeToolCount - 1);
+    if (state._activeToolCount === 0) {
+      if (state._toolShowTimer) { clearTimeout(state._toolShowTimer); state._toolShowTimer = null; }
+      state.activeToolName = undefined;
+    }
     state.wasReasoning = false;
     return;
   }
@@ -81,6 +95,13 @@ export function feedExecStreamDelta(
   }
 }
 
+export interface TraceEvent {
+  ts: number;
+  type: string;
+  node?: string;
+  data: Record<string, unknown>;
+}
+
 export interface ExecStyleAiPayload {
   thinking?: string;
   content: string;
@@ -89,6 +110,7 @@ export interface ExecStyleAiPayload {
   activeToolName?: string;
   /** 与 `thinking` 同步，供 done 后落库展示 */
   thinkingSnapshot: string;
+  traceSteps?: TraceEvent[];
 }
 
 /** 与主气泡正文一致、供 TTS 朗读；不含 `thinking`（思考过程） */
@@ -256,16 +278,18 @@ export function runExecStyleSseChat<TInput = string>(
     onComplete: (data: SendMessageResult) => void,
     onClarify: (payload: ClarifyPayload) => void,
     onError: (error: unknown) => void,
-    streamOptions?: { signal?: AbortSignal }
+    streamOptions?: { signal?: AbortSignal },
+    onTrace?: (parsed: unknown) => void,
   ) => Promise<void>,
   sessionId: string,
   userContent: TInput,
   onStreamingPatch: (payload: ExecStyleAiPayload) => void,
   onClarify?: (payload: ClarifyPayload) => void,
   options?: { signal?: AbortSignal }
-): Promise<{ result: SendMessageResult; thinkingSnapshot: string }> {
+): Promise<{ result: SendMessageResult; thinkingSnapshot: string; traceSteps: TraceEvent[] }> {
   const state = initExecStreamState();
   let lastSnapshot = '';
+  const traceSteps: TraceEvent[] = [];
   return new Promise((resolve, reject) => {
     void streamFn(
       sessionId,
@@ -274,16 +298,20 @@ export function runExecStyleSseChat<TInput = string>(
         feedExecStreamDelta(state, normalizeStreamDelta(deltaData));
         const p = execStreamStateToPayload(state);
         lastSnapshot = p.thinkingSnapshot;
+        p.traceSteps = traceSteps;
         onStreamingPatch(p);
       },
       (result) => {
-        resolve({ result, thinkingSnapshot: lastSnapshot });
+        resolve({ result, thinkingSnapshot: lastSnapshot, traceSteps });
       },
       (clarify) => {
         onClarify?.(clarify);
       },
       (err) => reject(err),
-      { signal: options?.signal }
+      { signal: options?.signal },
+      (parsed) => {
+        traceSteps.push(parsed as TraceEvent);
+      },
     );
   });
 }

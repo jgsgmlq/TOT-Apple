@@ -5,6 +5,8 @@ const { endSpan, getClient, endGeneration, maskPII, preview, NOOP_TRACE } = requ
 const chatToolsService = require('../../../services/chatToolsService');
 const chatSessionStateService = require('../../../services/chatSessionStateService');
 const { makeToolMessage } = require('../toolCallUtils');
+const trace = require('../shared/runTrace');
+const { logAgentTrace } = require('../shared/agentTraceLog');
 
 const inspectToolResult = (rawResult) => {
   if (rawResult && typeof rawResult === 'object') {
@@ -60,6 +62,8 @@ const fc_ExecuteTool = async (state, config) => {
   const calledTools = [];
   let denyShortCircuit = null;
 
+  trace.nodeEnter(emitter, state, 'fc_ExecuteTool', { tools: pendingToolCalls.map(tc => chatToolsService.normalizeToolName(tc.name)) });
+
   for (const toolCall of pendingToolCalls) {
     const toolName = chatToolsService.normalizeToolName(toolCall.name);
     const internalToolName = toolName.startsWith(`${state.tool_namespace}.`)
@@ -88,6 +92,8 @@ const fc_ExecuteTool = async (state, config) => {
       emitter.handleToolStart({ name: internalToolName });
     }
 
+    trace.toolCall(emitter, state, internalToolName, toolCall.args);
+
     let toolSpan = null;
     if (traceId) {
       try {
@@ -98,15 +104,19 @@ const fc_ExecuteTool = async (state, config) => {
 
     let finalResult;
     let inspect;
+    let executedAt;
     try {
       const rawResult = await chatToolsService.executeByName(internalToolName, toolCall.args, state.regionScope);
+      executedAt = rawResult?._meta?.executedAt || new Date().toISOString();
       inspect = inspectToolResult(rawResult);
       finalResult = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
+      trace.toolResult(emitter, state, internalToolName, trace.summarizeToolResult(typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult));
       endSpan(toolSpan, {
         output: maskPII(preview(finalResult, 500)),
         metadata: { status: inspect.ok ? 'success' : 'error', errorCode: inspect.errorCode || undefined, toolCallId: toolCall.id },
       });
     } catch (err) {
+      executedAt = new Date().toISOString();
       inspect = { ok: false, errorCode: 'EXECUTION_ERROR', errorMessage: err.message || '内部工具执行异常' };
       finalResult = JSON.stringify({ error: { code: 'EXECUTION_ERROR', message: inspect.errorMessage } });
       endSpan(toolSpan, {
@@ -129,14 +139,24 @@ const fc_ExecuteTool = async (state, config) => {
       signature: null,
       error: !inspect.ok,
       errorCode: inspect.errorCode || null,
+      executedAt,
     };
     calledTools.push(internalToolName);
+
+    logAgentTrace(state.sessionId, {
+      step: 'tool_execute',
+      tool: internalToolName,
+      args: toolCall.args,
+      ok: inspect.ok,
+      resultPreview: (typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult)).slice(0, 300),
+    });
 
     if (!inspect.ok && inspect.errorCode === 'PERMISSION_DENIED') {
       denyShortCircuit = { toolCallId: toolCall.id, errorCode: inspect.errorCode };
     }
   }
 
+  trace.nodeExit(emitter, state, 'fc_ExecuteTool', { executed: calledTools.length, tools: calledTools });
   return { toolResults, calledTools, fc_next_action: 'merge' };
 };
 

@@ -19,8 +19,8 @@ const { loadPrompt, loadAndRender } = require('./loader');
 
 const PROMPTS = {
   router:            { version: 'router/v3',               get: () => loadPrompt('router_v3') },
-  fc_agent:          { version: 'fc/v3',                   get: (ctx) => loadAndRender('fc_agent_v3', ctx) },
-  fc_agent_v4:       { version: 'fc/v4',                   get: (ctx) => loadAndRender('fc_agent_v4', ctx) },
+  fc_agent:          { version: 'fc/v5',                   get: (ctx) => loadAndRender('fc_agent_v5', ctx) },
+  fc_agent_v5:       { version: 'fc/v5',                   get: (ctx) => loadAndRender('fc_agent_v5', ctx) },
   chat_reply:        { version: 'chat/v1',                 get: () => loadPrompt('chat_reply_v1') },
   safety_gateway:    { version: 'safety_gateway/v1',       get: () => loadPrompt('safety_gateway_v1') },
   safety_gateway_v2: { version: 'safety_gateway/v2',       get: (ctx) => loadAndRender('safety_gateway_v2', ctx || {}) },

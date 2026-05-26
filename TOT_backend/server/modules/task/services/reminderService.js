@@ -38,7 +38,7 @@ function formatAutoNudgeContent(taskName, ruleType) {
 // ─── 自动预警主入口 ───────────────────────────────────────────────────
 
 async function evaluateAndTriggerAutoNudges(taskId) {
-  const task = taskCrud.getOldTaskForNudge(taskId);
+  const task = await taskCrud.getOldTaskForNudge(taskId);
   if (!task || task.status !== 'dispatched') {
     return { success: false, reason: 'Task not found or not dispatched' };
   }
@@ -57,7 +57,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   const passedPercent = totalDuration > 0 ? (passedDuration / totalDuration) * 100 : 100;
   const hoursLeft = (ddlAt - now) / (1000 * 60 * 60);
 
-  const assignments = taskCrud.getUncompletedAssignmentsForNudge(taskId);
+  const assignments = await taskCrud.getUncompletedAssignmentsForNudge(taskId);
   if (!assignments.length) {
     return {
       success: true, nudgedCount: 0, queued: 0,
@@ -145,7 +145,7 @@ async function evaluateAndTriggerAutoNudges(taskId) {
   const toProcess = [];
   for (const target of finalTargets) {
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
-    if (!taskCrud.checkNudgeDedupeKey(dedupeKey)) toProcess.push(target);
+    if (!await taskCrud.checkNudgeDedupeKey(dedupeKey)) toProcess.push(target);
   }
 
   if (!toProcess.length) {
@@ -173,12 +173,12 @@ async function evaluateAndTriggerAutoNudges(taskId) {
 // ─── 异步执行催办落库 + 广播 ──────────────────────────────────────────
 
 async function processAutoNudgeTargetsAsync(taskId, targets) {
-  const task = taskCrud.getOldTaskForNudge(taskId);
+  const task = await taskCrud.getOldTaskForNudge(taskId);
   const taskName = task && task.title;
 
   for (const target of targets) {
     const dedupeKey = `autonudge:${target.ruleType}:${target.assignmentId}`;
-    if (taskCrud.checkNudgeDedupeKey(dedupeKey)) continue;
+    if (await taskCrud.checkNudgeDedupeKey(dedupeKey)) continue;
 
     const content = formatAutoNudgeContent(taskName, target.ruleType);
 
@@ -189,7 +189,7 @@ async function processAutoNudgeTargetsAsync(taskId, targets) {
     const now = formatNowSqliteLocal();
 
     const nudgeRecordId = nanoid();
-    taskCrud.createAutoNudgeTransaction({
+    await taskCrud.createAutoNudgeTransaction({
       record: {
         id: nudgeRecordId, taskId, targetType: 'employee', targetId: target.userId,
         initiatorId: SYSTEM_USER_ID, severity: target.severity,

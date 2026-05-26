@@ -16,6 +16,11 @@
 | **keyNumbers** | 3-6 个关键指标（label + value + unit），用于醒目展示 |
 | **insights** | 数据洞察，每条带 level（warning/info/positive）和 text |
 | **suggestions** | 追问建议列表，每条为可独立输入的数据查询问题 |
+| **resolveEntities** | 实体解析节点：接收 SafetyGateway 的 query_filters，查 DB 做精确匹配（searchTasks / searchOrg），输出 resolved_entities 和 ambiguity_payload。位于 safetyGateway 和 FC/HITL 之间 |
+| **query_filters** | SafetyGateway v2 输出的结构化查询维度（task_name, task_category, product_name, priority, alert_level, platform, org_name, org_type, time_range, deadline_urgency, status_filter），替代旧的 flat extracted_* 字段 |
+| **resolved_entities** | resolveEntities 输出的精确解析结果：`tasks: { status, items[] }` + `org: { status, resolved }`，供 FC Agent 的 entityBlock 和 finalResponse 参考 |
+| **entityBlock** | 注入 FC Agent 的两段式上下文：结构化 JSON（task_ids + org code，可直接用于 tool 参数）+ 自然语言摘要（快速理解用户意图）。由 `buildFcEntityBlock(state)` 生成 |
+| **searchTasks / searchOrg** | 统一的任务/组织 CRUD 函数，替代 6 个工具中各自的 4 种搜索策略。searchTasks 支持去空格 LIKE + JOIN campaign_activity 的类别/产品过滤，searchOrg 支持四层回退（黑话映射 → reseller_store → 去空格 → learner_account） |
 | **session cache** | chatSessionStateService 的进程内存缓存，按 tool signature 精确匹配去重，避免重复调用同一工具+参数 |
 
 ## 记忆系统架构
@@ -41,13 +46,15 @@
 
 ### 各 Agent 注入内容
 
-| | safetyGateway | FC | finalResponse |
-|---|---|---|---|
-| conversation (5轮) | x | | x |
-| 当前实体 | | x | |
-| 当前消息 | | x | |
-| 本轮 toolResults | | | x |
-| 长期记忆 | x | | x |
+| | safetyGateway | resolveEntities | FC | finalResponse |
+|---|---|---|---|---|
+| conversation (5轮) | x | | | x |
+| 长期记忆 | x | | | x |
+| 当前消息 | x | | | x |
+| query_filters | | x | | |
+| resolved_entities (entityBlock) | | | x | |
+| entity 参考上下文 | | | | x |
+| 本轮 toolResults | | | | x |
 
 ## 组件展示决策
 
@@ -57,9 +64,9 @@
 
 ### table 与 chart 的数据源统一
 
-- table 与 chart 共用 plottable dataset 体系，LLM 决定每个 dataset 用 chart、table、或两者
-- 同一 dataset 可同时分给 chart 和 table，但 LLM 需确保 table 提供额外信息
-- 禁止同一份数据既画完全等价的图又列完全等价的表
+- table 与 chart 共用 plottable dataset 体系，LLM 决定每个 dataset 用 chart 还是 table
+- **同一 dataset 不能同时用于 chart 和 table**——用户看到图和表内容重复会非常反感
+- 选择策略：数据适合直观对比（排名、占比、趋势）→ chart；需要精确数值或大量行列 → table
 
 ### insights / suggestions 可选化
 

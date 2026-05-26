@@ -5,11 +5,17 @@ const { endSpan } = require('../../../utils/tracer');
 const { getLastAiToolCalls, buildToolSignature } = require('../toolCallUtils');
 const chatToolsService = require('../../../services/chatToolsService');
 const chatSessionStateService = require('../../../services/chatSessionStateService');
+const trace = require('../shared/runTrace');
 
-const fc_CheckDuplicate = async (state) => {
+const fc_CheckDuplicate = async (state, config) => {
+  const emitter = config?.configurable?.sseEmitter;
   const span = startNodeSpan(state, 'FC_CheckDuplicate', {});
   const { toolCalls } = getLastAiToolCalls(state);
+  trace.nodeEnter(emitter, state, 'fc_CheckDuplicate', { toolCalls: toolCalls.length });
   if (toolCalls.length === 0) {
+    endSpan(span, { output: 'no tool calls → finalize' });
+    trace.decision(emitter, state, 'finalize', 'no tool calls', { node: 'fc_CheckDuplicate' });
+    trace.nodeExit(emitter, state, 'fc_CheckDuplicate', { action: 'finalize' });
     return { fc_next_action: 'finalize' };
   }
 
@@ -50,10 +56,20 @@ const fc_CheckDuplicate = async (state) => {
 
   if (pendingToolCalls.length === 0) {
     endSpan(span, { output: 'all deduped → merge' });
+    trace.decision(emitter, state, 'merge', 'all deduped', {
+      node: 'fc_CheckDuplicate',
+      total: toolCalls.length, deduped: toolCalls.length, pending: 0,
+    });
+    trace.nodeExit(emitter, state, 'fc_CheckDuplicate', { action: 'merge', deduped: toolCalls.length });
     return { toolResults, fc_next_action: 'merge' };
   }
 
   endSpan(span, { output: `${pendingToolCalls.length} new calls → validate` });
+  trace.decision(emitter, state, 'validate', `${pendingToolCalls.length} new calls`, {
+    node: 'fc_CheckDuplicate',
+    total: toolCalls.length, deduped: toolCalls.length - pendingToolCalls.length, pending: pendingToolCalls.length,
+  });
+  trace.nodeExit(emitter, state, 'fc_CheckDuplicate', { action: 'validate', pending: pendingToolCalls.length });
   return {
     toolResults,
     pending_tool_calls: pendingToolCalls,

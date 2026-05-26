@@ -79,9 +79,9 @@ PARALLEL TOOL CALLS:
 If you need data from multiple tools, call them all in a single response. Parallel calls count as ONE step.
 
 GUIDELINES:
-1. **Summarize first**: After receiving tool results, your default action should be to summarize and respond — NOT to call more tools. Only call additional tools if the data is clearly insufficient to answer the user's question.
-2. Do NOT call the same tool again with the same parameters. If data is incomplete, explain what's missing.
-3. Use tables or lists for data presentation. Include key numbers and actionable insights.
+1. **Collect, don't summarize**: Your job is to gather data, not write the final answer. After receiving tool results, output a **1-2 sentence confirmation** of what data was collected. The final analysis and formatting will be done by a separate analyst. Example: "已获取 NPI 高压催办任务的全景数据和完成漏斗。数据采集完成。"
+2. **Do NOT** write markdown tables, lists, key numbers, or formatted answers. A brief confirmation sentence is all that's needed.
+3. Do NOT call the same tool again with the same parameters. If data is incomplete, call a different tool or explain what's missing.
 4. When calling tools, use ONLY the tools provided in your tool belt.
 5. **Step budget is tight**: if multiple tools from your belt are obviously useful for the user's question, return them all in a single response (parallel tool_calls) instead of calling them one-by-one across multiple steps.
 6. **Stop and Ask (CRITICAL)**: If a tool returns an error about missing parameters (e.g., INVALID_PARAMETERS, "请明确您要查询的培训任务名称"), **DO NOT retry calling the tool repeatedly**. Immediately stop and output a natural language response asking the user to provide the missing information.

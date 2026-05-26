@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'funnel_analysis',
-      description: '查询任务完成漏斗或预警催办漏斗。当用户问"各阶段流失""转化率"时使用。',
+      description: '查询任务完成漏斗或预警催办漏斗。当用户问各阶段流失/转化率/完成率分布/漏斗/学习进度分布时使用。funnel_type:"completion"查完成漏斗，funnel_type:"alert"查预警催办漏斗。',
       parameters: {
         type: 'object',
         required: ['task_id', 'funnel_type'],

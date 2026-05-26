@@ -1,7 +1,7 @@
 'use strict';
 
 const { nanoid } = require('nanoid');
-const mainAgent = require('../../../agent/index');
+const mainAgent = require('../../../agent/dashboard/index');
 const { formatNowSqliteLocal } = require('../../../utils/ddlAt');
 const { runRegionAnalyzers } = require('./analyzers/runRegionAnalyzers');
 const mysqlCrud = require('../crud/dashboardMysqlCrud');

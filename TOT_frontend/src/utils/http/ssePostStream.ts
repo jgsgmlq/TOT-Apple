@@ -14,6 +14,7 @@ export async function streamSsePostJson(options: {
   onDone: (data: unknown) => void;
   onError: (error: unknown) => void;
   onClarify?: (parsed: unknown) => void;
+  onTrace?: (parsed: unknown) => void;
   /** `event: error` 且 payload 无 `message` 时使用 */
   fallbackErrorMessage?: string;
   /** 可选：中止信号 */
@@ -26,6 +27,7 @@ export async function streamSsePostJson(options: {
     onDone,
     onError,
     onClarify,
+    onTrace,
     fallbackErrorMessage = '流式请求失败',
     signal,
   } = options;
@@ -93,6 +95,8 @@ export async function streamSsePostJson(options: {
               onDone(resultData);
             } else if (currentEvent === 'clarify') {
               onClarify?.(parsed);
+            } else if (currentEvent === 'trace') {
+              onTrace?.(parsed);
             } else if (currentEvent === 'error') {
               const msg =
                 typeof parsed.message === 'string' ? parsed.message : fallbackErrorMessage;

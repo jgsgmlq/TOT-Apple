@@ -1,9 +1,8 @@
 'use strict';
 
-const { db } = require('../db/index');
-const mainAgent = require('../agent/index');
+const mysql = require('../modules/common/db/mysql');
+const mainAgent = require('../agent/dashboard/index');
 const { nanoid } = require('nanoid');
-const { formatNowSqliteLocal } = require('../utils/ddlAt');
 const { runRegionAnalyzers } = require('./dashboardSubAgents/runRegionAnalyzers');
 
 const COARSE_FOCUS_KEYS = new Set([
@@ -53,17 +52,17 @@ async function generateDashboardAgentInsight(userId) {
   // 也省掉 4 个区域子 Agent 的 LLM 调用成本。时区口径与 dashboardQueryCore 中的
   // `datetime('now', 'localtime') > t.ddl_at` 严格一致。保留 ddl_at IS NULL 的任务
   // （视为不可判定过期，仍参与诊断）。
-  const activeTasks = db.all(
-    `SELECT * FROM tasks
-       WHERE status = 'dispatched'
-         AND (ddl_at IS NULL OR ddl_at >= datetime('now', 'localtime'))
-       ORDER BY ddl_at ASC`
+  const activeTasks = await mysql.all(
+    `SELECT * FROM task_publish
+       WHERE publish_status = 'dispatched'
+         AND (due_date IS NULL OR due_date >= NOW())
+       ORDER BY due_date ASC`
   );
-  const skippedRow = db.get(
-    `SELECT COUNT(*) AS cnt FROM tasks
-       WHERE status = 'dispatched'
-         AND ddl_at IS NOT NULL
-         AND ddl_at < datetime('now', 'localtime')`
+  const skippedRow = await mysql.get(
+    `SELECT COUNT(*) AS cnt FROM task_publish
+       WHERE publish_status = 'dispatched'
+         AND due_date IS NOT NULL
+         AND due_date < NOW()`
   );
   const skippedExpiredCount = (skippedRow && skippedRow.cnt) || 0;
   console.log(
@@ -87,9 +86,9 @@ async function generateDashboardAgentInsight(userId) {
   }
 
   const taskMeta = activeTasks.map((t) => ({
-    taskId: t.id,
-    title: t.title,
-    ddl_at: t.ddl_at,
+    taskId: t.task_publish_id,
+    title: t.task_title,
+    ddl_at: t.due_date,
     raw: t,
   }));
 
@@ -100,10 +99,14 @@ async function generateDashboardAgentInsight(userId) {
   );
 
   // 2) 主 Agent 输入：4 段子 Agent 文案 + 关键 KPI（不含原始 boardView）
-  const tasksDataForAi = taskMeta.map((m) => {
+  const tasksDataForAi = await Promise.all(taskMeta.map(async (m) => {
     const r = regionInsightsByTask[m.taskId] || {};
-    const avgProgRow = db.get(
-      `SELECT ROUND(AVG(ta.progress), 1) AS avg_progress FROM task_assignments ta WHERE ta.task_id = ?`,
+    const avgProgRow = await mysql.get(
+      `SELECT ROUND(AVG(mps.progress), 1) AS avg_progress
+       FROM task_publish_learner tpl
+       JOIN learner_account la ON tpl.learner_id = la.learner_id
+       JOIN mypal_learning_progress_sync mps ON la.email_id = mps.email_id
+       WHERE tpl.task_publish_id = ?`,
       [m.taskId]
     );
     const avgProgress =
@@ -120,7 +123,7 @@ async function generateDashboardAgentInsight(userId) {
         rtm: r.rtm || null,
       },
     };
-  });
+  }));
 
   // 3) 主 Agent
   const parsed = await mainAgent.execute('dashboard_diagnose', { tasks: tasksDataForAi });
@@ -160,26 +163,22 @@ async function generateDashboardAgentInsight(userId) {
   };
 
   const id = nanoid();
-  const now = formatNowSqliteLocal();
-  db.run(
-    `
-    INSERT INTO dashboard_insights 
-      (id, module_type, content, context_json, created_by, created_at)
-    VALUES (?, 'global_agent', ?, ?, ?, ?)
-  `,
-    [id, 'agent response', JSON.stringify(resultData), userId || 1, now]
+  await mysql.run(
+    `INSERT INTO dashboard_insights (id, module_type, content, context_json, created_by)
+     VALUES (?, 'global_agent', ?, ?, ?)`,
+    [id, 'agent response', JSON.stringify(resultData), userId || '1']
   );
 
-  return { ...resultData, generatedAt: now };
+  return { ...resultData, generatedAt: new Date().toISOString() };
 }
 
 async function getDashboardAgentInsight(userId, refresh = false) {
   if (!refresh) {
-    const latest = db.get(`
-      SELECT context_json, created_at 
-      FROM dashboard_insights 
+    const latest = await mysql.get(`
+      SELECT context_json, created_at
+      FROM dashboard_insights
       WHERE module_type = 'global_agent'
-      ORDER BY created_at DESC 
+      ORDER BY created_at DESC
       LIMIT 1
     `);
     if (latest) {

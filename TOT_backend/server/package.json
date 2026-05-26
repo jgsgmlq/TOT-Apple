@@ -12,9 +12,7 @@
     "seed": "node db/seed.js",
     "eval:langgraph": "node scripts/evaluate_langgraph.js",
     "verify:mypal-sign": "node scripts/verify-mypal-sign.js",
-    "test:region-drilldown": "node scripts/test-region-drilldown.js",
     "test:chat-redis": "node scripts/test-chat-session-redis.js",
-    "test:fc-e2e": "node scripts/test-fc-e2e.js",
     "test:fc-stream-splitter": "node scripts/test-fc-stream-splitter.js",
     "test": "jest"
   },

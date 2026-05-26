@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'query_metric',
-      description: '按维度查询指标值，支持 Top/Bottom N 排序。当用户问排名、对比、按维度下钻时使用。',
+      description: '按维度查询指标值，支持 Top/Bottom N 排序。当用户问排名、对比、按维度下钻时使用。门店明细/排名/完成率→dimension:"store"；经销商情况→dimension:"dealer"；按渠道看→dimension:"l4"；大区/区域→dimension:"l3"。',
       parameters: {
         type: 'object',
         required: ['task_id', 'metrics'],

@@ -886,7 +886,7 @@ async function sendMessageStreamLangGraph(sessionId, userMessage, userId, req, r
       sessionId,
       userId: session.user_id.toString(),
       regionScope,
-      messages: historyMessages,
+      messages: [],
     };
 
     const threadId = `${sessionId}:${nanoid()}`;

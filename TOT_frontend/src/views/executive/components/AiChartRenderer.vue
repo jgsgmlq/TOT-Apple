@@ -28,7 +28,7 @@
     // 后端可能返回 funnel/radar 等类型，前端 ECharts 降级到同类笛卡尔图
     const SUPPORTED = ['bar', 'line', 'pie', 'scatter', 'funnel'];
     const type = SUPPORTED.includes(rawType) ? rawType : 'bar';
-    const isCartesian = type !== 'pie' && type !== 'funnel';
+    const isCartesian = type !== 'pie';
 
     const option: any = {
       title: {
@@ -79,14 +79,43 @@
       };
     }
 
-    // 漏斗图专属配置：移除 grid/dataZoom/legend，设置漏斗特有参数
+    // 漏斗 → 水平柱状图：数值绝对诚实，梯形不撒谎
     if (type === 'funnel') {
-      delete option.grid;
+      option.yAxis = {
+        type: 'category',
+        data: xAxis,
+        inverse: true,
+        axisLabel: { color: '#5f6b7a', fontSize: 12 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+      };
+      option.xAxis = {
+        type: 'value',
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#f0f2f5' } },
+        axisLabel: { color: '#8f99a8' },
+      };
+      option.grid = { left: '18%', right: '12%', bottom: '5%', top: '8%', containLabel: true };
       delete option.dataZoom;
       delete option.legend;
-      delete option.xAxis;
-      delete option.yAxis;
-      option.tooltip = { trigger: 'item', formatter: '{b}: {c}' };
+      const rawData = series[0]?.data || [];
+      option.tooltip = {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any) => {
+          const p = Array.isArray(params) ? params[0] : params;
+          if (!p) return '';
+          const idx = p.dataIndex ?? 0;
+          const name = p.name ?? '';
+          const value = p.value ?? 0;
+          let html = `<b>${name}</b><br/>人数: <b>${value}</b>`;
+          if (idx > 0) {
+            const prev = rawData[idx - 1];
+            const rate = prev > 0 ? ((value / prev) * 100).toFixed(1) : '—';
+            html += `<br/>相对「${xAxis[idx - 1]}」留存: <b>${rate}%</b>`;
+          }
+          return html;
+        },
+      };
     }
 
     const highlights = (props.data as any).highlights || [];
@@ -120,9 +149,9 @@
     option.series = series.map((s, idx) => {
       const item: any = {
         name: s.name || '',
-        type: ['bar', 'line', 'pie', 'scatter', 'funnel'].includes(type) ? type : 'bar',
+        type: type === 'funnel' ? 'bar' : (['bar', 'line', 'pie', 'scatter'].includes(type) ? type : 'bar'),
         data: s.data || [],
-        itemStyle: { borderRadius: type === 'bar' ? [4, 4, 0, 0] : 0 },
+        itemStyle: { borderRadius: type === 'bar' || type === 'funnel' ? [4, 4, 0, 0] : 0 },
       };
 
       // 双 Y 轴：系列可指定使用右轴
@@ -153,12 +182,17 @@
       }
 
       if (type === 'funnel') {
-        item.sort = 'descending';
-        item.gap = 2;
-        item.left = '10%';
-        item.width = '80%';
-        item.label = { show: true, position: 'inside', formatter: '{b}: {c}' };
-        item.itemStyle = { borderColor: '#fff', borderWidth: 2 };
+        item.label = {
+          show: true,
+          position: 'right',
+          fontSize: 11,
+          color: '#5f6b7a',
+          formatter: (params: any) => `${params.value}人`,
+        };
+        item.itemStyle = {
+          borderRadius: [0, 4, 4, 0],
+          color: '#2563eb',
+        };
       }
 
       // 动态高亮：将高亮的 dataIndex 标为强调色

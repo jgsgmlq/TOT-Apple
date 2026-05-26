@@ -3,14 +3,24 @@ import { streamSsePostJson } from '@/utils/http/ssePostStream';
 import type { ChartData } from '@/types/chat';
 
 export interface ReplyContent {
+  template?: string;
   overview: string;
   keyNumbers: Array<{ label: string; value: string | number; unit?: string }>;
   attentionPoints: Array<string | { level: 'warning' | 'info' | 'positive'; text: string }>;
   followUpSuggestions: string[];
   visualizations?: ChartData[];
+  tables?: { title: string; columns: string[]; rows: string[][] }[];
   statisticsProvenance?: any;
   forecastDisclaimer?: string;
   table?: { title: string; columns: string[]; rows: string[][] } | null;
+  _trace?: TraceEvent[];
+}
+
+export interface TraceEvent {
+  ts: number;
+  type: string;
+  node?: string;
+  data: Record<string, unknown>;
 }
 
 export interface CreateSessionResult {
@@ -145,7 +155,8 @@ export const streamExecutiveChatMessage = async (
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
-  streamOptions?: { signal?: AbortSignal }
+  streamOptions?: { signal?: AbortSignal },
+  onTrace?: (parsed: unknown) => void,
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/messages`,
@@ -153,6 +164,7 @@ export const streamExecutiveChatMessage = async (
     onDelta: (p) => onMessage(p as { text: string; phase?: string; toolName?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),
+    onTrace,
     onError,
     fallbackErrorMessage: 'Executive Chat 处理失败',
     signal: streamOptions?.signal,
@@ -237,7 +249,8 @@ export const streamResumeExecutiveChatMessage = async (
   onComplete: (data: SendMessageResult) => void,
   onClarify: (payload: ClarifyPayload) => void,
   onError: (error: unknown) => void,
-  streamOptions?: { signal?: AbortSignal }
+  streamOptions?: { signal?: AbortSignal },
+  onTrace?: (parsed: unknown) => void,
 ) => {
   return streamSsePostJson({
     path: `/chat/executive/sessions/${sessionId}/resume`,
@@ -245,6 +258,7 @@ export const streamResumeExecutiveChatMessage = async (
     onDelta: (p) => onMessage(p as { text: string; phase?: string }),
     onDone: (d) => onComplete(d as SendMessageResult),
     onClarify: (p) => onClarify(p as ClarifyPayload),
+    onTrace,
     onError,
     fallbackErrorMessage: 'Executive Chat 恢复处理失败',
     signal: streamOptions?.signal,

@@ -767,7 +767,8 @@ import LogoMark from '@/components/common/LogoMark.vue';
         onDone: (data: SendMessageResult) => void,
         onClarify: (cp: ClarifyPayload) => void,
         onError: (error: unknown) => void,
-        opts?: { signal?: AbortSignal }
+        opts?: { signal?: AbortSignal },
+        onTrace?: (parsed: unknown) => void,
       ) =>
         streamResumeExecutiveChatMessage(
           sid,
@@ -777,10 +778,11 @@ import LogoMark from '@/components/common/LogoMark.vue';
           onDone,
           onClarify,
           onError,
-          opts
+          opts,
+          onTrace,
         );
 
-      const { result, thinkingSnapshot } = await runExecStyleSseChat(
+      const { result, thinkingSnapshot, traceSteps } = await runExecStyleSseChat(
         streamWithThreadId,
         sessionId.value,
         resumePayload,
@@ -813,6 +815,7 @@ import LogoMark from '@/components/common/LogoMark.vue';
         lastMsg2.content = result.markdownContent || formatReplyContentText(result.replyContent);
         lastMsg2.thinking = thinkingSnapshot?.trim() ? thinkingSnapshot.trim() : undefined;
         lastMsg2.replyContent = result.replyContent;
+        lastMsg2.traceSteps = traceSteps?.length ? traceSteps : null;
         (lastMsg2 as any)._toolCalls = (result as any)._toolMeta?.toolNames || [];
       }
       const aiTitle2 = (result as any).sessionTitle as string | undefined;

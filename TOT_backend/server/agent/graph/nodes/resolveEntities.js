@@ -4,6 +4,7 @@ const { startNodeSpan } = require('../shared/spanHelper');
 const { endSpan } = require('../../../utils/tracer');
 const dashboardMysqlCrud = require('../../../modules/dashboard/crud/dashboardMysqlCrud');
 const trace = require('../shared/runTrace');
+const { logAgentTrace } = require('../shared/agentTraceLog');
 
 async function resolveEntities(state, config) {
   const emitter = config?.configurable?.sseEmitter;
@@ -26,9 +27,9 @@ async function resolveEntities(state, config) {
       qf.status_filter = 'all';
     }
 
+    // 实体解析阶段不应排除已过期任务——用户可能指定了过期的任务名
     const statuses = qf.status_filter === 'ended'
-      ? ['ended'] : qf.status_filter === 'all'
-      ? ['dispatched', 'ended'] : ['dispatched'];
+      ? ['ended'] : ['dispatched', 'ended'];
 
     let matches = await dashboardMysqlCrud.searchTasks({
       name: qf.task_name,
@@ -95,6 +96,14 @@ async function resolveEntities(state, config) {
   const ambiguity_payload = result.needs_clarification
     ? buildAmbiguityPayload(result, qf, result.tasks?._fallbackOptions)
     : null;
+
+  logAgentTrace(state.sessionId, {
+    step: 'resolve_entities',
+    taskStatus: result.tasks.status,
+    taskMatches: result.tasks.items?.map(t => ({ id: t.task_publish_id, title: t.task_title })) || [],
+    needsClarification: result.needs_clarification,
+    hiltType: ambiguity_payload?.type || null,
+  });
 
   endSpan(span, {
     output: `tasks=${result.tasks.status} org=${result.org.status} clarify=${result.needs_clarification}`,

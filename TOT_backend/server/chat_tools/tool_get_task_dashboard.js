@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'get_task_dashboard',
-      description: '查询单个任务的全景数据（指标、漏斗、预警）。当用户指定了某个具体任务时使用。',
+      description: '查询单个任务的全景数据（指标、漏斗、预警）。当用户指定了某个具体任务时使用，如问整体情况/概览/仪表盘。',
       parameters: {
         type: 'object',
         required: ['task_id'],

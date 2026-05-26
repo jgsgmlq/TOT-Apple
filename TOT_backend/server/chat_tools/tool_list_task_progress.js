@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'list_task_progress',
-      description: '批量查询多个任务的进度摘要。默认自动排除已截止的过期任务。查"有哪些任务"时可直接调用无需参数。查"快过期"时用 filters: {days_to_deadline_max: 7}。查"全部含已过期"时用 status: "all"。',
+      description: '批量查询多个任务的进度摘要。默认自动排除已截止的过期任务，查进行中/当前任务时无需参数。查所有/全部含已过期→status:"all"；查已结束/历史→status:"ended"；查逾期/超时→status:"all"后自行按deadline筛选；查快过期/临期→filters:{days_to_deadline_max:7}。排序：查最紧急/优先级最高→sort_by:"priority"；查截止日期最近→sort_by:"deadline"+sort_order:"asc"；查完成率最高→sort_by:"completion_rate"+sort_order:"desc"；查完成率最低→sort_order:"asc"。',
       parameters: {
         type: 'object',
         properties: {

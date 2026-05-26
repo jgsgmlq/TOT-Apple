@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'query_trend',
-      description: '查询某任务指标的时间序列。当用户问"每天怎么变""趋势"时使用。',
+      description: '查询某任务指标的时间序列。当用户问每天怎么变/趋势/最近趋势/完成率变化时使用。mode:"completion"查完成率趋势，mode:"learning"查学习率趋势。',
       parameters: {
         type: 'object',
         required: ['task_id', 'mode'],

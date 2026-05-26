@@ -119,6 +119,36 @@
 
 ---
 
+## 2026-05-24 — `org_slang_mappings` 黑话映射表待创建
+
+**背景**
+- Entity Resolution System (`docs/superpowers/specs/2026-05-24-entity-resolution-system-design.md`) 设计了 `searchOrg()` 的四层匹配算法
+- Layer 1（黑话映射）代码已写好，表不存在时静默跳过，降级到 Layer 2（reseller_store 直接搜索）
+
+**待创建的表**
+```sql
+CREATE TABLE IF NOT EXISTS org_slang_mappings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  org_type VARCHAR(20) NOT NULL,        -- 'dealer' | 'store' | 'region' | 'l3' | 'l4'
+  alias VARCHAR(200) NOT NULL,          -- 用户可能说的黑话/简称
+  canonical_name VARCHAR(200) NOT NULL, -- 正式名称
+  priority INT DEFAULT 0,
+  created_by VARCHAR(100) DEFAULT 'system',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_alias_type (org_type, alias)
+);
+```
+
+**未建原因**
+- CLAUDE.md 禁止 CREATE TABLE
+- 当前无已知黑话匹配问题，Layer 2（直接搜索 reseller_store）已够用
+- 由运维在有实际需求时手动执行 DDL
+
+**触发条件**
+- 用户/运营反馈："搜 XX 经销商搜不到" → INSERT 一条 alias 即可，不改代码不重启
+
+---
+
 ## 已知噪音 / 不致命
 
 - ~~**Redis 未启动**~~：BullMQ producer/worker 已改为 lazy connect + 静默失败，不再每次请求吐三段 stack。本机可继续不开 Redis 工作（异步记忆任务被丢弃）

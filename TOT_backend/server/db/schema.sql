@@ -188,20 +188,20 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_cm_session_id ON chat_messages(session_id);
 
--- 10. 全局记忆系统
-CREATE TABLE IF NOT EXISTS user_memories (
-  id TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  memory_hash TEXT NOT NULL, -- 对 user_id + content 的 hash，用于稳健 Upsert
-  memory_type TEXT DEFAULT 'bias', -- 'bias', 'fact', 'scope'
+-- 10. 全局记忆系统（MySQL 表，使用 user_memory 单数）
+CREATE TABLE IF NOT EXISTS user_memory (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  memory_hash VARCHAR(64) NOT NULL,
+  memory_type VARCHAR(32) DEFAULT 'fact',
   content TEXT NOT NULL,
-  confidence_score REAL DEFAULT 0.5,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-  UNIQUE(user_id, memory_hash)
-);
-CREATE INDEX IF NOT EXISTS idx_um_user_id ON user_memories(user_id);
-CREATE INDEX IF NOT EXISTS idx_um_hash    ON user_memories(memory_hash);
+  confidence_score DOUBLE DEFAULT 0.7,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uk_user_memory_hash (user_id, memory_hash),
+  INDEX idx_um_user_id (user_id),
+  INDEX idx_um_hash (memory_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 11. 看板智能洞察（AI 生成文案；赞/踩仅记汇总次数，不记投票人）
 CREATE TABLE IF NOT EXISTS dashboard_insights (

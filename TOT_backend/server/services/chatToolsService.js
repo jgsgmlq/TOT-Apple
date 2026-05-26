@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
 const logger = require('../utils/logger');
 
 // ─── Dynamic Tool Loading ──────────────────────────────────────────────────────
@@ -389,6 +388,7 @@ async function executeByName(toolName, params, regionScope) {
     }
 
     // 4) 执行与超时保护
+    const executeAt = new Date().toISOString();
     const executionPromise = Promise.resolve(handler(params, regionScope));
     const result = await executeWithTimeout(executionPromise, meta.timeoutMs);
 
@@ -403,7 +403,7 @@ async function executeByName(toolName, params, regionScope) {
       });
     }
 
-    return result;
+    return { ...result, _meta: { executedAt: result?._meta?.executedAt || executeAt } };
   } catch (err) {
     if (debugGraph) {
       const elapsed = Date.now() - t0;

@@ -7,6 +7,7 @@ const { getClient, endGeneration, endSpan, maskPII, preview, promptHash, NOOP_TR
 const { startNodeSpan } = require("../shared/spanHelper");
 const promptRegistry = require("../../../prompts/registry");
 const { routerModel } = require("../llm");
+const { logAgentTrace } = require("../shared/agentTraceLog");
 
 const SafetyGatewayV2Output = z.object({
   mode: z.enum(["chat", "tool", "deny"]),
@@ -73,6 +74,13 @@ async function safetyGateway(state, config) {
     const ambiguity = parsed.ambiguity?.type && parsed.ambiguity.type !== "none" ? parsed.ambiguity : null;
 
     console.log(`[SafetyGateway] mode=${mode} ambiguity=${ambiguity?.type || "none"} task_name=${parsed.filters.task_name || "-"} task_category=${parsed.filters.task_category || "-"}`);
+
+    logAgentTrace(state.sessionId, {
+      step: 'safety_gateway',
+      userMessage: state.userMessage,
+      mode, ambiguity: ambiguity?.type || null,
+      filters: parsed.filters,
+    });
 
     endGeneration(gen, {
       output: maskPII(preview(JSON.stringify(parsed))),

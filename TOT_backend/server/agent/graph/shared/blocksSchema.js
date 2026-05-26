@@ -6,6 +6,8 @@ const keyNumberItem = z.object({
   label: z.string(),
   value: z.union([z.string(), z.number()]),
   unit: z.string().optional(),
+  trend: z.enum(['up', 'down', 'flat']).optional(),
+  trendValue: z.string().optional(),
 });
 
 const insightItem = z.object({

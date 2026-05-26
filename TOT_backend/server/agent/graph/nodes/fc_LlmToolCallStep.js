@@ -9,6 +9,7 @@ const promptRegistry = require('../../../prompts/registry');
 
 const { fcModel } = require('../llm');
 const trace = require('../shared/runTrace');
+const { logAgentTrace } = require('../shared/agentTraceLog');
 
 const getFcModel = () => fcModel;
 
@@ -240,6 +241,15 @@ const fc_LlmToolCallStep = async (state, config) => {
       console.log(`[fc_LlmToolCallStep] 工具调用: ${callNames.join(', ')} | args: ${JSON.stringify(aiMessage.tool_calls.map(c => c?.args))}`);
     }
     console.log(`[fc_LlmToolCallStep] DeepSeek 返回，耗时 ${Date.now() - fcInvokeT0}ms, chunks=${chunkCount}, hasToolCalls=${hasTools}`);
+
+    logAgentTrace(state.sessionId, {
+      step: 'llm_tool_decision',
+      round: currentStep, maxRounds: maxSteps, isOverCap,
+      latencyMs: Date.now() - fcInvokeT0,
+      hasTools,
+      toolCalls: hasTools ? aiMessage.tool_calls.map(c => ({ name: c?.name, args: c?.args })) : [],
+      thinkingPreview: (aiMessage.content || '').slice(0, 500),
+    });
     endGeneration(fcGen, {
       output: maskPII(preview(aiMessage.content)),
       usage: aiMessage.usage_metadata || aiMessage.usage || null,
@@ -248,10 +258,6 @@ const fc_LlmToolCallStep = async (state, config) => {
     });
 
     const finalUpdates = { messages: [aiMessage] };
-    if (!hasTools) {
-      finalUpdates.reply_markdown = aiMessage.content;
-      finalUpdates.finalResponse = aiMessage.content;
-    }
     trace.nodeExit(emitter, state, 'fc_LlmToolCallStep', { hasTools, callNames, step: currentStep });
     return finalUpdates;
   } catch (err) {

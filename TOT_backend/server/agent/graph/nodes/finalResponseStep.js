@@ -10,8 +10,54 @@ const { fcModel, getStructuredModel } = require('../llm');
 const { renderConversation, renderLongTerm } = require('../shared/memoryBlock');
 const { buildEntityContext } = require('./resolveEntities');
 const trace = require('../shared/runTrace');
+const { logAgentTrace } = require('../shared/agentTraceLog');
 
 const MAX_REPAIR_ATTEMPTS = 2;
+
+// ─── LLM JSON 修复 ──────────────────────────────────────────────────────────
+
+function repairBlocks(rawJson) {
+  if (!rawJson || typeof rawJson !== 'object') return rawJson;
+  const obj = { ...rawJson };
+
+  if (Array.isArray(obj.blocks)) {
+    obj.blocks = obj.blocks.map(block => {
+      if (!block || typeof block !== 'object') return block;
+      const b = { ...block };
+      switch (b.type) {
+        case 'markdown':
+          if (b.content === undefined || b.content === null) b.content = '';
+          break;
+        case 'keyNumbers':
+        case 'insights':
+        case 'suggestions':
+          if (!Array.isArray(b.items)) b.items = [];
+          break;
+        case 'chart':
+        case 'table':
+          if (!b.datasetId) b.datasetId = '';
+          break;
+      }
+      return b;
+    });
+  }
+
+  return obj;
+}
+
+function formatZodErrors(issues) {
+  if (!Array.isArray(issues)) return JSON.stringify(issues);
+  return issues.map(iss => {
+    const path = (iss.path || []).join('.');
+    const expected = iss.expected || '';
+    const received = iss.received || 'undefined';
+    if (path.endsWith('.content') && received === 'undefined')
+      return `block ${path} 缺少 "content" 字段（文本内容），请补充`;
+    if (path.endsWith('.items') && received === 'undefined')
+      return `block ${path} 缺少 "items" 数组，请补充（至少给一个空数组 []）`;
+    return `字段 ${path}: 期望 ${expected}，实际收到 ${received}`;
+  }).join('；');
+}
 
 // ─── 表格构建 ──────────────────────────────────────────────────────────────
 
@@ -161,6 +207,21 @@ function getLatestToolExecuteAt(toolResults) {
 function buildDataBlock(state, toolItems, plottableDatasets) {
   const resultsText = JSON.stringify(toolItems, null, 2).slice(0, 4000);
 
+  // 提取 FC Agent 的策略摘要（最后一条 AI 消息）
+  let fcStrategyBlock = '';
+  const messages = state.messages || [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && m._getType && m._getType() === 'ai' && m.content && typeof m.content === 'string' && m.content.trim()) {
+      const content = m.content.trim();
+      // 跳过纯工具调用的 AI 消息（tool_calls 走不同路径）
+      if (content.length > 30 && !content.startsWith('[') && !content.startsWith('{')) {
+        fcStrategyBlock = '\n\nFC Agent 数据采集策略:\n' + content;
+        break;
+      }
+    }
+  }
+
   let datasetsBlock = '';
   if (plottableDatasets.length > 0) {
     const summary = plottableDatasets.map(ds => ({
@@ -180,6 +241,7 @@ function buildDataBlock(state, toolItems, plottableDatasets) {
     + '\n\n' + renderLongTerm(state.long_term_memories || '')
     + entityCtx
     + '\n\n用户问题: ' + state.userMessage
+    + fcStrategyBlock
     + '\n\n工具查询结果:\n' + resultsText + datasetsBlock
     + timestampBlock;
 }
@@ -191,7 +253,7 @@ async function runStructuredRound(llm, systemPrompt, humanInstruction, schema, m
   for (let attempt = 0; attempt <= maxAttempts; attempt++) {
     let rawText = '';
     const repairSuffix = attempt > 0
-      ? '\n\n上次输出校验失败，错误如下:\n' + lastError + '\n请修正后重新输出。'
+      ? '\n\n上次输出校验失败:\n' + lastError + '\n请修正后重新输出。'
       : '';
 
     const stream = await llm.stream([
@@ -209,16 +271,20 @@ async function runStructuredRound(llm, systemPrompt, humanInstruction, schema, m
       try { rawJson = JSON.parse(rawText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']')); } catch (__) { rawJson = {}; }
     }
 
+    // 预处理：修复 LLM 常见的字段缺失问题
+    rawJson = repairBlocks(rawJson);
+
     parsed = schema.safeParse(rawJson);
     console.log('[runStructuredRound] attempt=' + attempt + ' success=' + parsed.success + ' rawLen=' + rawText.length);
     if (!parsed.success) {
       const issues = parsed.error?.issues || parsed.error?.message;
       console.log('[runStructuredRound] Zod error:', JSON.stringify(issues).substring(0, 300));
+      console.log('[runStructuredRound] raw JSON (first 500 chars):', rawText.substring(0, 500));
     }
 
     if (parsed.success) break;
 
-    lastError = JSON.stringify(parsed.error?.issues || parsed.error?.message || '');
+    lastError = formatZodErrors(parsed.error?.issues);
   }
 
   return { parsed, lastError };
@@ -340,13 +406,20 @@ const finalResponseStep = async (state, config) => {
           }
         }
         endGeneration(plnGen, { output: maskPII(preview(JSON.stringify(plannerData))), model: 'deepseek-chat' });
+        logAgentTrace(state.sessionId, {
+          step: 'planner',
+          questionType: plannerData.questionType,
+          analysis: plannerData.analysis,
+          selectedDatasets: plannerData.selectedDatasets,
+          suggestedApproach: plannerData.suggestedApproach,
+        });
       } else {
         endGeneration(plnGen, { output: maskPII(preview(plannerResult.lastError)), level: 'WARNING', statusMessage: plannerResult.lastError, model: 'deepseek-chat' });
       }
 
       // 构建 planner 分析段落
       const plannerSection = plannerData
-        ? '\n\n[问题分析]\n' + plannerData.analysis + '\n\n建议呈现方式: ' + plannerData.suggestedApproach
+        ? '\n\n[问题分析]\n问题类型: ' + plannerData.questionType + '\n' + plannerData.analysis + '\n\n建议呈现方式: ' + plannerData.suggestedApproach
         : '\n\n[问题分析]\n（规划阶段未完成，请根据数据和用户问题自行判断最佳回答方式）';
 
       // ═══ 第二轮：执行 ═══
@@ -441,6 +514,12 @@ const finalResponseStep = async (state, config) => {
         });
 
         endGeneration(execGen, { output: maskPII(preview(response)), model: 'deepseek-chat' });
+        logAgentTrace(state.sessionId, {
+          step: 'executor',
+          blockCount: cleanBlocks.length,
+          chartTypes: cleanBlocks.filter(b => b.type === 'chart').map(b => b.chartType || 'auto'),
+          tableCount: resolvedTables.length,
+        });
       } else {
         response = '抱歉，查询过程中遇到了问题，请稍后重试或尝试缩小查询范围。';
         endGeneration(execGen, { output: maskPII(preview(response)), level: 'WARNING', statusMessage: lastError, model: 'deepseek-chat' });
@@ -468,4 +547,4 @@ const finalResponseStep = async (state, config) => {
   };
 };
 
-module.exports = { finalResponseStep, sanitizeUserFacingMarkdown, buildTableFromRows, prepareToolData, extractContentText };
+module.exports = { finalResponseStep, sanitizeUserFacingMarkdown, buildTableFromRows, prepareToolData, extractContentText, repairBlocks, formatZodErrors };

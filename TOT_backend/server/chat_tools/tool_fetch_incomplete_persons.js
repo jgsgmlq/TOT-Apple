@@ -8,7 +8,7 @@ module.exports = {
     type: 'function',
     function: {
       name: 'fetch_incomplete_persons',
-      description: '获取未完成人员名单。当用户问"谁还没完成""把名单给我"时使用。传入 task_id 时优先用 task_publish_id 格式，也可以传任务标题（会自动解析）。',
+      description: '获取未完成人员名单。当用户问谁还没完成/把名单给我/未完成名单时使用。传入 task_id 时优先用 task_publish_id 格式，也可以传任务标题（会自动解析）。',
       parameters: {
         type: 'object',
         required: ['task_id'],
